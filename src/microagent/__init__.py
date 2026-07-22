@@ -12,6 +12,10 @@ from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, Stre
 from .plugin.types import PreLLMHook, ToolHook, ContextSource
 from .mcp.client import connect_mcp_stdio
 from .subagent.manager import SubagentSpec, SubagentManager, DEFAULT_SUBAGENTS
+from .skill.loader import Skill, LoadedSkill, SkillLoader, ClaudeSkillLoader, CompositeSkillLoader
+from .skill.curator import Curator, SkillUsage
+from .memory.provider import Memory, MemoryProvider, SQLiteMemoryProvider
+from .cron.scheduler import CronScheduler, CronJob
 from .session.budget import Budget, BudgetExceeded
 from .session.runner import SessionRunner
 from .agent import Agent
@@ -40,6 +44,13 @@ __all__ = [
     "connect_mcp_stdio",
     # Subagent
     "SubagentSpec", "SubagentManager", "DEFAULT_SUBAGENTS",
+    # Skills
+    "Skill", "LoadedSkill", "SkillLoader", "ClaudeSkillLoader", "CompositeSkillLoader",
+    "Curator", "SkillUsage",
+    # Memory
+    "Memory", "MemoryProvider", "SQLiteMemoryProvider",
+    # Cron
+    "CronScheduler", "CronJob",
     # Session
     "Budget", "BudgetExceeded", "SessionRunner",
 ]
