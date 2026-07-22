@@ -121,4 +121,5 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("plan", {}, Decision.ALLOW),
     Rule("exit", {}, Decision.ALLOW),
     Rule("task", {}, Decision.ALLOW),
+    Rule("skill_manage", {}, Decision.ALLOW),
 )
