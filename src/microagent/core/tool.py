@@ -211,5 +211,6 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import glob as _glob  # noqa: F401
     from ..tools.builtins import web_fetch as _wfetch  # noqa: F401
     from ..tools.builtins import todo_plan_exit as _tpe  # noqa: F401
+    from ..tools.builtins import task as _task  # noqa: F401
 
     return list(_registry.values())

@@ -147,6 +147,10 @@ class SessionRunner:
 
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
+                # Inject current runner for task tool
+                from ..tools.builtins import task as _task_module
+                _task_module._current_runner = self
+
                 # Run tool hooks: before → execute → after
                 modified = call
                 for hook in self.tool_hooks:
