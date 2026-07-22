@@ -6,8 +6,6 @@ Consumes an LLMClient and a ToolRegistry, runs the tool-use loop:
         1. Call LLM (stream)
         2. If tool_calls → execute → append results → loop
         3. If text → yield TurnComplete → return
-
-M0a minimal version: no store, memory, hooks, skills, or event_bus.
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from ..core.types import (
     Event, Usage,
 )
 from ..core.tool import ToolRegistry
+from ..core.store import Store
 from ..llm.client import LLMClient, StreamDone
 from ..core.event import EventBus
 from .budget import Budget, BudgetExceeded
@@ -50,6 +49,12 @@ class SessionRunner:
         self.pre_llm_hooks = pre_llm_hooks
         self.tool_hooks = tool_hooks
         self.context_sources = context_sources
+
+    async def resume(
+        self, session_id: str, store: Store
+    ) -> tuple[Message, ...]:
+        """Resume a session: load conversation history from store."""
+        return tuple(await store.load_history(session_id))
 
     async def run_turn(
         self,

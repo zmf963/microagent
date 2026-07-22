@@ -5,7 +5,7 @@ from .core.types import (
     TextDelta, ToolCallDelta, TurnComplete, TurnFailed, Event,
 )
 from .core.tool import Tool, ToolRegistry, FunctionTool, tool
-from .core.permission import PermissionEngine, Rule, Decision, DEFAULT_RULES
+from .core.permission import PermissionEngine, Rule, Decision, ScriptRule, DEFAULT_RULES
 from .core.store import Store, SQLiteStore, InMemoryStore
 from .core.event import EventBus
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
@@ -31,7 +31,7 @@ __all__ = [
     # Tools
     "Tool", "ToolRegistry", "FunctionTool", "tool",
     # Permission
-    "PermissionEngine", "Rule", "Decision", "DEFAULT_RULES",
+    "PermissionEngine", "Rule", "Decision", "ScriptRule", "DEFAULT_RULES",
     # Store
     "Store", "SQLiteStore", "InMemoryStore",
     # Event

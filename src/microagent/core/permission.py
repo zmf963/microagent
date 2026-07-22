@@ -105,8 +105,67 @@ class PermissionEngine:
 
 
 # ---------------------------------------------------------------------------
-# Default rules (from design doc §4.2)
+# ScriptRule — external script-based permissions
 # ---------------------------------------------------------------------------
+
+class ScriptRule:
+    """Permission rule that delegates to an external Python script.
+
+    The script receives a JSON object on stdin:
+        {"name": "tool_name", "arguments": {...}, "id": "call_id"}
+    It must print "allow" or "deny" to stdout and exit 0.
+    Non-zero exit or timeout → denied.
+    """
+
+    def __init__(
+        self,
+        tool_pattern: str,
+        arguments_constraint: dict | None = None,
+        script: str = "",
+        timeout: float = 5.0,
+    ):
+        self.tool_pattern = tool_pattern
+        self.arguments_constraint = arguments_constraint or {}
+        self.script = script
+        self.timeout = timeout
+        self.decision = Decision.ALLOW  # placeholder for compatibility
+        self.reason = ""
+
+    async def evaluate(self, call: ToolCall) -> PermissionDecision:
+        """Run the external script and return its decision."""
+        import asyncio, json as _json
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3", self.script,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            payload = _json.dumps({
+                "name": call.name,
+                "arguments": call.arguments,
+                "id": call.id,
+            })
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    proc.communicate(payload.encode()),
+                    timeout=self.timeout,
+                )
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return PermissionDecision(Decision.DENY, "external script timeout")
+            if proc.returncode != 0:
+                return PermissionDecision(Decision.DENY, f"external script exit code {proc.returncode}")
+            result = stdout.decode().strip().lower()
+            if result == "allow":
+                return PermissionDecision(Decision.ALLOW, "external script: allow")
+            else:
+                return PermissionDecision(Decision.DENY, f"external script: {result}")
+        except Exception as e:
+            return PermissionDecision(Decision.DENY, f"external script error: {e}")
 
 DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("read_file", {}, Decision.ALLOW),
