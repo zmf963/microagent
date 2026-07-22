@@ -24,7 +24,7 @@ from ..core.types import (
 from ..core.tool import ToolRegistry, TurnContext
 from ..llm.client import LLMClient, StreamEvent, StreamDone
 from ..core.event import EventBus
-from .budget import Budget
+from .budget import Budget, BudgetExceeded
 
 
 class SessionRunner:
@@ -65,7 +65,11 @@ class SessionRunner:
         and finally TurnComplete or TurnFailed.
         """
         while not self.budget.exhausted:
-            self.budget.consume(iterations=1)
+            try:
+                self.budget.consume(iterations=1)
+            except BudgetExceeded as e:
+                yield TurnFailed(f"budget exhausted: {e}")
+                return
 
             # --- 1. Apply context sources + pre_llm_hooks ---
             system = self.system_prompt

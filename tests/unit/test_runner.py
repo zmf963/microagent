@@ -3,7 +3,7 @@
 import pytest
 from microagent.core.types import Message, ToolCall, ToolResult, TurnComplete, TurnFailed
 from microagent.core.tool import ToolRegistry
-from microagent.session.budget import Budget
+from microagent.session.budget import Budget, BudgetExceeded
 from microagent.session.runner import SessionRunner
 
 from .fake_llm import FakeLLMClient, text_response, tool_response
@@ -16,26 +16,29 @@ class TestBudget:
         assert b.remaining == 5
 
     def test_consume(self):
-        b = Budget(max_iterations=3)
+        b = Budget(max_iterations=5)
         b.consume(iterations=1)
         b.consume(iterations=1)
-        assert b.remaining == 1
+        assert b.remaining == 3
         assert not b.exhausted
-        b.consume(iterations=1)
+        with pytest.raises(BudgetExceeded):
+            b.consume(iterations=3)
         assert b.exhausted
 
     def test_token_budget(self):
         b = Budget(max_tokens=100)
         b.consume(tokens=60)
         assert not b.exhausted
-        b.consume(tokens=50)
+        with pytest.raises(BudgetExceeded):
+            b.consume(tokens=50)
         assert b.exhausted
 
     def test_cost_budget(self):
         b = Budget(max_cost_usd=1.0)
         b.consume(cost_usd=0.5)
         assert not b.exhausted
-        b.consume(cost_usd=0.6)
+        with pytest.raises(BudgetExceeded):
+            b.consume(cost_usd=0.6)
         assert b.exhausted
 
     def test_summary(self):
@@ -47,9 +50,9 @@ class TestBudget:
         assert "0.3000" in s
 
     def test_reset(self):
-        b = Budget(max_iterations=3)
+        b = Budget(max_iterations=5)
         b.consume(iterations=3)
-        assert b.exhausted
+        assert b._used_iter == 3
         b.reset()
         assert not b.exhausted
 
@@ -128,7 +131,7 @@ class TestSessionRunnerBudgetExhaustion:
         runner = SessionRunner(
             llm=llm,
             registry=ToolRegistry(),
-            budget=Budget(max_iterations=2),
+            budget=Budget(max_iterations=2, max_tokens=999_999),
         )
         messages = [Message.user("loop forever")]
         events = []

@@ -10,6 +10,8 @@ from .core.store import Store, SQLiteStore, InMemoryStore
 from .core.event import EventBus
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
 from .plugin.types import PreLLMHook, ToolHook, ContextSource
+from .mcp.client import connect_mcp_stdio
+from .subagent.manager import SubagentSpec, SubagentManager, DEFAULT_SUBAGENTS
 from .session.budget import Budget, BudgetExceeded
 from .session.runner import SessionRunner
 from .agent import Agent
@@ -34,6 +36,10 @@ __all__ = [
     "LLMClient", "LLMConfig", "OpenAIChatClient", "StreamDone", "StreamEvent",
     # Extension points
     "PreLLMHook", "ToolHook", "ContextSource",
+    # MCP
+    "connect_mcp_stdio",
+    # Subagent
+    "SubagentSpec", "SubagentManager", "DEFAULT_SUBAGENTS",
     # Session
     "Budget", "BudgetExceeded", "SessionRunner",
 ]
