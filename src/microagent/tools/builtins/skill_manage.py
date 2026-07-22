@@ -58,7 +58,8 @@ async def skill_manage(
             return ToolResult.error("name and content are required for create")
         skill_path = skills_dir / name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text(content)
+        import asyncio
+        await asyncio.to_thread(skill_path.write_text, content)
         _record_provenance(name, created_by="agent")
         return ToolResult.ok(f"Skill '{name}' created at {skill_path}")
 
@@ -68,11 +69,12 @@ async def skill_manage(
         skill_path = skills_dir / name / "SKILL.md"
         if not skill_path.exists():
             return ToolResult.error(f"Skill '{name}' not found")
-        text = skill_path.read_text()
+        import asyncio
+        text = await asyncio.to_thread(skill_path.read_text)
         if old_string not in text:
             return ToolResult.error(f"old_string not found in skill '{name}'")
         new_text = text.replace(old_string, new_string)
-        skill_path.write_text(new_text)
+        await asyncio.to_thread(skill_path.write_text, new_text)
         return ToolResult.ok(f"Skill '{name}' patched")
 
     elif action == "list":

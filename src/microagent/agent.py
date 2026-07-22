@@ -7,12 +7,12 @@ simple ``run(session_id, prompt)`` / ``arun(session_id, prompt)`` API.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from .core.types import Event, Message, TurnComplete, TurnFailed
+from .core.types import Message, TurnComplete, TurnFailed
 from .core.tool import ToolRegistry, _default_builtins
-from .llm.client import LLMClient, LLMConfig, OpenAIChatClient
+from .llm.client import LLMConfig, OpenAIChatClient
 from .session.budget import Budget
 from .session.runner import SessionRunner
 

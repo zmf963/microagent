@@ -13,9 +13,8 @@ Design (from design doc §9):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from uuid import uuid4
 
-from ..core.types import Message, ToolResult, TurnComplete, TurnFailed
+from ..core.types import Message, TurnComplete, TurnFailed
 from ..core.tool import ToolRegistry
 from ..session.budget import Budget
 from ..session.runner import SessionRunner

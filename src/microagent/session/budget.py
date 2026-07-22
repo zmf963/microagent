@@ -122,7 +122,7 @@ class Budget:
             if self._cancel_event is not None:
                 self._cancel_event.set()  # notify entire tree
             raise BudgetExceeded(
-                f"budget exhausted: "
+                "budget exhausted: "
                 f"self_cost={self._used_cost:.4f}/{self.max_cost_usd}, "
                 f"tree_cost={self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
             )

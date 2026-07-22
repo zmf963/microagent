@@ -21,8 +21,8 @@ from ..core.types import (
     TextDelta, ToolCallDelta, TurnComplete, TurnFailed,
     Event, Usage,
 )
-from ..core.tool import ToolRegistry, TurnContext
-from ..llm.client import LLMClient, StreamEvent, StreamDone
+from ..core.tool import ToolRegistry
+from ..llm.client import LLMClient, StreamDone
 from ..core.event import EventBus
 from .budget import Budget, BudgetExceeded
 
