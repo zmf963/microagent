@@ -5,8 +5,10 @@ from .core.types import (
     TextDelta, ToolCallDelta, TurnComplete, TurnFailed, Event,
 )
 from .core.tool import Tool, ToolRegistry, FunctionTool, tool
+from .core.permission import PermissionEngine, Rule, Decision, DEFAULT_RULES
+from .core.store import Store, SQLiteStore, InMemoryStore
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
-from .session.budget import Budget
+from .session.budget import Budget, BudgetExceeded
 from .session.runner import SessionRunner
 from .agent import Agent
 
@@ -20,8 +22,12 @@ __all__ = [
     "TextDelta", "ToolCallDelta", "TurnComplete", "TurnFailed", "Event",
     # Tools
     "Tool", "ToolRegistry", "FunctionTool", "tool",
+    # Permission
+    "PermissionEngine", "Rule", "Decision", "DEFAULT_RULES",
+    # Store
+    "Store", "SQLiteStore", "InMemoryStore",
     # LLM
     "LLMClient", "LLMConfig", "OpenAIChatClient", "StreamDone", "StreamEvent",
     # Session
-    "Budget", "SessionRunner",
+    "Budget", "BudgetExceeded", "SessionRunner",
 ]

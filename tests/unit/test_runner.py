@@ -17,16 +17,38 @@ class TestBudget:
 
     def test_consume(self):
         b = Budget(max_iterations=3)
-        b.consume()
-        b.consume()
+        b.consume(iterations=1)
+        b.consume(iterations=1)
         assert b.remaining == 1
         assert not b.exhausted
-        b.consume()
+        b.consume(iterations=1)
         assert b.exhausted
+
+    def test_token_budget(self):
+        b = Budget(max_tokens=100)
+        b.consume(tokens=60)
+        assert not b.exhausted
+        b.consume(tokens=50)
+        assert b.exhausted
+
+    def test_cost_budget(self):
+        b = Budget(max_cost_usd=1.0)
+        b.consume(cost_usd=0.5)
+        assert not b.exhausted
+        b.consume(cost_usd=0.6)
+        assert b.exhausted
+
+    def test_summary(self):
+        b = Budget(max_iterations=10, max_tokens=1000, max_cost_usd=1.0)
+        b.consume(iterations=3, tokens=200, cost_usd=0.3)
+        s = b.summary()
+        assert "iterations=3/10" in s
+        assert "tokens=200/1000" in s
+        assert "0.3000" in s
 
     def test_reset(self):
         b = Budget(max_iterations=3)
-        b.consume(3)
+        b.consume(iterations=3)
         assert b.exhausted
         b.reset()
         assert not b.exhausted

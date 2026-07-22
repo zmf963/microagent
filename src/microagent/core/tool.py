@@ -205,5 +205,11 @@ def _default_builtins() -> list[Tool]:
     # Import builtins modules to trigger @tool registration
     from ..tools.builtins import read_file as _rf  # noqa: F401
     from ..tools.builtins import bash as _bash  # noqa: F401
+    from ..tools.builtins import write_file as _wf  # noqa: F401
+    from ..tools.builtins import edit_file as _ef  # noqa: F401
+    from ..tools.builtins import grep as _grep  # noqa: F401
+    from ..tools.builtins import glob as _glob  # noqa: F401
+    from ..tools.builtins import web_fetch as _wfetch  # noqa: F401
+    from ..tools.builtins import todo_plan_exit as _tpe  # noqa: F401
 
     return list(_registry.values())

@@ -56,7 +56,7 @@ class SessionRunner:
         and finally TurnComplete or TurnFailed.
         """
         while not self.budget.exhausted:
-            self.budget.consume()
+            self.budget.consume(iterations=1)
 
             # --- 1. Call LLM (stream) ---
             oai_tools = self.registry.to_openai_tools() or None
@@ -90,6 +90,14 @@ class SessionRunner:
                 tool_calls=tuple(tool_calls),
                 usage=usage,
             )
+
+            # Consume token/cost budget
+            if usage:
+                self.budget.consume(
+                    tokens=usage.input_tokens + usage.output_tokens,
+                    cost_usd=usage.cost_usd,
+                )
+
             messages.append(assistant_msg)
 
             # --- 2. If no tool calls → done ---

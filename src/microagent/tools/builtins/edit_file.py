@@ -1,0 +1,39 @@
+"""edit_file builtin tool — find-and-replace within a file."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+from pydantic import Field
+
+from ...core.tool import tool
+from ...core.types import ToolResult
+
+
+@tool("edit_file", description="Edit a file by replacing old_string with new_string.")
+async def edit_file(
+    path: Annotated[str, Field(description="Path to the file to edit")],
+    old_string: Annotated[str, Field(description="The text to find")],
+    new_string: Annotated[str, Field(description="The replacement text")],
+    replace_all: Annotated[bool, Field(description="Replace all occurrences if true, else only first")] = False,
+) -> ToolResult:
+    p = Path(path)
+
+    if not p.exists():
+        return ToolResult.error(f"file not found: {path}")
+
+    text = p.read_text()
+    count = text.count(old_string)
+
+    if count == 0:
+        return ToolResult.error(f"old_string not found in {path}")
+
+    if replace_all:
+        new_text = text.replace(old_string, new_string)
+    else:
+        new_text = text.replace(old_string, new_string, 1)
+
+    p.write_text(new_text)
+    replaced = count if replace_all else 1
+    return ToolResult.ok(f"replaced {replaced} occurrence(s) in {path}")
