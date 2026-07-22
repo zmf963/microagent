@@ -98,6 +98,10 @@ class SQLiteMemoryProvider:
         self._conn.executescript(self.SCHEMA)
         self._conn.execute("PRAGMA journal_mode=WAL")
 
+    def close(self) -> None:
+        """Close the database connection."""
+        self._conn.close()
+
     async def prefetch(self, query: str) -> None:
         # Fire-and-forget: FTS5 is fast enough to query inline
         pass
