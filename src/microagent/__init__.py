@@ -7,7 +7,9 @@ from .core.types import (
 from .core.tool import Tool, ToolRegistry, FunctionTool, tool
 from .core.permission import PermissionEngine, Rule, Decision, DEFAULT_RULES
 from .core.store import Store, SQLiteStore, InMemoryStore
+from .core.event import EventBus
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
+from .plugin.types import PreLLMHook, ToolHook, ContextSource
 from .session.budget import Budget, BudgetExceeded
 from .session.runner import SessionRunner
 from .agent import Agent
@@ -26,8 +28,12 @@ __all__ = [
     "PermissionEngine", "Rule", "Decision", "DEFAULT_RULES",
     # Store
     "Store", "SQLiteStore", "InMemoryStore",
+    # Event
+    "EventBus",
     # LLM
     "LLMClient", "LLMConfig", "OpenAIChatClient", "StreamDone", "StreamEvent",
+    # Extension points
+    "PreLLMHook", "ToolHook", "ContextSource",
     # Session
     "Budget", "BudgetExceeded", "SessionRunner",
 ]

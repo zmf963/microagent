@@ -23,6 +23,7 @@ from ..core.types import (
 )
 from ..core.tool import ToolRegistry, TurnContext
 from ..llm.client import LLMClient, StreamEvent, StreamDone
+from ..core.event import EventBus
 from .budget import Budget
 
 
@@ -36,11 +37,19 @@ class SessionRunner:
         registry: ToolRegistry,
         budget: Budget | None = None,
         system_prompt: str = "",
+        event_bus: "EventBus | None" = None,
+        pre_llm_hooks: tuple = (),
+        tool_hooks: tuple = (),
+        context_sources: tuple = (),
     ):
         self.llm = llm
         self.registry = registry
         self.budget = budget or Budget()
         self.system_prompt = system_prompt
+        self.event_bus = event_bus
+        self.pre_llm_hooks = pre_llm_hooks
+        self.tool_hooks = tool_hooks
+        self.context_sources = context_sources
 
     async def run_turn(
         self,
@@ -58,7 +67,15 @@ class SessionRunner:
         while not self.budget.exhausted:
             self.budget.consume(iterations=1)
 
-            # --- 1. Call LLM (stream) ---
+            # --- 1. Apply context sources + pre_llm_hooks ---
+            system = self.system_prompt
+            for src in self.context_sources:
+                system += await src.contribute(None)
+
+            for hook in self.pre_llm_hooks:
+                system = await hook(system)
+
+            # --- 2. Call LLM (stream) ---
             oai_tools = self.registry.to_openai_tools() or None
 
             content_parts: list[str] = []
@@ -66,7 +83,7 @@ class SessionRunner:
             usage: Usage | None = None
 
             async for event in self.llm.stream(
-                system=self.system_prompt,
+                system=system,
                 messages=tuple(messages),
                 tools=oai_tools,
             ):
@@ -100,12 +117,16 @@ class SessionRunner:
 
             messages.append(assistant_msg)
 
-            # --- 2. If no tool calls → done ---
+            # --- 3. If no tool calls → done ---
             if not tool_calls:
+                if self.event_bus:
+                    await self.event_bus.emit(
+                        "turn_complete", "unknown", assistant_msg.content
+                    )
                 yield TurnComplete(assistant_msg.content)
                 return
 
-            # --- 3. Execute tool calls concurrently ---
+            # --- 4. Execute tool calls concurrently ---
             results = await self._run_tool_calls(tool_calls)
 
             for tc, result in zip(tool_calls, results):
@@ -126,7 +147,21 @@ class SessionRunner:
 
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
-                results[idx] = await self.registry.execute(call)
+                # Run tool hooks: before → execute → after
+                modified = call
+                for hook in self.tool_hooks:
+                    modified = await hook.before(modified, None)
+                    if modified is None:
+                        results[idx] = ToolResult.denied("blocked by tool hook")
+                        return
+                    call = modified
+
+                result = await self.registry.execute(call)
+
+                for hook in self.tool_hooks:
+                    result = await hook.after(call, result, None)
+
+                results[idx] = result
             except Exception as e:
                 results[idx] = ToolResult.error(f"{call.name} failed: {e!r}")
 
