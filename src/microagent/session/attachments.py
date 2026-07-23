@@ -34,10 +34,10 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
     """
     paths: dict[str, int] = {}
 
-    # Pattern: absolute paths, relative paths, and tildes
-    # Matches: /absolute/path, ~/home/path, ./relative/path, relative/path, file.txt
+    # Pattern: matches file paths with or without extensions
+    # Examples: /etc/hosts, src/main.py, ./config.yaml, Makefile, Dockerfile
     path_pattern = re.compile(
-        r'["\']?((?:/|[A-Za-z]:\\|~/|\./)?[^\s"\')\],]+\.\w{1,10})["\']?'
+        r'["\']?((?:/|[A-Za-z]:\\|~/|\./)?[^\s"\')\],]{1,200}(?:\.\w{1,10})?)["\']?'
     )
 
     for i, msg in enumerate(messages):
@@ -68,17 +68,25 @@ def _is_readable_file(path: str) -> bool:
     """Check if a path string looks like a readable file."""
     if not path or len(path) > 500:
         return False
-    # Must have an extension or be a known file name
-    if '.' not in path.split('/')[-1] and path.split('/')[-1] not in (
-        'Dockerfile', 'Makefile', 'AGENTS', 'CLAUDE',
-    ):
-        return False
     # Exclude obvious non-files
-    if path.endswith(('/', '\\', ':')) or '://' in path:
+    if path.endswith(('/', '\\', ':', '>', '<', '|', '&', ';')):
         return False
-    # Expand and check existence
-    expanded = Path(path).expanduser()
-    return expanded.is_file()
+    if '://' in path:
+        return False
+    # Has extension, or is a known extensionless file
+    filename = path.split('/')[-1]
+    if '.' in filename:
+        return True
+    if filename in ('Makefile', 'Dockerfile', 'AGENTS', 'CLAUDE', 'Gemfile', 'Rakefile', 'CMakeLists'):
+        return True
+    # Absolute paths with no extension but that look like files
+    if filename and not filename.endswith('/'):
+        if path.startswith('/') and len(filename) < 60:
+            # Skip binary/system paths
+            if any(p in path for p in ('/bin/', '/sbin/', '/usr/lib/', '/usr/share/', '/dev/', '/proc/')):
+                return False
+            return True
+    return False
 
 
 def recover_file_attachments(
