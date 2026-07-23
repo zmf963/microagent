@@ -25,7 +25,8 @@ async def read_file(
         return ToolResult.error(f"not a file: {path}")
 
     # Binary detection
-    raw = p.read_bytes()
+    import asyncio
+    raw = await asyncio.to_thread(p.read_bytes)
     if b"\x00" in raw:
         return ToolResult.error(f"binary file, cannot display: {path}")
 

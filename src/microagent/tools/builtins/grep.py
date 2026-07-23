@@ -41,7 +41,8 @@ async def grep(
             continue
         # Skip binary files
         try:
-            raw = fpath.read_bytes()
+            import asyncio
+            raw = await asyncio.to_thread(fpath.read_bytes)
             if b"\x00" in raw:
                 continue
             lines = raw.decode("utf-8", errors="replace").splitlines()
