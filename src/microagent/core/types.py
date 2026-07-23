@@ -112,8 +112,12 @@ class ToolResult:
 
 @dataclass(frozen=True, slots=True)
 class TextDelta:
-    """Incremental text output from the LLM."""
+    """Incremental text output from the LLM.
+
+    kind: 'thinking' (reasoning/CoT) or 'content' (final response)
+    """
     text: str
+    kind: str = "content"
 
 
 @dataclass(frozen=True, slots=True)

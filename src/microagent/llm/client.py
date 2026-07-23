@@ -145,7 +145,11 @@ class OpenAIChatClient:
 
             # Text delta — yield immediately for streaming UX
             if delta and delta.content:
-                yield TextDelta(text=delta.content)
+                yield TextDelta(text=delta.content, kind="content")
+
+            # Reasoning content (CoT / thinking) — some models expose this
+            if delta and hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                yield TextDelta(text=delta.reasoning_content, kind="thinking")
 
             # Tool call deltas — accumulate by index
             if delta and delta.tool_calls:

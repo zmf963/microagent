@@ -95,17 +95,31 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
 
     async def _stream():
         text_started = False
-        pending_tool_call: tuple[str, dict] | None = None  # (name, args) waiting for result
+        thinking_started = False
+        pending_tool_call: tuple[str, dict] | None = None
 
         async for event in agent.runner.run_turn(messages):
             if isinstance(event, TextDelta):
-                if not text_started:
-                    text_started = True
-                    if pending_tool_call:
-                        # Close the tool box with a waiting indicator, then start text
-                        print()  # blank line before text
-                        pending_tool_call = None
-                print(event.text, end="", flush=True)
+                if event.kind == "thinking":
+                    # Show thinking in gray italic, inline with content
+                    if not thinking_started:
+                        thinking_started = True
+                        if text_started:
+                            print()  # newline before thinking block
+                        print(f"{GRAY}╭─ 💭 thinking ─{'─' * (min(_term_width() - 20, 50))}╮{RST}")
+                    print(f"{GRAY}{event.text}{RST}", end="", flush=True)
+
+                else:  # kind == "content"
+                    if thinking_started and not text_started:
+                        # Close thinking block, start content
+                        print(f"\n{GRAY}╰{'─' * (min(_term_width() - 2, 60))}╯{RST}")
+                        thinking_started = False
+                    if not text_started:
+                        text_started = True
+                        if pending_tool_call:
+                            print()  # blank line before text
+                            pending_tool_call = None
+                    print(event.text, end="", flush=True)
 
             elif isinstance(event, ToolCallDelta):
                 # Open a tool box header
