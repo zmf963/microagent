@@ -2,6 +2,8 @@
 
 > 版本 0.1.0 | Python ≥3.14 | ~4,700 行核心代码 | 22 内置工具 | 215 测试
 
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 5,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+
 ## 一、定位与设计原则
 
 MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品（不像 Hermes Agent 附带 Gateway/Desktop/Dashboard），而是一个可以嵌入任何 Python 应用的 Agent 运行时。
