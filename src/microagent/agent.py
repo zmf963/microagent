@@ -53,9 +53,11 @@ class Agent:
         )
         return cls(runner=runner, registry=registry)
 
-    def run(self, messages: list[Message]) -> str:
-        """Sync entry point: run a turn and return the final text."""
-        return asyncio.run(self.arun(messages))
+    def run(self, text: str | list[Message]) -> str:
+        """Sync entry point: accept a string (auto-wraps as user msg) or Message list."""
+        if isinstance(text, str):
+            text = [Message.user(text)]
+        return asyncio.run(self.arun(text))
 
     async def arun(self, messages: list[Message]) -> str:
         """Async entry point: run a turn and return the final text."""
