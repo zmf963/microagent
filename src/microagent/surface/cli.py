@@ -60,6 +60,11 @@ def _pad_to(s: str, target_width: int, fill: str = '─') -> str:
 
 
 def main():
+    import asyncio
+    asyncio.run(_main())
+
+
+async def _main():
     cli_base_url = None; cli_api_key = None; cli_model = None; cli_system_prompt = None
     positional: list[str] = []
 
@@ -87,29 +92,112 @@ def main():
     if not config.llm.api_key:
         print("Warning: API key not set.", file=sys.stderr)
 
-    agent = Agent.from_config(config.llm, system_prompt=config.system_prompt)
+    # Default: persist sessions to ~/.microagent/sessions.db
+    from pathlib import Path as _Path
+    from ..core.store import SQLiteStore
+    db_path = _Path.home() / ".microagent" / "sessions.db"
+    store = SQLiteStore(db_path)
     session_id = f"cli-{int(time.time())}"
+    agent = Agent.from_config(
+        config.llm, system_prompt=config.system_prompt,
+        store=store, session_id=session_id,
+    )
 
     if positional:
         prompt = " ".join(positional)
         _run_streaming(agent, [Message.user(prompt)])
+        store.close()
         return
 
     print(f"{CYAN}{BOLD}MicroAgent v0.1.0{RST}  (model={config.llm.model})")
     print(f"Session: {session_id}")
-    print("Type your message. Ctrl-D / Ctrl-C to exit.\n")
+    print("Commands: /new /list /resume <id>  |  Ctrl-D to exit\n")
 
     messages: list[Message] = []
     while True:
         try:
-            prompt = input(f"{BOLD}>>>{RST} ").strip()
+            raw = input(f"{BOLD}>>>{RST} ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye!"); break
-        if not prompt:
+        if not raw:
             continue
-        messages.append(Message.user(prompt))
+
+        # Handle slash commands
+        if raw.startswith("/"):
+            cmd, *rest = raw[1:].split(maxsplit=1)
+            arg = rest[0] if rest else ""
+
+            if cmd == "new":
+                session_id = f"cli-{int(time.time())}"
+                messages = []
+                agent = Agent.from_config(
+                    config.llm, system_prompt=config.system_prompt,
+                    store=store, session_id=session_id,
+                )
+                print(f"{GREEN}✓{RST} New session: {session_id}")
+
+            elif cmd == "list":
+                sessions = await _list_sessions(store)
+                if sessions:
+                    print(f"{GRAY}Sessions:{RST}")
+                    for sid, count, preview in sessions[-10:]:
+                        mark = f"{GREEN}*{RST}" if sid == session_id else " "
+                        print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
+                else:
+                    print(f"{GRAY}(no saved sessions){RST}")
+
+            elif cmd == "resume":
+                target = arg or await _pick_last_session(store)
+                if target:
+                    history = await store.load_history(target)
+                    if history:
+                        messages = list(history)
+                        session_id = target
+                        agent = Agent.from_config(
+                            config.llm, system_prompt=config.system_prompt,
+                            store=store, session_id=session_id,
+                        )
+                        print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
+                    else:
+                        print(f"{RED}✗{RST} Session not found: {target}")
+                else:
+                    print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
+
+            elif cmd == "help":
+                print(f"{GRAY}/new{RST}       Start a new session")
+                print(f"{GRAY}/list{RST}      List saved sessions")
+                print(f"{GRAY}/resume{RST}    Resume last session")
+                print(f"{GRAY}/resume <id>{RST} Resume a specific session")
+                print(f"{GRAY}/help{RST}      Show this help")
+
+            continue
+
+        messages.append(Message.user(raw))
         _run_streaming(agent, messages)
         print()
+
+    store.close()
+
+
+async def _list_sessions(store) -> list[tuple[str, int, str]]:
+    """List sessions with message count and preview."""
+    sessions = await store.list_sessions()
+    result = []
+    for sid in sessions:
+        history = await store.load_history(sid)
+        count = len(history)
+        preview = ""
+        if history:
+            last = history[-1]
+            preview = last.content[:50].replace("\n", " ")
+        result.append((sid, count, preview))
+    return sorted(result, key=lambda x: x[0])
+
+
+async def _pick_last_session(store) -> str | None:
+    """Pick the most recent session."""
+    sessions = await store.list_sessions()
+    return sessions[-1] if sessions else None
 
 
 def _run_streaming(agent: Agent, messages: list[Message]) -> None:
