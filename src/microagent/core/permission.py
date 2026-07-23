@@ -184,4 +184,9 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("web_search", {}, Decision.ALLOW),
     Rule("execute_code", {}, Decision.ALLOW),
     Rule("vision_analyze", {}, Decision.ALLOW),
+    Rule("browser_navigate", {}, Decision.ALLOW),
+    Rule("browser_snapshot", {}, Decision.ALLOW),
+    Rule("browser_click", {}, Decision.ALLOW),
+    Rule("browser_type", {}, Decision.ALLOW),
+    Rule("context7", {}, Decision.ALLOW),
 )

@@ -38,6 +38,9 @@ web = [
 ssh = [
     "paramiko>=3.0,<4.0",
 ]
+browser = [
+    "playwright>=1.40,<2.0",
+]
 
 [project.scripts]
 microagent = "microagent.surface.cli:main"
