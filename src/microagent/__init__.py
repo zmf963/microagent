@@ -11,6 +11,7 @@ from .core.event import EventBus
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
 from .plugin.types import PreLLMHook, ToolHook, ContextSource
 from .mcp.client import connect_mcp_stdio
+from .terminal.backend import TerminalResult, TerminalBackend, LocalTerminal, DockerTerminal
 from .subagent.manager import SubagentSpec, SubagentManager, DEFAULT_SUBAGENTS
 from .skill.loader import Skill, LoadedSkill, SkillLoader, ClaudeSkillLoader, CompositeSkillLoader
 from .skill.curator import Curator, SkillUsage
@@ -42,6 +43,8 @@ __all__ = [
     "PreLLMHook", "ToolHook", "ContextSource",
     # MCP
     "connect_mcp_stdio",
+    # Terminal
+    "TerminalResult", "TerminalBackend", "LocalTerminal", "DockerTerminal",
     # Subagent
     "SubagentSpec", "SubagentManager", "DEFAULT_SUBAGENTS",
     # Skills
