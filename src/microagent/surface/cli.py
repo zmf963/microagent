@@ -105,7 +105,7 @@ async def _main():
 
     if positional:
         prompt = " ".join(positional)
-        _run_streaming(agent, [Message.user(prompt)])
+        await _run_streaming(agent, [Message.user(prompt)])
         store.close()
         return
 
@@ -173,7 +173,7 @@ async def _main():
             continue
 
         messages.append(Message.user(raw))
-        _run_streaming(agent, messages)
+        await _run_streaming(agent, messages)
         print()
 
     store.close()
@@ -200,8 +200,7 @@ async def _pick_last_session(store) -> str | None:
     return sessions[-1] if sessions else None
 
 
-def _run_streaming(agent: Agent, messages: list[Message]) -> None:
-    import asyncio
+async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
 
     async def _stream():
         text_started = False
@@ -269,7 +268,7 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
                 print(f"{RED}✗{RST} {event.reason}")
                 return
 
-    asyncio.run(_stream())
+    await _stream()
 
 
 def _short_args(args: dict) -> str:
