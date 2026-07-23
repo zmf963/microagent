@@ -97,51 +97,51 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
         text_started = False
         thinking_started = False
         pending_tool_call: tuple[str, dict] | None = None
+        W = 76  # fixed box width
 
         async for event in agent.runner.run_turn(messages):
             if isinstance(event, TextDelta):
                 if event.kind == "thinking":
-                    # Show thinking in gray italic, inline with content
                     if not thinking_started:
                         thinking_started = True
                         if text_started:
-                            print()  # newline before thinking block
-                        print(f"{GRAY}╭─ 💭 thinking ─{'─' * (min(_term_width() - 20, 50))}╮{RST}")
+                            print()
+                        header = f"╭─ 💭 thinking "
+                        pad = W - _display_len(f"{GRAY}{header}{RST}") - 1
+                        print(f"{GRAY}{header}{'─' * max(1, pad)}╮{RST}")
                     print(f"{GRAY}{event.text}{RST}", end="", flush=True)
 
                 else:  # kind == "content"
                     if thinking_started and not text_started:
-                        # Close thinking block, start content
-                        print(f"\n{GRAY}╰{'─' * (min(_term_width() - 2, 60))}╯{RST}")
+                        print(f"\n{GRAY}╰{'─' * (W - 1)}╯{RST}")
                         thinking_started = False
                     if not text_started:
                         text_started = True
                         if pending_tool_call:
-                            print()  # blank line before text
+                            print()
                             pending_tool_call = None
                     print(event.text, end="", flush=True)
 
             elif isinstance(event, ToolCallDelta):
-                # Open a tool box header
-                width = min(_term_width() - 2, 78)
-                title = f" {TITLE_PREFIX}{CYAN}{event.name}{RST} "
+                title = f"╭─ 🔧 {event.name} "
+                pad = W - _display_len(f"{GRAY}{title}{RST}") - 1
                 args = _short_args(event.arguments)
-                # Top border + title
-                print(f"\n{GRAY}╭{RST}{title}{GRAY}{'─' * max(1, width - _display_len(title) - 1)}╮{RST}")
-                # Args line
-                print(f"{GRAY}│{RST} {GRAY}{args}{RST}")
+                print(f"\n{GRAY}{title}{'─' * max(1, pad)}╮{RST}")
+                # Args line — fill to width
+                arg_line = f"│ {GRAY}{args}{RST}"
+                arg_pad = W - _display_len(arg_line) - 1
+                print(f"{GRAY}{arg_line}{' ' * max(0, arg_pad)}│{RST}")
                 pending_tool_call = (event.name, event.arguments)
 
             elif isinstance(event, ToolResultDelta):
-                width = min(_term_width() - 2, 78)
                 summary = _summarize(event.content)
                 if event.is_error:
                     mark = f"{RED}✗{RST}"
                 else:
                     mark = f"{GREEN}✓{RST}"
-                line = f" {mark} {GRAY}{summary}{RST}"
-                # Bottom border + result
-                print(f"{GRAY}╰{RST}{line}{' ' * max(1, width - _display_len(line) - 1)}{GRAY}╯{RST}")
+                line = f"╰─ {mark} {GRAY}{summary}{RST}"
+                pad = W - _display_len(line) - 1
+                print(f"{GRAY}{line}{'─' * max(1, pad)}╯{RST}")
                 pending_tool_call = None
 
             elif isinstance(event, TurnComplete):
