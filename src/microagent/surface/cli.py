@@ -137,12 +137,12 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
                         thinking_started = True
                         if text_started:
                             print()
-                        print(_box_line("╭─ 💭 thinking ", "╮"))
+                        print(f"{GRAY}────── 💭 thinking ──────{RST}")
                     print(f"{GRAY}{event.text}{RST}", end="", flush=True)
 
                 else:  # kind == "content"
                     if thinking_started and not text_started:
-                        print(f"\n{_box_line('╰', '╯')}")
+                        print(f"\n{GRAY}──────────────────────────{RST}")
                         thinking_started = False
                     if not text_started:
                         text_started = True
