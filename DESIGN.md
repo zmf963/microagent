@@ -22,7 +22,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 ```
 ┌──────────────────────────────────────────────────────┐
 │                 Surface Layer                         │
-│  CLI (ANSI boxed)  │  TUI (textual)  │  Web (FastAPI)│
+│  CLI (ANSI boxed)                                 │
 └──────────────────────┬───────────────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────────────┐
@@ -275,8 +275,7 @@ class ContextSource(Protocol):
 - 动态终端宽度（CJK 感知）
 - 默认持久化到 `~/.microagent/sessions.db`
 
-### TUI (`surface/tui.py`) / Web (`surface/web.py`)
-- textual / FastAPI + SSE，均为 optional extras
+MicroAgent 是 **CLI + 核心库**，不提供 Web 或 TUI 界面。集成方如需 Web/TUI，可使用 Python API 自行构建。
 
 ---
 
