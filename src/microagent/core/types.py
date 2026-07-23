@@ -34,6 +34,7 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
     usage: Usage | None = None
+    is_error: bool = False
 
     @classmethod
     def user(cls, text: str) -> Message:
@@ -50,7 +51,8 @@ class Message:
 
         ``tool_call_id`` is required — the LLM API enforces it.
         """
-        return cls(role="tool", content=result.content, tool_call_id=tool_call_id)
+        return cls(role="tool", content=result.content, tool_call_id=tool_call_id,
+                   is_error=result.is_error)
 
     def to_openai_dict(self) -> dict[str, Any]:
         """Convert to the dict format expected by the openai SDK."""
