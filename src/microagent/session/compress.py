@@ -21,7 +21,7 @@ Layer 4 — Circuit Breaker:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ..core.types import Message
 
@@ -313,6 +313,9 @@ async def compact_conversation(
             try:
                 prev = state.previous_summary
                 current = await _llm_summarize(messages, llm, previous_summary=prev)
+                # Recover recent file attachments after summary
+                from .attachments import recover_file_attachments
+                current = recover_file_attachments(messages, current)
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
                 return current
@@ -344,6 +347,9 @@ async def compact_conversation(
             try:
                 prev = state.previous_summary
                 current = await _llm_summarize(current, llm, previous_summary=prev)
+                # Recover recent file attachments after summary
+                from .attachments import recover_file_attachments
+                current = recover_file_attachments(messages, current)
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
             except Exception:

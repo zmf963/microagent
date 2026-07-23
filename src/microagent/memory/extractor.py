@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from typing import Any
 
 try:
     from openai import AsyncOpenAI
