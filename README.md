@@ -2,7 +2,7 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-148%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-253%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
 **~3k LOC**, **12 built-in tools**, **55 public API symbols**, **148 unit tests**.
