@@ -44,6 +44,7 @@ class SessionRunner:
         context_sources: tuple = (),
         skill_loader: object = None,
         memory: object = None,
+        compression_threshold: int = 0,  # 0 = disabled (200k+ models don't need it)
     ):
         self.llm = llm
         self.registry = registry
@@ -57,6 +58,7 @@ class SessionRunner:
         self.context_sources = context_sources
         self.skill_loader = skill_loader
         self.memory = memory
+        self.compression_threshold = compression_threshold
 
         # Inject store into session_search tool
         if store is not None:
@@ -98,12 +100,14 @@ class SessionRunner:
             # --- 1. Compress if needed + apply context sources + pre_llm_hooks ---
             system = self.system_prompt
 
-            # Check if we need compression (before calling LLM)
-            if len(messages) > 10:
+            # Context compression: only trigger if explicitly configured
+            # (disabled by default — 200k+ context models rarely need it)
+            if self.compression_threshold > 0 and len(messages) > 10:
                 from .compress import count_tokens, compress_with_llm
-                if count_tokens(tuple(messages)) > 80_000:
+                if count_tokens(tuple(messages)) > self.compression_threshold:
                     messages_list = await compress_with_llm(
-                        tuple(messages), self.llm, max_tokens=80_000
+                        tuple(messages), self.llm,
+                        max_tokens=self.compression_threshold,
                     )
                     messages[:] = list(messages_list)
 
