@@ -111,7 +111,7 @@ async def _main():
 
     print(f"{CYAN}{BOLD}MicroAgent v0.1.0{RST}  (model={config.llm.model})")
     print(f"Session: {session_id}")
-    print("Commands: /new /list /resume <id>  |  Ctrl-D to exit\n")
+    print("Commands: /new /list /resume /compact  |  Ctrl-D to exit\n")
 
     messages: list[Message] = []
     while True:
@@ -163,11 +163,32 @@ async def _main():
                 else:
                     print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
 
+            elif cmd == "compact":
+                if len(messages) < 5:
+                    print(f"{GRAY}(not enough messages to compact){RST}")
+                else:
+                    from ..session.compress import count_tokens, compact_conversation, CompactionState
+                    before_count = len(messages)
+                    before_tokens = count_tokens(tuple(messages))
+                    state = getattr(agent.runner, '_compaction_state', CompactionState())
+                    compressed = await compact_conversation(
+                        tuple(messages), agent.runner.llm,
+                        context_window=before_tokens + 8000,
+                        state=state,
+                    )
+                    agent.runner._compaction_state = state
+                    messages[:] = list(compressed)
+                    after_count = len(messages)
+                    after_tokens = count_tokens(tuple(messages))
+                    print(f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
+                          f"{before_tokens} → {after_tokens} tokens")
+
             elif cmd == "help":
                 print(f"{GRAY}/new{RST}       Start a new session")
                 print(f"{GRAY}/list{RST}      List saved sessions")
                 print(f"{GRAY}/resume{RST}    Resume last session")
                 print(f"{GRAY}/resume <id>{RST} Resume a specific session")
+                print(f"{GRAY}/compact{RST}    Manually compress current conversation")
                 print(f"{GRAY}/help{RST}      Show this help")
 
             continue
