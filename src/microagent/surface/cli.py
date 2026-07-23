@@ -1,15 +1,16 @@
-"""CLI: REPL mode + one-shot mode with Hermes-style display.
+"""CLI: REPL mode + one-shot mode with boxed tool calls and clean text.
 
-Colors:
-  \033[90m  — gray (┊ prefix, dim text)
-  \033[96m  — cyan (tool names)
-  \033[92m  — green (success)
-  \033[91m  — red (error)
-  \033[0m   — reset
+Visual hierarchy:
+  ╭─ 🔧 tool_name ─────────────────────────╮  ← cyan box for tool call
+  │  args                                  │
+  ╰─ ✓ result summary ────────────────────╯  ← green/red result line
+
+  Clean text output flows below without markers.
 """
 
 from __future__ import annotations
 
+import shutil
 import sys
 import time
 
@@ -19,14 +20,21 @@ from ..core.types import (
     Message, TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed,
 )
 
-# ANSI codes
-GRAY  = "\033[90m"
-CYAN  = "\033[96m"
-GREEN = "\033[92m"
-RED   = "\033[91m"
-BOLD  = "\033[1m"
-RST   = "\033[0m"
-PREFIX = f"{GRAY}┊{RST}"
+# ANSI
+GRAY   = "\033[90m"
+CYAN   = "\033[96m"
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+BOLD   = "\033[1m"
+RST    = "\033[0m"
+
+# Box drawing
+TITLE_PREFIX = f"{CYAN}🔧{RST} "
+
+
+def _term_width() -> int:
+    return shutil.get_terminal_size().columns
 
 
 def main():
@@ -87,63 +95,80 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
 
     async def _stream():
         text_started = False
-        had_tool_calls = False
+        pending_tool_call: tuple[str, dict] | None = None  # (name, args) waiting for result
 
         async for event in agent.runner.run_turn(messages):
             if isinstance(event, TextDelta):
                 if not text_started:
                     text_started = True
-                    if had_tool_calls:
-                        print()  # blank line after tools
+                    if pending_tool_call:
+                        # Close the tool box with a waiting indicator, then start text
+                        print()  # blank line before text
+                        pending_tool_call = None
                 print(event.text, end="", flush=True)
 
             elif isinstance(event, ToolCallDelta):
-                had_tool_calls = True
-                # Show tool call inline: ┊ name arg1 arg2
+                # Open a tool box header
+                width = min(_term_width() - 2, 78)
+                title = f" {TITLE_PREFIX}{CYAN}{event.name}{RST} "
                 args = _short_args(event.arguments)
-                print(f"\n{PREFIX}{CYAN}{event.name}{RST} {GRAY}{args}{RST}")
+                # Top border + title
+                print(f"\n{GRAY}╭{RST}{title}{GRAY}{'─' * max(1, width - _display_len(title) - 1)}╮{RST}")
+                # Args line
+                print(f"{GRAY}│{RST} {GRAY}{args}{RST}")
+                pending_tool_call = (event.name, event.arguments)
 
             elif isinstance(event, ToolResultDelta):
-                # Show result summary: ┊ ✓ result or ┊ ✗ error
+                width = min(_term_width() - 2, 78)
                 summary = _summarize(event.content)
                 if event.is_error:
-                    print(f"{PREFIX}{RED}✗{RST} {GRAY}{summary}{RST}")
+                    mark = f"{RED}✗{RST}"
                 else:
-                    print(f"{PREFIX}{GREEN}✓{RST} {GRAY}{summary}{RST}")
+                    mark = f"{GREEN}✓{RST}"
+                line = f" {mark} {GRAY}{summary}{RST}"
+                # Bottom border + result
+                print(f"{GRAY}╰{RST}{line}{' ' * max(1, width - _display_len(line) - 1)}{GRAY}╯{RST}")
+                pending_tool_call = None
 
             elif isinstance(event, TurnComplete):
+                if pending_tool_call:
+                    print()  # close unclosed box
                 if not text_started:
                     print(event.content)
                 print()
                 return
 
             elif isinstance(event, TurnFailed):
-                print(f"\n{PREFIX}{RED}✗{RST} {event.reason}")
+                if pending_tool_call:
+                    print()
+                print(f"{RED}✗{RST} {event.reason}")
                 return
 
     asyncio.run(_stream())
 
 
+def _display_len(s: str) -> int:
+    """Visible length of a string (strip ANSI codes)."""
+    import re
+    return len(re.sub(r'\033\[[0-9;]*m', '', s))
+
+
 def _short_args(args: dict) -> str:
-    """Format args as 'key=value' pairs, single-line."""
     parts = []
     for k, v in args.items():
         s = str(v)
-        # Quote strings with spaces
         if " " in s:
             s = f'"{s}"'
-        if len(s) > 50:
-            s = s[:47] + "..."
+        if len(s) > 60:
+            s = s[:57] + "..."
         parts.append(s)
     return " ".join(parts)
 
 
 def _summarize(content: str) -> str:
-    """Single-line summary of tool result."""
-    # Strip ANSI, take first line, truncate
     clean = content.replace("\n", " ").strip()
-    if len(clean) > 80:
-        clean = clean[:77] + "..."
+    if len(clean) > 70:
+        clean = clean[:67] + "..."
     return clean
 
 
