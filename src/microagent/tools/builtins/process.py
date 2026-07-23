@@ -24,6 +24,14 @@ def _generate_id() -> str:
     return f"proc-{int(time.time() * 1000)}-{len(_procs)}"
 
 
+def _cleanup_dead() -> None:
+    """Remove exited processes from registry (called on each action)."""
+    dead = [sid for sid, p in _procs.items() if p.returncode is not None]
+    for sid in dead:
+        _procs.pop(sid, None)
+        _outputs.pop(sid, None)
+
+
 @tool("process", description="Manage background processes: start, poll, kill, list, wait, write.")
 async def process(
     action: Annotated[str, Field(description="One of: start, poll, kill, list, wait, write")],
@@ -34,6 +42,7 @@ async def process(
 ) -> ToolResult:
     match action:
         case "start":
+            _cleanup_dead()  # prevent unbounded growth
             if not command:
                 return ToolResult.error("command is required for action=start")
             try:
