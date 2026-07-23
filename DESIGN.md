@@ -4,6 +4,8 @@
 
 **MicroAgent 是一个将 AI Agent 的核心循环压缩到 5,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
+**核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
+
 ## 一、定位与设计原则
 
 MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品（不像 Hermes Agent 附带 Gateway/Desktop/Dashboard），而是一个可以嵌入任何 Python 应用的 Agent 运行时。
