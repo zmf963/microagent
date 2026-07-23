@@ -18,6 +18,40 @@ from ..core.types import (
 
 
 # ---------------------------------------------------------------------------
+# Model pricing (USD per 1M tokens)
+# ---------------------------------------------------------------------------
+
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # (input_price_per_1M, output_price_per_1M)
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4-turbo": (10.00, 30.00),
+    "gpt-3.5-turbo": (0.50, 1.50),
+    "claude-sonnet-4": (3.00, 15.00),
+    "claude-haiku": (0.25, 1.25),
+    "deepseek-v3": (0.27, 1.10),
+    "deepseek-r1": (0.55, 2.19),
+    "glm-4": (0.50, 0.50),
+    "oc-d4f": (0.0, 0.0),
+    "tx-d4p": (0.0, 0.0),
+}
+
+
+def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate USD cost from token counts and model pricing."""
+    prices = _MODEL_PRICING.get(model)
+    if prices is None:
+        for prefix, p in _MODEL_PRICING.items():
+            if model.startswith(prefix):
+                prices = p
+                break
+    if prices is None:
+        return 0.0
+    input_price, output_price = prices
+    return (input_tokens / 1_000_000) * input_price + (output_tokens / 1_000_000) * output_price
+
+
+# ---------------------------------------------------------------------------
 # LLMConfig
 # ---------------------------------------------------------------------------
 
@@ -130,7 +164,11 @@ class OpenAIChatClient:
                 usage = Usage(
                     input_tokens=chunk.usage.prompt_tokens or 0,
                     output_tokens=chunk.usage.completion_tokens or 0,
-                    cost_usd=0.0,  # cost calculation deferred to budget module
+                    cost_usd=_estimate_cost(
+                        self.config.model,
+                        chunk.usage.prompt_tokens or 0,
+                        chunk.usage.completion_tokens or 0,
+                    ),
                 )
                 continue
 

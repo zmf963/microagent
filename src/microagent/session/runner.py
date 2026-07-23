@@ -36,6 +36,8 @@ class SessionRunner:
         registry: ToolRegistry,
         budget: Budget | None = None,
         system_prompt: str = "",
+        store: "Store | None" = None,
+        session_id: str = "default",
         event_bus: "EventBus | None" = None,
         pre_llm_hooks: tuple = (),
         tool_hooks: tuple = (),
@@ -45,6 +47,8 @@ class SessionRunner:
         self.registry = registry
         self.budget = budget or Budget()
         self.system_prompt = system_prompt
+        self.store = store
+        self.session_id = session_id
         self.event_bus = event_bus
         self.pre_llm_hooks = pre_llm_hooks
         self.tool_hooks = tool_hooks
@@ -69,6 +73,12 @@ class SessionRunner:
         Yields TextDelta (streaming), ToolCallDelta (after tool starts),
         and finally TurnComplete or TurnFailed.
         """
+        # Auto-save user message (the last message in the list)
+        if self.store is not None and messages:
+            last = messages[-1]
+            if last.role == "user":
+                await self.store.append(self.session_id, last)
+
         while not self.budget.exhausted:
             try:
                 self.budget.consume(iterations=1)
@@ -76,8 +86,18 @@ class SessionRunner:
                 yield TurnFailed(f"budget exhausted: {e}")
                 return
 
-            # --- 1. Apply context sources + pre_llm_hooks ---
+            # --- 1. Compress if needed + apply context sources + pre_llm_hooks ---
             system = self.system_prompt
+
+            # Check if we need compression (before calling LLM)
+            if len(messages) > 10:
+                from .compress import count_tokens, compress_with_llm
+                if count_tokens(tuple(messages)) > 80_000:
+                    messages_list = await compress_with_llm(
+                        tuple(messages), self.llm, max_tokens=80_000
+                    )
+                    messages[:] = list(messages_list)
+
             for src in self.context_sources:
                 system += await src.contribute(None)
 
@@ -126,12 +146,19 @@ class SessionRunner:
 
             messages.append(assistant_msg)
 
+            # Auto-save assistant message (even with tool calls)
+            if self.store is not None:
+                await self.store.append(self.session_id, assistant_msg)
+
             # --- 3. If no tool calls → done ---
             if not tool_calls:
                 if self.event_bus:
                     await self.event_bus.emit(
-                        "turn_complete", "unknown", assistant_msg.content
+                        "turn_complete", self.session_id, assistant_msg.content
                     )
+                # Auto-save to store
+                if self.store is not None:
+                    await self.store.append(self.session_id, messages[-1])  # assistant msg
                 yield TurnComplete(assistant_msg.content)
                 return
 
@@ -141,6 +168,9 @@ class SessionRunner:
             for tc, result in zip(tool_calls, results):
                 msg = Message.tool_result(result, tool_call_id=tc.id)
                 messages.append(msg)
+                # Auto-save tool result
+                if self.store is not None:
+                    await self.store.append(self.session_id, msg)
                 yield ToolResultDelta(
                     id=tc.id, name=tc.name,
                     content=result.content[:200],

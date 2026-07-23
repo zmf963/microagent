@@ -41,7 +41,7 @@ class TestCompressHistory:
         # Result should be shorter
         assert len(result) < len(messages)
         # First message should be a summary placeholder
-        assert "summary" in result[0].content.lower() or "compressed" in result[0].content.lower()
+        assert "omitted" in result[0].content.lower()
         # Last messages should be preserved
         assert result[-1].content == messages[-1].content
 
