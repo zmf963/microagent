@@ -31,9 +31,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zmf963/microagent"
-Documentation = "https://github.com/zmf963/microagent/blob/main/DESIGN.md"
-Repository = "https://github.com/zmf963/microagent"
+Homepage = "https://m4.local:3000/zmf96/microagent"
+Documentation = "https://m4.local:3000/zmf96/microagent/src/branch/main/DESIGN.md"
+Repository = "https://m4.local:3000/zmf96/microagent"
 
 [project.optional-dependencies]
 dev = [
