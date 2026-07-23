@@ -10,9 +10,11 @@ Visual hierarchy:
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 import time
+import unicodedata
 
 from ..agent import Agent
 from ..config import Config
@@ -25,16 +27,36 @@ GRAY   = "\033[90m"
 CYAN   = "\033[96m"
 GREEN  = "\033[92m"
 RED    = "\033[91m"
-YELLOW = "\033[93m"
 BOLD   = "\033[1m"
 RST    = "\033[0m"
-
-# Box drawing
-TITLE_PREFIX = f"{CYAN}🔧{RST} "
 
 
 def _term_width() -> int:
     return shutil.get_terminal_size().columns
+
+
+def _display_width(s: str) -> int:
+    """Visible display width accounting for ANSI codes and CJK characters.
+
+    ANSI escape sequences are stripped. CJK characters count as 2.
+    Emoji and other wide chars also count as 2.
+    """
+    # Strip ANSI
+    clean = re.sub(r'\033\[[0-9;]*m', '', s)
+    w = 0
+    for ch in clean:
+        ea = unicodedata.east_asian_width(ch)
+        if ea in ('W', 'F'):  # Wide / Fullwidth
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _pad_to(s: str, target_width: int, fill: str = '─') -> str:
+    """Pad s with fill chars to reach target display width."""
+    current = _display_width(s)
+    return s + fill * max(0, target_width - current)
 
 
 def main():
@@ -97,7 +119,16 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
         text_started = False
         thinking_started = False
         pending_tool_call: tuple[str, dict] | None = None
-        W = 76  # fixed box width
+
+        def _box_width() -> int:
+            """Dynamic box width: terminal - 2 margin, capped at 100."""
+            return min(_term_width() - 2, 100)
+
+        def _box_line(prefix: str, suffix: str, fill: str = '─') -> str:
+            """Build a box border line: prefix + fill + suffix, width-matched."""
+            W = _box_width()
+            body = _pad_to(prefix, W - _display_width(suffix), fill)
+            return f"{GRAY}{body}{suffix}{RST}"
 
         async for event in agent.runner.run_turn(messages):
             if isinstance(event, TextDelta):
@@ -106,14 +137,12 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
                         thinking_started = True
                         if text_started:
                             print()
-                        header = f"╭─ 💭 thinking "
-                        pad = W - _display_len(f"{GRAY}{header}{RST}") - 1
-                        print(f"{GRAY}{header}{'─' * max(1, pad)}╮{RST}")
+                        print(_box_line("╭─ 💭 thinking ", "╮"))
                     print(f"{GRAY}{event.text}{RST}", end="", flush=True)
 
                 else:  # kind == "content"
                     if thinking_started and not text_started:
-                        print(f"\n{GRAY}╰{'─' * (W - 1)}╯{RST}")
+                        print(f"\n{_box_line('╰', '╯')}")
                         thinking_started = False
                     if not text_started:
                         text_started = True
@@ -124,29 +153,23 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
 
             elif isinstance(event, ToolCallDelta):
                 title = f"╭─ 🔧 {event.name} "
-                pad = W - _display_len(f"{GRAY}{title}{RST}") - 1
+                print(f"\n{_box_line(title, '╮')}")
                 args = _short_args(event.arguments)
-                print(f"\n{GRAY}{title}{'─' * max(1, pad)}╮{RST}")
-                # Args line — fill to width
-                arg_line = f"│ {GRAY}{args}{RST}"
-                arg_pad = W - _display_len(arg_line) - 1
-                print(f"{GRAY}{arg_line}{' ' * max(0, arg_pad)}│{RST}")
+                W = _box_width()
+                arg_body = f"│ {GRAY}{args}{RST}"
+                arg_pad = W - _display_width(arg_body) - 1
+                print(f"{GRAY}{arg_body}{' ' * max(0, arg_pad)}│{RST}")
                 pending_tool_call = (event.name, event.arguments)
 
             elif isinstance(event, ToolResultDelta):
                 summary = _summarize(event.content)
-                if event.is_error:
-                    mark = f"{RED}✗{RST}"
-                else:
-                    mark = f"{GREEN}✓{RST}"
-                line = f"╰─ {mark} {GRAY}{summary}{RST}"
-                pad = W - _display_len(line) - 1
-                print(f"{GRAY}{line}{'─' * max(1, pad)}╯{RST}")
+                mark = f"{RED}✗{RST}" if event.is_error else f"{GREEN}✓{RST}"
+                print(_box_line(f"╰─ {mark} {GRAY}{summary}{RST} ", "╯"))
                 pending_tool_call = None
 
             elif isinstance(event, TurnComplete):
                 if pending_tool_call:
-                    print()  # close unclosed box
+                    print()
                 if not text_started:
                     print(event.content)
                 print()
@@ -159,12 +182,6 @@ def _run_streaming(agent: Agent, messages: list[Message]) -> None:
                 return
 
     asyncio.run(_stream())
-
-
-def _display_len(s: str) -> int:
-    """Visible length of a string (strip ANSI codes)."""
-    import re
-    return len(re.sub(r'\033\[[0-9;]*m', '', s))
 
 
 def _short_args(args: dict) -> str:
