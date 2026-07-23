@@ -9,6 +9,7 @@ from .core.permission import PermissionEngine, PermissionDecision, Rule, Decisio
 from .core.store import Store, SQLiteStore, InMemoryStore
 from .core.event import EventBus
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
+from .config import Config
 from .plugin.types import PreLLMHook, ToolHook, ContextSource
 from .mcp.client import connect_mcp_stdio
 from .terminal.backend import TerminalResult, TerminalBackend, LocalTerminal, DockerTerminal
@@ -39,6 +40,8 @@ __all__ = [
     "EventBus",
     # LLM
     "LLMClient", "LLMConfig", "OpenAIChatClient", "StreamDone", "StreamEvent",
+    # Config
+    "Config",
     # Extension points
     "PreLLMHook", "ToolHook", "ContextSource",
     # MCP
