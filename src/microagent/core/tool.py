@@ -215,5 +215,6 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import skill_manage as _sm  # noqa: F401
     from ..tools.builtins import web_search as _ws  # noqa: F401
     from ..tools.builtins import execute_code as _ec  # noqa: F401
+    from ..tools.builtins import vision_analyze as _va  # noqa: F401
 
     return list(_registry.values())

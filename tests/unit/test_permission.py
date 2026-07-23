@@ -86,7 +86,7 @@ class TestPermissionEngine:
         engine = PermissionEngine(DEFAULT_RULES)
         builtins = [
             "read_file", "bash", "write_file", "edit_file",
-            "grep", "glob", "web_fetch", "web_search", "execute_code", "todo", "plan", "exit", "task", "skill_manage",
+            "grep", "glob", "web_fetch", "web_search", "execute_code", "vision_analyze", "todo", "plan", "exit", "task", "skill_manage",
         ]
         for name in builtins:
             assert engine.resolve(name) is Decision.ALLOW, f"{name} not allowed"
