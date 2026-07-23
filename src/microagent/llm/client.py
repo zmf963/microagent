@@ -52,15 +52,53 @@ def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Model context windows (tokens) — for adaptive compression thresholds
+# ---------------------------------------------------------------------------
+
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-3.5-turbo": 16_385,
+    "claude-sonnet-4": 200_000,
+    "claude-haiku": 200_000,
+    "claude-opus-4": 200_000,
+    "deepseek-v3": 128_000,
+    "deepseek-r1": 128_000,
+    "glm-4": 128_000,
+    "oc-d4f": 200_000,
+    "tx-d4p": 200_000,
+}
+
+
+def get_context_window(model: str) -> int:
+    """Return the context window size for a model (prefix match)."""
+    for prefix, window in _MODEL_CONTEXT_WINDOWS.items():
+        if model.startswith(prefix):
+            return window
+    return 128_000  # safe default
+
+
+# ---------------------------------------------------------------------------
 # LLMConfig
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class LLMConfig:
-    """OpenAI-compatible LLM configuration: base_url + api_key + model."""
+    """OpenAI-compatible LLM configuration.
+
+    Fields:
+        base_url: API endpoint (e.g. https://api.openai.com/v1)
+        api_key: Authentication key
+        model: Model identifier
+        reasoning_effort: For o-series models — 'low', 'medium', 'high'
+        service_tier: OpenAI service tier — 'auto', 'default', 'flex'
+    """
     base_url: str
     api_key: str
     model: str
+    reasoning_effort: str | None = None
+    service_tier: str | None = None
 
     @classmethod
     def default(cls) -> LLMConfig:
@@ -161,6 +199,10 @@ class OpenAIChatClient:
         }
         if tools:
             kwargs["tools"] = tools
+        if self.config.reasoning_effort:
+            kwargs["reasoning_effort"] = self.config.reasoning_effort
+        if self.config.service_tier:
+            kwargs["service_tier"] = self.config.service_tier
 
         stream = await client.chat.completions.create(**kwargs)
 

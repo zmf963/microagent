@@ -60,6 +60,10 @@ class SessionRunner:
         self.memory = memory
         self.compression_threshold = compression_threshold
 
+        # Prompt caching: cache system prompt + tool schemas across turns
+        self._cached_system: str | None = None
+        self._cached_tools: list[dict] | None = None
+
         # Inject store into session_search tool
         if store is not None:
             from ..tools.builtins import session_search as _ss
@@ -101,15 +105,21 @@ class SessionRunner:
             system = self.system_prompt
 
             # Context compression: 4-layer pyramid (L1→L2→L3→L4)
-            # Enabled by default with adaptive thresholds based on context window
-            if self.compression_threshold > 0 and len(messages) > 10:
+            # Auto-detect context window from model if threshold not explicitly set
+            _threshold = self.compression_threshold
+            if _threshold <= 0:
+                from ..llm.client import get_context_window
+                _window = get_context_window(self.llm.config.model)
+                _threshold = int(_window * 0.6)  # L1 trigger at 60% of window
+
+            if len(messages) > 10:
                 from .compress import count_tokens, compact_conversation, CompactionState
-                if count_tokens(tuple(messages)) > self.compression_threshold:
+                if count_tokens(tuple(messages)) > _threshold:
                     if not hasattr(self, '_compaction_state'):
                         self._compaction_state = CompactionState()
                     messages_list = await compact_conversation(
                         tuple(messages), self.llm,
-                        context_window=self.compression_threshold + 8000,
+                        context_window=_threshold + 8000,
                         state=self._compaction_state,
                     )
                     messages[:] = list(messages_list)
@@ -133,7 +143,11 @@ class SessionRunner:
                 system = await hook(system)
 
             # --- 2. Call LLM (stream) ---
-            oai_tools = self.registry.to_openai_tools() or None
+            # Use cached system prompt + tools for prompt caching (byte-stable prefix)
+            if self._cached_system is None or system != self._cached_system:
+                self._cached_system = system
+                self._cached_tools = self.registry.to_openai_tools() or None
+            oai_tools = self._cached_tools
 
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
