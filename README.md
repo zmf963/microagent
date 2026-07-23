@@ -2,16 +2,24 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-148%20passed-brightgreen.svg)]()
 
-A Python-implemented, embeddable universal AI agent core library. ~3k LOC, 12 built-in tools, 55 public API symbols.
+A Python-implemented, embeddable universal AI agent core library.
+**~3k LOC**, **12 built-in tools**, **55 public API symbols**, **148 unit tests**.
 
-> **Design philosophy**: "narrow waist + thick edges" — the core agent loop is <200 LOC, capability lives in tools and extension points, not in the core.
+> *"narrow waist + thick edges"* — the core agent loop is <200 LOC. Capability lives in tools and extension points, not in the core.
+
+---
 
 ## Quick Start
+
+### Installation
 
 ```bash
 pip install microagent
 ```
+
+### First Agent
 
 ```python
 import asyncio
@@ -23,124 +31,409 @@ async def main():
         api_key="sk-...",
         model="gpt-4o",
     ))
-    result = await agent.arun("What is Python?")
+    result = await agent.arun("What is the capital of France?")
     print(result)
 
 asyncio.run(main())
 ```
 
-Or use the CLI:
+Any OpenAI-compatible endpoint works: vLLM, Ollama, local-gateway, OpenRouter, etc.
+
+### CLI
 
 ```bash
+# Set credentials
 export MICROAGENT_BASE_URL="https://api.openai.com/v1"
 export MICROAGENT_API_KEY="sk-..."
 export MICROAGENT_MODEL="gpt-4o"
+
+# One-shot
 microagent "What is Python?"
+
+# Interactive REPL
+microagent
+>>> list files in current directory
+>>> write a hello.py script
+>>> /exit
 ```
 
-## Architecture
+---
 
+## Usage Guide
+
+### Basic Usage
+
+```python
+from microagent import Agent, LLMConfig, Message
+
+agent = Agent.from_config(LLMConfig(
+    base_url="https://api.openai.com/v1",
+    api_key="sk-...",
+    model="gpt-4o",
+))
+
+# Simple string input → string output
+result = await agent.arun("Read pyproject.toml and summarize it.")
+print(result)
+
+# Structured messages
+messages = [
+    Message.user("What is Python?"),
+]
+result = await agent.arun(messages)
+
+# With system prompt
+agent2 = Agent.from_config(
+    LLMConfig(base_url="...", api_key="...", model="gpt-4o"),
+    system_prompt="You are a Python expert. Always give code examples.",
+)
 ```
-user prompt → Agent → SessionRunner → LLM (OpenAI-compatible)
-                         ↓ (tool calls)
-                    ToolRegistry → 12 built-in tools
-                         ↓
-                    PermissionEngine → ALLOW / DENY / ASK
+
+### Working with Messages
+
+```python
+from microagent import Message, ToolCall
+
+# User message
+msg = Message.user("hello")
+
+# Assistant message with tool calls
+msg = Message.assistant(
+    text="Let me read that file.",
+    tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": "app.py"}),),
+)
+
+# Tool result message
+from microagent import ToolResult
+msg = Message.tool_result(
+    ToolResult.ok("file contents here"),
+    tool_call_id="c1",
+)
 ```
 
-| Layer | What | LOC |
-|-------|------|-----|
-| `core/` | types, tool registry, permission engine, store, event bus | 685 |
-| `llm/` | OpenAI-compatible client (SDK v2 streaming) | 184 |
-| `session/` | runner loop, tree-shaped budget (spawn + cancel) | 351 |
-| `tools/` | 12 built-in tools | 572 |
-| `skill/` | Claude skill loader, composite loader, curator | 254 |
-| `memory/` | FTS5-backed memory provider, LLM extractor | 176 |
-| `subagent/` | subagent manager with isolated budgets | 151 |
-| `terminal/` | local + docker + SSH backends | 159 |
-| `mcp/` | MCP client (official SDK bridge) | 73 |
-| `plugin/` | 3 extension Protocols + EventBus | 36 |
-| `cron/` | APScheduler-based cron jobs | 100 |
+### Streaming
 
-## Built-in Tools (12)
+```python
+from microagent import SessionRunner, ToolRegistry
+from microagent.core.types import TextDelta, TurnComplete
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read files by line (offset/limit) |
-| `write_file` | Write/overwrite files |
-| `edit_file` | Find-and-replace in files |
-| `bash` | Execute shell commands (local/docker/ssh) |
-| `grep` | Regex search in files |
-| `glob` | Find files by pattern |
-| `web_fetch` | Fetch URL content |
-| `todo` | Inline task list |
-| `plan` | Multi-step planning |
-| `task` | Spawn subagents (explore/general) |
-| `skill_manage` | Runtime skill creation/modification |
-| `exit` | End session |
+runner = SessionRunner(llm=client, registry=ToolRegistry())
+messages = [Message.user("Write a poem.")]
 
-## Extension Points
+async for event in runner.run_turn(messages):
+    if isinstance(event, TextDelta):
+        print(event.text, end="", flush=True)  # real-time output
+    elif isinstance(event, TurnComplete):
+        print(f"\n--- done, full response: {event.content}")
+```
+
+### Permissions
+
+```python
+from microagent import PermissionEngine, Rule, Decision, ScriptRule
+
+# Rule-based: fnmatch on tool name + argument constraints
+engine = PermissionEngine(rules=(
+    Rule("read_file", {}, Decision.ALLOW),                    # always allow reads
+    Rule("bash", {"command": "ls *"}, Decision.ALLOW),        # allow ls only
+    Rule("bash", {}, Decision.ASK),                           # ask for other commands
+    Rule("write_file", {}, Decision.DENY),                    # block all writes
+))
+
+# External script rule: delegates to a Python script
+engine = PermissionEngine(rules=(
+    ScriptRule("*", {}, script="./audit.py", timeout=5.0),   # every tool call
+))
+
+# ASK callback for interactive prompts
+async def ask_user(call, rule):
+    answer = input(f"Allow {call.name}? [y/N] ")
+    return Decision.ALLOW if answer.lower() == "y" else Decision.DENY
+
+engine = PermissionEngine(rules=(...), ask_callback=ask_user)
+```
+
+### Subagents
+
+```python
+from microagent import SubagentManager, SubagentSpec
+
+# Use default subagents (explore + general)
+mgr = SubagentManager()
+
+# Spawn a read-only code explorer
+result = await mgr.spawn("explore", "Find all TODO comments", parent_runner)
+
+# Custom subagent
+mgr2 = SubagentManager(specs=(
+    SubagentSpec(
+        name="code-reviewer",
+        description="Reviews code for bugs",
+        system_prompt="You review code. Be thorough.",
+        tools_allowed=("read_file", "grep", "glob"),
+        tools_blocked=("write_file", "bash"),
+        max_iterations=15,
+        max_cost_usd=0.5,
+    ),
+))
+```
+
+### Memory
+
+```python
+from microagent import SQLiteMemoryProvider, Memory
+
+store = SQLiteMemoryProvider("~/.microagent/memory.db")
+
+# Write memories
+await store.batch_write((
+    Memory(id="m1", content="User prefers Python.", category="preference", created_at=time.time()),
+    Memory(id="m2", content="Project is at /home/user/app.", category="fact", created_at=time.time()),
+))
+
+# FTS5 full-text search
+results = await store.recall("Python project", k=5)
+for r in results:
+    print(f"[{r.category}] {r.content} (score: {r.relevance_score:.2f})")
+
+# Delete
+await store.delete("m1")
+store.close()
+```
+
+### Skills
+
+```python
+from microagent import ClaudeSkillLoader, CompositeSkillLoader
+
+# Load skills from ~/.claude/skills/<name>/SKILL.md
+loader = ClaudeSkillLoader(search_paths=("~/.claude/skills",))
+skills = await loader.load()
+
+# Match skills by user input (keyword triggers + fuzzy description matching)
+matches = await loader.match("I need to search deeply for information")
+for m in matches:
+    print(f"{m.skill.name}: {m.match_reason} (score: {m.match_score})")
+
+# Combine multiple loaders, deduplicate, rank by score
+composite = CompositeSkillLoader(backends=(claude_loader, custom_loader))
+top = await composite.match("deploy to production")
+```
+
+### Budget Tree
+
+```python
+from microagent import Budget, BudgetExceeded
+
+# Root budget: total session limits
+root = Budget.root(max_iterations=50, max_tokens=500_000, max_cost_usd=10.0)
+
+# Spawn child budget (inherits 1/3 of parent remaining by default)
+child = root.spawn(max_iterations=10, max_cost_usd=1.0)
+
+# Child consumption reports to all ancestors
+child.consume(iterations=2, tokens=1500, cost_usd=0.05)
+print(f"Root remaining cost: ${root.remaining_cost:.2f}")  # $9.95
+
+# Root exhaustion cancels all descendants
+root.consume(iterations=50, cost_usd=10.0)  # raises BudgetExceeded
+try:
+    child.consume(iterations=1)             # raises "budget cancelled by root"
+except BudgetExceeded:
+    print("Cancelled")
+```
+
+### Extension Points
 
 ```python
 from microagent import PreLLMHook, ToolHook, ContextSource, EventBus
 
 # Transform system prompt before LLM call
-class MyHook:
+class AddContextHook:
     async def __call__(self, ctx):
-        return ctx  # modify and return
+        return ctx + "\nAdditional context here."
 
 # Intercept tool calls
 class AuditHook:
     async def before(self, call, ctx):
+        print(f"About to run: {call.name}({call.arguments})")
         return call  # return None to deny
+
     async def after(self, call, result, ctx):
+        print(f"Result: {result.content[:100]}")
         return result
 
-# Inject extra context
+# Inject extra content into system prompt
 class GitSource:
     async def contribute(self, ctx):
-        return "git: main branch"
+        return f"\ngit: main branch, 3 files changed"
 
 # Observe events
 bus = EventBus()
-bus.on("turn_complete", lambda sid, resp: print(f"Done: {resp[:50]}"))
+bus.on("turn_complete", lambda sid, resp: log_to_file(sid, resp))
+
+runner = SessionRunner(
+    llm=client,
+    registry=ToolRegistry(),
+    pre_llm_hooks=(AddContextHook(),),
+    tool_hooks=(AuditHook(),),
+    context_sources=(GitSource(),),
+    event_bus=bus,
+)
 ```
+
+### Session Persistence
+
+```python
+from microagent import SQLiteStore, InMemoryStore, SessionRunner
+
+# SQLite WAL store
+store = SQLiteStore("sessions.db")
+await store.append("session-1", Message.user("hello"))
+await store.append("session-1", Message.assistant("hi"))
+await store.checkpoint("session-1")
+
+# Resume session later
+runner = SessionRunner(llm=client, registry=ToolRegistry())
+history = await runner.resume("session-1", store)
+# Continue conversation
+messages = list(history) + [Message.user("what did we talk about?")]
+async for event in runner.run_turn(messages):
+    ...
+
+store.close()
+```
+
+### MCP Client
+
+```bash
+pip install microagent[mcp]
+```
+
+```python
+from microagent import connect_mcp_stdio, ToolRegistry
+
+registry = ToolRegistry()
+await connect_mcp_stdio(("uvx", "mcp-server-git"), registry)
+# MCP server's tools are now registered as MicroAgent tools
+print(registry.names)  # e.g., ['git_status', 'git_diff', ...]
+```
+
+### Cron Jobs
+
+```bash
+pip install microagent[cron]
+```
+
+```python
+from microagent import CronScheduler, CronJob
+
+scheduler = CronScheduler(agent=agent)
+scheduler.add_job(CronJob(
+    name="daily-summary",
+    schedule="0 9 * * *",     # cron expression
+    prompt="Summarize today's activity.",
+))
+scheduler.add_job(CronJob(
+    name="health-check",
+    schedule="interval:300",  # every 5 minutes
+    prompt="Check if all services are running.",
+))
+scheduler.start()
+# ... app runs ...
+await scheduler.stop()
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  Surface Layer (CLI / TUI / Web)                │
+├─────────────────────────────────────────────────┤
+│  Plugin Layer (PreLLMHook / ToolHook / Context) │
+├─────────────────────────────────────────────────┤
+│  Session Runner (LLM → tools → LLM loop)        │
+│  ┌──────────┬──────────┬──────────┬──────────┐ │
+│  │ Tools    │ Skills   │ Memory   │ Subagent │ │
+│  │ Registry │ Loader   │ Provider │ Manager  │ │
+│  └──────────┴──────────┴──────────┴──────────┘ │
+├─────────────────────────────────────────────────┤
+│  Core (types / permission / store / event /     │
+│        budget tree / LLM client)                │
+└─────────────────────────────────────────────────┘
+```
+
+| Module | Files | LOC | Description |
+|--------|-------|-----|-------------|
+| `core/` | 5 | 744 | types, tool registry, permission, store, event bus |
+| `tools/` | 10 | 573 | 12 built-in tools (read, write, bash, grep, etc.) |
+| `session/` | 2 | 356 | runner loop, tree-shaped budget (spawn + cancel) |
+| `memory/` | 2 | 307 | FTS5 memory provider, LLM extractor |
+| `skill/` | 2 | 254 | Claude skill loader, curator |
+| `terminal/` | 2 | 239 | local + docker + SSH backends |
+| `surface/` | 3 | 202 | CLI REPL, textual TUI, FastAPI web |
+| `llm/` | 1 | 184 | OpenAI-compatible client (SDK v2 streaming) |
+| `subagent/` | 1 | 151 | subagent manager with isolated budgets |
+| `cron/` | 1 | 100 | APScheduler-based cron jobs |
+| `mcp/` | 1 | 73 | MCP client (official SDK bridge) |
+| `plugin/` | 1 | 36 | 3 extension Protocols |
+
+## Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with line numbers (offset/limit, 1-indexed) |
+| `write_file` | Write/overwrite files (creates parent directories) |
+| `edit_file` | Find-and-replace in files (single or replace_all) |
+| `bash` | Execute shell commands via local/docker/SSH backends |
+| `grep` | Regex search in files with line numbers |
+| `glob` | Find files by glob pattern, sorted output |
+| `web_fetch` | Fetch URL content via httpx |
+| `todo` | Manage inline task list (list/add/update/remove) |
+| `plan` | Create multi-step plans without executing |
+| `task` | Spawn subagents (explore: read-only, general: multi-step) |
+| `skill_manage` | Runtime skill creation/patching/deletion |
+| `exit` | Signal task completion |
 
 ## Optional Extras
 
-| Extra | Install | Provides |
+| Extra | Command | Provides |
 |-------|---------|----------|
-| `mcp` | `pip install microagent[mcp]` | MCP client (official SDK) |
+| `mcp` | `pip install microagent[mcp]` | MCP client (official SDK, stdio transport) |
 | `cron` | `pip install microagent[cron]` | APScheduler cron jobs |
-| `tui` | `pip install microagent[tui]` | Textual terminal UI |
-| `web` | `pip install microagent[web]` | FastAPI SSE streaming API |
-| `ssh` | `pip install microagent[ssh]` | SSH terminal backend (paramiko) |
+| `tui` | `pip install microagent[tui]` | Textual terminal UI (`microagent-tui`) |
+| `web` | `pip install microagent[web]` | FastAPI SSE streaming API (`microagent-web`) |
+| `ssh` | `pip install microagent[ssh]` | SSH terminal backend via paramiko |
 | `dev` | `pip install microagent[dev]` | pytest + pytest-asyncio |
-
-## Key Features
-
-- **OpenAI-compatible LLM abstraction** — any `/v1/chat/completions` endpoint (OpenAI, vLLM, Ollama, local-gateway)
-- **Tree-shaped budget** — `Budget.root().spawn()` with shared cancel_event and descendants tracking
-- **Self-improving learning loop** — `skill_manage` tool + `Curator` background lifecycle (Hermes-style)
-- **Dual-track testing** — `FakeLLMClient` for unit tests + real API integration tests (`-m integration`)
-- **FTS5 memory** — SQLite full-text search with zero external dependencies
-- **Permission engine** — fnmatch rules + external script rules + ASK callback
-- **Subagent system** — isolated contexts, filtered toolsets, independent budgets
-- **Session persistence** — SQLite WAL store with checkpoint support
-- **Skills dual ecosystem** — Claude Code skill format + composite loader
 
 ## Running Tests
 
 ```bash
-# Unit tests (no network)
+# Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
+# 148 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
-MICROAGENT_TEST_BASE_URL="..." \
-MICROAGENT_TEST_API_KEY="..." \
-MICROAGENT_TEST_MODEL="..." \
+MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
+MICROAGENT_TEST_API_KEY="sk-..." \
+MICROAGENT_TEST_MODEL="your-model" \
 python -m pytest tests/integration/ -v -m integration
 ```
+
+## Key Features
+
+- **OpenAI-compatible LLM** — any `/v1/chat/completions` endpoint
+- **Tree-shaped budget** — `spawn()` with shared cancel_event, descendants tracking
+- **Self-improving loop** — `skill_manage` tool + `Curator` lifecycle (Hermes-style)
+- **Dual-track testing** — `FakeLLMClient` (unit) + real API (integration)
+- **FTS5 memory** — zero-dependency SQLite full-text search
+- **Permission engine** — fnmatch rules + ScriptRule + ASK callback
+- **Subagent system** — isolated contexts, filtered toolsets, independent budgets
+- **Session persistence** — SQLite WAL store with checkpoint + resume
+- **Skills dual ecosystem** — Claude Code format + composite loader
+- **Extension points** — 3 Protocols + EventBus (zero overhead when unused)
 
 ## License
 
