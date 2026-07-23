@@ -16,7 +16,7 @@ import anyio
 
 from ..core.types import (
     Message, ToolCall, ToolResult,
-    TextDelta, ToolCallDelta, TurnComplete, TurnFailed,
+    TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed,
     Event, Usage,
 )
 from ..core.tool import ToolRegistry
@@ -141,6 +141,11 @@ class SessionRunner:
             for tc, result in zip(tool_calls, results):
                 msg = Message.tool_result(result, tool_call_id=tc.id)
                 messages.append(msg)
+                yield ToolResultDelta(
+                    id=tc.id, name=tc.name,
+                    content=result.content[:200],
+                    is_error=result.is_error,
+                )
 
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")
 

@@ -2,7 +2,7 @@
 
 from .core.types import (
     Message, ToolCall, ToolResult, Usage,
-    TextDelta, ToolCallDelta, TurnComplete, TurnFailed, Event,
+    TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed, Event,
 )
 from .core.tool import Tool, ToolRegistry, FunctionTool, tool
 from .core.permission import PermissionEngine, PermissionDecision, Rule, Decision, ScriptRule, DEFAULT_RULES
@@ -29,7 +29,7 @@ __all__ = [
     "Agent",
     # Core types
     "Message", "ToolCall", "ToolResult", "Usage",
-    "TextDelta", "ToolCallDelta", "TurnComplete", "TurnFailed", "Event",
+    "TextDelta", "ToolCallDelta", "ToolResultDelta", "TurnComplete", "TurnFailed", "Event",
     # Tools
     "Tool", "ToolRegistry", "FunctionTool", "tool",
     # Permission

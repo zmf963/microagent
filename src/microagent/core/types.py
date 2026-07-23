@@ -125,6 +125,15 @@ class ToolCallDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolResultDelta:
+    """Result of a tool execution."""
+    id: str
+    name: str
+    content: str
+    is_error: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class TurnComplete:
     """The turn finished with a text response."""
     content: str
@@ -136,4 +145,4 @@ class TurnFailed:
     reason: str
 
 
-Event = Union[TextDelta, ToolCallDelta, TurnComplete, TurnFailed]
+Event = Union[TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed]
