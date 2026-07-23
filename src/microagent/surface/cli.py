@@ -174,7 +174,7 @@ async def _main():
                     compressed = await compact_conversation(
                         tuple(messages), agent.runner.llm,
                         context_window=before_tokens + 8000,
-                        state=state,
+                        state=state, force=True,
                     )
                     agent.runner._compaction_state = state
                     messages[:] = list(compressed)

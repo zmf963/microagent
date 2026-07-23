@@ -188,15 +188,79 @@ def build_compaction_summary_prompt(
     return COMPACTION_PROMPT_TEMPLATE.format(user_messages=user_messages)
 
 
+INCREMENTAL_PROMPT_TEMPLATE = """You are updating an existing conversation summary with new context.
+
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+
+You are given a PREVIOUS SUMMARY and NEW messages. Your job:
+1. Preserve all important information from the previous summary
+2. Add new facts, decisions, errors, and user messages from below
+3. Update the "当前进度" section to reflect the latest state
+4. Output a complete, up-to-date summary in the same 7-section format
+
+=== PREVIOUS SUMMARY ===
+{previous_summary}
+
+=== NEW MESSAGES TO INCORPORATE ===
+<analysis>
+[Your internal reasoning — this will be stripped]
+</analysis>
+<summary>
+
+## 1. 主要请求和意图
+[Updated primary goal with any new direction changes]
+
+## 2. 关键技术决策
+[All decisions, old and new]
+
+## 3. 涉及的文件和代码
+[All files, old and new]
+
+## 4. 遇到的错误和修复
+[All errors, old and new]
+
+## 5. 所有用户消息
+[ENUMERATE every user message from the NEW messages:
+{user_messages}]
+
+## 6. 待办任务
+[Tasks not yet completed]
+
+## 7. 当前进度
+[Latest state — what was being done when these new messages were added]
+
+</summary>"""
+
+
+def build_incremental_summary_prompt(
+    messages: tuple[Message, ...],
+    previous_summary: str,
+) -> str:
+    """Build prompt for updating an existing summary with new messages."""
+    user_messages = "\n".join(
+        f"- [{m.role}] {m.content[:200]}"
+        for m in messages
+        if m.role == "user"
+    )
+    if not user_messages:
+        user_messages = "(no new user messages)"
+
+    return INCREMENTAL_PROMPT_TEMPLATE.format(
+        previous_summary=previous_summary,
+        user_messages=user_messages,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Layer 4: CompactionState — circuit breaker + recursion guard
 # ---------------------------------------------------------------------------
 
 @dataclass
 class CompactionState:
-    """Tracks compaction failures and cooling-off periods."""
+    """Tracks compaction failures, cooling-off, previous summary, and recursion."""
 
     consecutive_failures: int = 0
+    previous_summary: str | None = None  # iterative summary across compactions
     _cooldown_until: float = 0.0
     _is_compaction_call: bool = False  # recursion guard
 
@@ -223,24 +287,42 @@ class CompactionState:
 
 async def compact_conversation(
     messages: tuple[Message, ...],
-    llm: object,  # LLMClient
+    llm: object,
     context_window: int = 200_000,
     state: CompactionState | None = None,
+    force: bool = False,
 ) -> tuple[Message, ...]:
     """Run the 4-layer compression pipeline.
 
-    Returns compressed messages. If all layers fail, returns placeholder.
+    force=True (manual /compact): skips L1+L2 thresholds, goes to LLM summary.
+      Clears circuit breaker cooldown so manual retry works immediately.
+    force=False (auto): runs full L1-L2-L3-L4 pipeline with thresholds.
+    Uses state.previous_summary for incremental compaction when available.
     """
     if state is None:
         state = CompactionState()
 
-    # Recursion guard: compaction calls must not trigger more compaction
     if state._is_compaction_call:
         return messages
     state._is_compaction_call = True
 
     try:
-        # Circuit breaker
+        # Manual /compact: clear cooldown, skip to LLM
+        if force:
+            state._cooldown_until = 0.0
+            try:
+                prev = state.previous_summary
+                current = await _llm_summarize(messages, llm, previous_summary=prev)
+                state.previous_summary = _extract_summary_text(current)
+                state.record_success()
+                return current
+            except Exception:
+                state.record_failure()
+                if state.is_circuit_broken():
+                    state.activate_cooldown()
+                return _fallback(messages)
+
+        # Auto: circuit breaker
         if state.is_circuit_broken() or state.is_cooling_down():
             return _fallback(messages)
 
@@ -256,11 +338,13 @@ async def compact_conversation(
         if count_tokens(current) > layer2_threshold:
             current = snip_tool_results(current, max_tokens=layer2_threshold)
 
-        # Layer 3: LLM Summary
+        # Layer 3: LLM Summary (incremental if previous summary exists)
         layer3_threshold = context_window - AUTOCOMPACT_BUFFER
         if count_tokens(current) > layer3_threshold:
             try:
-                current = await _llm_summarize(current, llm)
+                prev = state.previous_summary
+                current = await _llm_summarize(current, llm, previous_summary=prev)
+                state.previous_summary = _extract_summary_text(current)
                 state.record_success()
             except Exception:
                 state.record_failure()
@@ -273,12 +357,27 @@ async def compact_conversation(
         state._is_compaction_call = False
 
 
+def _extract_summary_text(compressed: tuple[Message, ...]) -> str:
+    """Extract the summary text from compressed messages for iterative storage."""
+    for msg in compressed:
+        if msg.role == "user" and ("摘要" in msg.content or "summary" in msg.content.lower()):
+            return msg.content
+    return compressed[0].content if compressed else ""
+
+
 async def _llm_summarize(
     messages: tuple[Message, ...],
     llm: object,
+    previous_summary: str | None = None,
 ) -> tuple[Message, ...]:
-    """Generate structured LLM summary + return compressed messages."""
-    prompt = build_compaction_summary_prompt(messages)
+    """Generate structured LLM summary + return compressed messages.
+
+    If previous_summary is provided, uses incremental update mode.
+    """
+    if previous_summary:
+        prompt = build_incremental_summary_prompt(messages, previous_summary)
+    else:
+        prompt = build_compaction_summary_prompt(messages)
 
     summary_text = ""
     async for event in llm.stream(
