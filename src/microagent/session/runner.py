@@ -100,14 +100,17 @@ class SessionRunner:
             # --- 1. Compress if needed + apply context sources + pre_llm_hooks ---
             system = self.system_prompt
 
-            # Context compression: only trigger if explicitly configured
-            # (disabled by default — 200k+ context models rarely need it)
+            # Context compression: 4-layer pyramid (L1→L2→L3→L4)
+            # Enabled by default with adaptive thresholds based on context window
             if self.compression_threshold > 0 and len(messages) > 10:
-                from .compress import count_tokens, compress_with_llm
+                from .compress import count_tokens, compact_conversation, CompactionState
                 if count_tokens(tuple(messages)) > self.compression_threshold:
-                    messages_list = await compress_with_llm(
+                    if not hasattr(self, '_compaction_state'):
+                        self._compaction_state = CompactionState()
+                    messages_list = await compact_conversation(
                         tuple(messages), self.llm,
-                        max_tokens=self.compression_threshold,
+                        context_window=self.compression_threshold + 8000,
+                        state=self._compaction_state,
                     )
                     messages[:] = list(messages_list)
 
