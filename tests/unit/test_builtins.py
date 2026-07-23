@@ -155,6 +155,6 @@ class TestTodoPlanExit:
 
 class TestRegistryAllBuiltins:
     def test_all_tools_registered(self, registry):
-        expected = {"read_file", "bash", "write_file", "edit_file", "grep", "glob", "web_fetch", "todo", "plan", "exit", "task", "skill_manage"}
+        expected = {"read_file", "bash", "write_file", "edit_file", "grep", "glob", "web_fetch", "web_search", "execute_code", "todo", "plan", "exit", "task", "skill_manage"}
         actual = set(registry.names)
         assert actual == expected, f"missing: {expected - actual}, extra: {actual - expected}"
