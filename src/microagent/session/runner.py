@@ -42,6 +42,8 @@ class SessionRunner:
         pre_llm_hooks: tuple = (),
         tool_hooks: tuple = (),
         context_sources: tuple = (),
+        skill_loader: object = None,
+        memory: object = None,
     ):
         self.llm = llm
         self.registry = registry
@@ -53,6 +55,13 @@ class SessionRunner:
         self.pre_llm_hooks = pre_llm_hooks
         self.tool_hooks = tool_hooks
         self.context_sources = context_sources
+        self.skill_loader = skill_loader
+        self.memory = memory
+
+        # Inject store into session_search tool
+        if store is not None:
+            from ..tools.builtins import session_search as _ss
+            _ss._current_store = store
 
     async def resume(
         self, session_id: str, store: Store
@@ -97,6 +106,18 @@ class SessionRunner:
                         tuple(messages), self.llm, max_tokens=80_000
                     )
                     messages[:] = list(messages_list)
+
+            # Match skills against user query
+            if self.skill_loader is not None and messages:
+                last_user = next((m for m in reversed(messages) if m.role == "user"), None)
+                if last_user:
+                    try:
+                        matched = await self.skill_loader.match(last_user.content)
+                        if matched:
+                            skill_texts = [m.skill.body for m in matched[:3]]
+                            system += "\n\n## Relevant Skills\n\n" + "\n---\n".join(skill_texts)
+                    except Exception:
+                        pass  # skill matching failure is non-fatal
 
             for src in self.context_sources:
                 system += await src.contribute(None)
@@ -159,6 +180,18 @@ class SessionRunner:
                 # Auto-save to store
                 if self.store is not None:
                     await self.store.append(self.session_id, messages[-1])  # assistant msg
+                # Trigger memory extraction (fire-and-forget)
+                if self.memory is not None:
+                    try:
+                        from ..memory.extractor import MemoryExtractor
+                        if hasattr(self, '_extractor') and self._extractor is not None:
+                            history = tuple(
+                                {"role": m.role, "content": m.content}
+                                for m in messages[-10:]
+                            )
+                            await self._extractor.extract_async(history)
+                    except Exception:
+                        pass
                 yield TurnComplete(assistant_msg.content)
                 return
 

@@ -13,6 +13,7 @@ from typing import Any
 from .core.types import Message, TurnComplete, TurnFailed
 from .core.tool import ToolRegistry, _default_builtins
 from .llm.client import LLMConfig, OpenAIChatClient
+from .core.store import Store
 from .session.budget import Budget
 from .session.runner import SessionRunner
 
@@ -31,6 +32,8 @@ class Agent:
         system_prompt: str = "You are a helpful assistant.",
         max_iterations: int = 25,
         tools: list[Any] | None = None,
+        store: "Store | None" = None,
+        session_id: str = "default",
     ) -> Agent:
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
@@ -45,6 +48,8 @@ class Agent:
             registry=registry,
             budget=budget,
             system_prompt=system_prompt,
+            store=store,
+            session_id=session_id,
         )
         return cls(runner=runner, registry=registry)
 

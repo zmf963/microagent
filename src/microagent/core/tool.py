@@ -218,5 +218,6 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import vision_analyze as _va  # noqa: F401
     from ..tools.builtins import browser as _br  # noqa: F401
     from ..tools.builtins import context7 as _c7  # noqa: F401
+    from ..tools.builtins import session_search as _ss  # noqa: F401
 
     return list(_registry.values())

@@ -189,4 +189,5 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("browser_click", {}, Decision.ALLOW),
     Rule("browser_type", {}, Decision.ALLOW),
     Rule("context7", {}, Decision.ALLOW),
+    Rule("session_search", {}, Decision.ALLOW),
 )

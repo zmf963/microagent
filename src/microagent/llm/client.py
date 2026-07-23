@@ -111,11 +111,13 @@ class OpenAIChatClient:
 
     Handles tool-call delta accumulation internally so that the caller
     (SessionRunner) only sees complete ToolCallDelta events.
+
+    Supports CredentialPool for API key rotation on failure.
     """
 
-    def __init__(self, config: LLMConfig):
+    def __init__(self, config: LLMConfig, pool: "CredentialPool | None" = None):
         self.config = config
-        # Lazily create the SDK client (deferred so tests can mock)
+        self.pool = pool
         self._client = None
 
     def _get_client(self):
@@ -127,8 +129,17 @@ class OpenAIChatClient:
             )
         return self._client
 
+    def _on_auth_error(self) -> bool:
+        """Handle auth/rate-limit error. Returns True if retry possible."""
+        if self.pool is None:
+            return False
+        self.pool.mark_failed()
+        self.config = self.pool.current
+        self._client = None  # force re-creation with new key
+        return True
+
     def for_model(self, model: str) -> OpenAIChatClient:
-        return OpenAIChatClient(replace(self.config, model=model))
+        return OpenAIChatClient(replace(self.config, model=model), pool=self.pool)
 
     async def stream(
         self, *,
