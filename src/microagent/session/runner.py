@@ -74,6 +74,7 @@ class SessionRunner:
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
         self._extractor = None
+        self._overflow_retried = False
 
         # Per-session process registry (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -125,6 +126,8 @@ class SessionRunner:
             last = messages[-1]
             if last.role == "user":
                 await self.store.append(self.session_id, last)
+
+        self._overflow_retried = False
 
         while not self.budget.exhausted:
             try:
@@ -186,6 +189,7 @@ class SessionRunner:
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
             usage: Usage | None = None
+            _overflow_retrying = False
 
             async for event in self.llm.stream(
                 system=system,
@@ -203,7 +207,43 @@ class SessionRunner:
                 elif isinstance(event, StreamDone):
                     usage = event.usage
                     if event.stop_reason == "length":
-                        # Truncated — persist partial response, consume usage, then fail
+                        # Overflow: no content streamed and not already retried → compact + retry
+                        if not content_parts and not self._overflow_retried:
+                            self._overflow_retried = True
+                            if usage:
+                                try:
+                                    self.budget.consume(
+                                        tokens=usage.input_tokens + usage.output_tokens,
+                                        cost_usd=usage.cost_usd,
+                                    )
+                                except BudgetExceeded as e:
+                                    yield TurnFailed(f"budget exhausted: {e}")
+                                    return
+                            # Force compaction to reduce context
+                            from .compress import CompactionState, compact_conversation
+
+                            if not hasattr(self, "_compaction_state"):
+                                self._compaction_state = CompactionState()
+                            try:
+                                messages_list = await compact_conversation(
+                                    tuple(messages),
+                                    self.llm,
+                                    context_window=_threshold + 8000,
+                                    state=self._compaction_state,
+                                    force=True,
+                                    budget=self.budget,
+                                )
+                                messages[:] = list(messages_list)
+                            except BudgetExceeded as e:
+                                yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
+                                return
+                            except Exception:
+                                yield TurnFailed("overflow recovery: compaction failed")
+                                return
+                            _overflow_retrying = True
+                            break  # break out of async for → while loop retries
+
+                        # Either content was streamed (truncation) or already retried → fail
                         assistant_msg = Message.assistant(
                             text="".join(content_parts),
                             tool_calls=tuple(tool_calls),
@@ -221,8 +261,14 @@ class SessionRunner:
                             except BudgetExceeded as e:
                                 yield TurnFailed(f"budget exhausted: {e}")
                                 return
-                        yield TurnFailed("LLM response truncated (max tokens)")
+                        if content_parts:
+                            yield TurnFailed("LLM response truncated (max tokens)")
+                        else:
+                            yield TurnFailed("LLM overflow recovery failed after retry")
                         return
+
+            if _overflow_retrying:
+                continue  # retry the turn after overflow recovery
 
             assistant_msg = Message.assistant(
                 text="".join(content_parts),
