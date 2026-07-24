@@ -204,6 +204,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("bash", {"command": "mv *"}, Decision.ASK, "mv command requires confirmation"),
     Rule("bash", {"command": "chmod *"}, Decision.ASK, "chmod command requires confirmation"),
     Rule("bash", {"command": "chown *"}, Decision.ASK, "chown command requires confirmation"),
+    Rule("bash", {"command": "* > *"}, Decision.ASK, "output redirection requires confirmation"),
     Rule("task", {}, Decision.ASK, "subagent spawn requires confirmation"),
     # Default: allow all tools
     Rule("read_file", {}, Decision.ALLOW),

@@ -150,7 +150,10 @@ class SubagentManager:
             await child_runner.close()
             # Close forked LLM client (has its own AsyncOpenAI connection pool)
             if forked_llm and hasattr(llm, "close"):
-                await llm.close()
+                try:
+                    await llm.close()
+                except Exception:
+                    pass
 
         return "".join(parts) or f"[subagent {spec_name} returned empty]"
 

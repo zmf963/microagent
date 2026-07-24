@@ -74,10 +74,12 @@ class SessionRunner:
 
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
+        self._cached_mode: str = "normal"
         self._extractor = None
         self._overflow_retried = False
         self._steer_pending: str | None = None
         self.mode: str = "normal"  # "normal" | "plan" | "build"
+        self._output_store = None  # lazy init
 
         # Per-session process registry (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -134,9 +136,23 @@ class SessionRunner:
 
     # Tools blocked in plan mode (read-only mode)
     _PLAN_BLOCKED_TOOLS = frozenset({
-        "write_file", "edit_file", "bash", "execute_code",
+        "write_file", "edit_file", "bash", "execute_code", "process",
         "browser_click", "browser_type",
     })
+
+    def _process_tool_output(self, tool_call_id: str, result) -> Any:
+        """Apply ToolOutputStore size management to tool results."""
+        from ..tools.output_store import ToolOutputStore
+
+        if self._output_store is None:
+            self._output_store = ToolOutputStore()
+        processed = self._output_store.process(
+            tool_call_id, result.content, result.metadata.get("tool_name", "unknown") if result.metadata else "unknown",
+            session_id=self.session_id,
+        )
+        if processed.saved_to_disk:
+            return type(result)(content=processed.content, is_error=result.is_error, metadata=result.metadata)
+        return result
 
     def _get_available_tools(self) -> set[str]:
         """Return set of tool names available in current mode."""
@@ -178,23 +194,48 @@ class SessionRunner:
             if len(messages) > 10:
                 from .compress import CompactionState, compact_conversation, count_tokens
 
-                if count_tokens(tuple(messages)) > _threshold:
-                    if not hasattr(self, "_compaction_state"):
-                        self._compaction_state = CompactionState()
+                if not hasattr(self, "_compaction_state"):
+                    self._compaction_state = CompactionState()
+
+                # Anti-jitter: skip if 2 consecutive ineffective compressions
+                if self._compaction_state.should_skip_compression():
+                    pass  # skip auto-compression
+                elif count_tokens(tuple(messages)) > _threshold:
+                    before_tokens = count_tokens(tuple(messages))
                     try:
+                        # Use auxiliary model for compression if configured
+                        compress_llm = self.llm
+                        if self.llm.config.auxiliary_model:
+                            compress_llm = self.llm.for_model(self.llm.config.auxiliary_model)
                         messages_list = await compact_conversation(
                             tuple(messages),
-                            self.llm,
+                            compress_llm,
                             context_window=_threshold + 8000,
                             state=self._compaction_state,
                             budget=self.budget,
                         )
                         messages[:] = list(messages_list)
+                        # Track compression effectiveness (anti-jitter)
+                        after_tokens = count_tokens(tuple(messages))
+                        if before_tokens > 0 and (before_tokens - after_tokens) / before_tokens < 0.1:
+                            self._compaction_state.record_ineffective()
+                        else:
+                            self._compaction_state.record_success()
                     except BudgetExceeded as e:
                         yield TurnFailed(f"budget exhausted during compaction: {e}")
                         return
 
+            # Reset anti-jitter counter on new user input
+            if hasattr(self, "_compaction_state"):
+                self._compaction_state.reset_for_new_turn()
+
             system = self.system_prompt
+
+            # Use model-specific template if available
+            from ..llm.templates import get_model_template
+
+            if system == "You are a helpful assistant." or not system:
+                system = get_model_template(self.llm.config.model)
 
             # Build context injection block for user message
             context_parts: list[str] = []
@@ -217,6 +258,19 @@ class SessionRunner:
                 if contribution:
                     context_parts.append(contribution)
 
+            # Scan context for injection patterns before injecting
+            if context_parts:
+                from ..security.patterns import scan_for_injection
+
+                scanned_parts = []
+                for part in context_parts:
+                    result = scan_for_injection(part)
+                    if result.blocked:
+                        scanned_parts.append(result.sanitized)
+                    else:
+                        scanned_parts.append(part)
+                context_parts = scanned_parts
+
             # Inject context into the last user message (frozen system prompt)
             send_messages = messages
             if context_parts:
@@ -233,8 +287,9 @@ class SessionRunner:
             for hook in self.pre_llm_hooks:
                 system = await hook(system)
 
-            if self._cached_system is None or system != self._cached_system:
+            if self._cached_system is None or system != self._cached_system or self.mode != self._cached_mode:
                 self._cached_system = system
+                self._cached_mode = self.mode
                 all_tools = self.registry.to_openai_tools() or None
                 # Filter tools by mode (plan mode blocks write tools)
                 if all_tools and self.mode == "plan":
@@ -264,9 +319,57 @@ class SessionRunner:
                 elif isinstance(event, StreamDone):
                     usage = event.usage
                     if event.stop_reason == "length":
-                        # Overflow: no content streamed and not already retried → compact + retry
-                        if not content_parts and not self._overflow_retried:
-                            self._overflow_retried = True
+                        # Overflow: no content AND no tool calls → compact + retry
+                        if not content_parts and not tool_calls:
+                            if not self._overflow_retried:
+                                self._overflow_retried = True
+                                if usage:
+                                    try:
+                                        self.budget.consume(
+                                            tokens=usage.input_tokens + usage.output_tokens,
+                                            cost_usd=usage.cost_usd,
+                                        )
+                                    except BudgetExceeded as e:
+                                        yield TurnFailed(f"budget exhausted: {e}")
+                                        return
+                                # Force compaction to reduce context
+                                from .compress import CompactionState, compact_conversation
+
+                                if not hasattr(self, "_compaction_state"):
+                                    self._compaction_state = CompactionState()
+                                try:
+                                    messages_list = await compact_conversation(
+                                        tuple(messages),
+                                        self.llm,
+                                        context_window=_threshold + 8000,
+                                        state=self._compaction_state,
+                                        force=True,
+                                        budget=self.budget,
+                                    )
+                                    messages[:] = list(messages_list)
+                                except BudgetExceeded as e:
+                                    yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
+                                    return
+                                except Exception:
+                                    yield TurnFailed("overflow recovery: compaction failed")
+                                    return
+                                _overflow_retrying = True
+                                break  # break out of async for → while loop retries
+                            else:
+                                # Already retried — fail
+                                yield TurnFailed("LLM overflow recovery failed after retry")
+                                return
+
+                        # Content was streamed (truncation) — fail
+                        if content_parts:
+                            assistant_msg = Message.assistant(
+                                text="".join(content_parts),
+                                tool_calls=tuple(tool_calls),
+                                usage=usage,
+                            )
+                            messages.append(assistant_msg)
+                            if self.store is not None:
+                                await self.store.append(self.session_id, assistant_msg)
                             if usage:
                                 try:
                                     self.budget.consume(
@@ -276,53 +379,9 @@ class SessionRunner:
                                 except BudgetExceeded as e:
                                     yield TurnFailed(f"budget exhausted: {e}")
                                     return
-                            # Force compaction to reduce context
-                            from .compress import CompactionState, compact_conversation
-
-                            if not hasattr(self, "_compaction_state"):
-                                self._compaction_state = CompactionState()
-                            try:
-                                messages_list = await compact_conversation(
-                                    tuple(messages),
-                                    self.llm,
-                                    context_window=_threshold + 8000,
-                                    state=self._compaction_state,
-                                    force=True,
-                                    budget=self.budget,
-                                )
-                                messages[:] = list(messages_list)
-                            except BudgetExceeded as e:
-                                yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
-                                return
-                            except Exception:
-                                yield TurnFailed("overflow recovery: compaction failed")
-                                return
-                            _overflow_retrying = True
-                            break  # break out of async for → while loop retries
-
-                        # Either content was streamed (truncation) or already retried → fail
-                        assistant_msg = Message.assistant(
-                            text="".join(content_parts),
-                            tool_calls=tuple(tool_calls),
-                            usage=usage,
-                        )
-                        messages.append(assistant_msg)
-                        if self.store is not None:
-                            await self.store.append(self.session_id, assistant_msg)
-                        if usage:
-                            try:
-                                self.budget.consume(
-                                    tokens=usage.input_tokens + usage.output_tokens,
-                                    cost_usd=usage.cost_usd,
-                                )
-                            except BudgetExceeded as e:
-                                yield TurnFailed(f"budget exhausted: {e}")
-                                return
-                        if content_parts:
                             yield TurnFailed("LLM response truncated (max tokens)")
-                        else:
-                            yield TurnFailed("LLM overflow recovery failed after retry")
-                        return
+                            return
+                        # Tool calls present, no content — proceed normally (not an overflow)
 
             if _overflow_retrying:
                 continue  # retry the turn after overflow recovery
@@ -372,7 +431,9 @@ class SessionRunner:
                 yield pe
 
             for tc, result in zip(tool_calls, results):
-                msg = Message.tool_result(result, tool_call_id=tc.id)
+                # Apply output size management if result is large
+                processed = self._process_tool_output(tc.id, result)
+                msg = Message.tool_result(processed, tool_call_id=tc.id)
                 messages.append(msg)
                 if self.store is not None:
                     await self.store.append(self.session_id, msg)
@@ -396,6 +457,8 @@ class SessionRunner:
                             content=messages[i].content + f"\n\n[steer] {steer_text}",
                             tool_call_id=messages[i].tool_call_id,
                         )
+                        if self.store is not None:
+                            await self.store.append(self.session_id, messages[i])
                         break
 
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")

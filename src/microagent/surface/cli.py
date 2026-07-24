@@ -294,7 +294,8 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
 
             elif isinstance(event, ToolProgressDelta):
                 # Live streaming tool output
-                for line in event.text.splitlines():
+                text = event.text or ""
+                for line in text.splitlines():
                     print(f" {GRAY}┊{RST} {line}", flush=True)
 
             elif isinstance(event, TurnComplete):
@@ -455,13 +456,18 @@ async def _cmd_model(state: dict, arg: str) -> None:
     if not arg:
         print(f"Current model: {config.llm.model}")
         return
+    from ..llm.client import OpenAIChatClient
+
     config.llm = type(config.llm)(
         base_url=config.llm.base_url,
         api_key=config.llm.api_key,
         model=arg,
         reasoning_effort=config.llm.reasoning_effort,
         service_tier=config.llm.service_tier,
+        auxiliary_model=config.llm.auxiliary_model,
     )
+    # Update the running agent's LLM client
+    state["agent"].runner.llm = OpenAIChatClient(config.llm)
     print(f"{GREEN}✓{RST} Model switched to: {arg}")
 
 
@@ -541,6 +547,27 @@ async def _cmd_help(state: dict, arg: str) -> None:
         print(f"  {GRAY}/{name}{RST}  {desc}")
 
 
+async def _cmd_plan(state: dict, arg: str) -> None:
+    state["agent"].runner.mode = "plan"
+    print(f"{GREEN}✓{RST} Switched to plan mode (read-only tools)")
+
+
+async def _cmd_build(state: dict, arg: str) -> None:
+    state["agent"].runner.mode = "build"
+    print(f"{GREEN}✓{RST} Switched to build mode (all tools enabled)")
+
+
+async def _cmd_switch(state: dict, arg: str) -> None:
+    current = state["agent"].runner.mode
+    if current == "normal":
+        state["agent"].runner.mode = "plan"
+    elif current == "plan":
+        state["agent"].runner.mode = "build"
+    else:
+        state["agent"].runner.mode = "normal"
+    print(f"{GREEN}✓{RST} Switched: {current} → {state['agent'].runner.mode}")
+
+
 # Command registry: name → (handler, description)
 _COMMANDS: dict[str, tuple] = {
     "new": (_cmd_new, "Start a new session"),
@@ -552,5 +579,8 @@ _COMMANDS: dict[str, tuple] = {
     "skill": (_cmd_skill, "Manage skills (/skill list|load|unload)"),
     "clear": (_cmd_clear, "Clear the screen"),
     "cost": (_cmd_cost, "Show token usage and cost for this session"),
+    "plan": (_cmd_plan, "Switch to plan mode (read-only tools)"),
+    "build": (_cmd_build, "Switch to build mode (all tools)"),
+    "switch": (_cmd_switch, "Cycle through normal/plan/build modes"),
     "help": (_cmd_help, "Show available commands"),
 }
