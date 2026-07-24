@@ -16,9 +16,12 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class MCPServerSpec:
     """A single MCP server definition."""
+
     name: str
     description: str
-    command: tuple[str, ...]  # argv for subprocess (e.g. ("npx", "-y", "@modelcontextprotocol/server-filesystem"))
+    command: tuple[
+        str, ...
+    ]  # argv for subprocess (e.g. ("npx", "-y", "@modelcontextprotocol/server-filesystem"))
 
 
 # ---------------------------------------------------------------------------

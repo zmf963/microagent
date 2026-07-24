@@ -1,8 +1,7 @@
 """Tests for SubagentSpec and SubagentManager."""
 
-import pytest
-from microagent.subagent.manager import SubagentSpec, SubagentManager
-from microagent import SessionRunner, ToolRegistry, Budget
+from microagent import Budget, SessionRunner, ToolRegistry
+from microagent.subagent.manager import SubagentManager, SubagentSpec
 from tests.unit.fake_llm import FakeLLMClient, text_response
 
 
@@ -51,7 +50,8 @@ class TestSubagentManager:
         # Parent runner with full toolset — subagent should not see these
         parent_llm = FakeLLMClient([text_response("ignored")])
         parent_runner = SessionRunner(
-            llm=parent_llm, registry=ToolRegistry(),
+            llm=parent_llm,
+            registry=ToolRegistry(),
         )
 
         result = await manager.spawn("echo", "hello", parent_runner)
@@ -59,10 +59,10 @@ class TestSubagentManager:
 
     async def test_spawn_with_tool_filtering(self):
         """Subagent cannot use tools not in its allowlist."""
+
+
         from microagent.core.tool import tool
         from microagent.core.types import ToolResult
-        from typing import Annotated
-        from pydantic import Field
 
         @tool("secret_tool", description="secret")
         async def secret_tool() -> ToolResult:
@@ -99,9 +99,11 @@ class TestSubagentManager:
         )
         manager = SubagentManager(specs=(spec,))
 
-        parent_llm = FakeLLMClient([
-            text_response("subagent completed"),
-        ])
+        parent_llm = FakeLLMClient(
+            [
+                text_response("subagent completed"),
+            ]
+        )
         parent_runner = SessionRunner(
             llm=parent_llm,
             registry=ToolRegistry(),

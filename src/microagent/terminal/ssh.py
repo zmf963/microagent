@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+
 from .backend import TerminalResult
 
 
@@ -28,7 +29,9 @@ class SSHTerminal:
         self._port = port
 
     async def run(
-        self, command: str, *,
+        self,
+        command: str,
+        *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
@@ -37,7 +40,8 @@ class SSHTerminal:
             import paramiko
         except ImportError:
             return TerminalResult.ok(
-                "", "paramiko not installed. Install with: pip install microagent[ssh]",
+                "",
+                "paramiko not installed. Install with: pip install microagent[ssh]",
                 exit_code=127,
             )
 
@@ -52,7 +56,11 @@ class SSHTerminal:
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
-            connect_kw = dict(hostname=self._host, port=self._port, timeout=timeout or 10)
+            connect_kw = {
+                "hostname": self._host,
+                "port": self._port,
+                "timeout": timeout or 10,
+            }
             if self._key_file:
                 connect_kw["key_filename"] = self._key_file
             elif self._password:
@@ -74,7 +82,9 @@ class SSHTerminal:
             )
         except Exception as e:
             return TerminalResult.ok(
-                "", f"SSH failed: {e}", exit_code=-1,
+                "",
+                f"SSH failed: {e}",
+                exit_code=-1,
             )
         finally:
             await asyncio.to_thread(client.close)

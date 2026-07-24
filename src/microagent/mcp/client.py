@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.tool import Tool, ToolRegistry
+from ..core.tool import ToolRegistry
 from ..core.types import ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -34,15 +34,11 @@ class MCPToolAdapter:
     parameters: dict[str, Any]
     _manager: Any  # _MCPConnectionManager — held by reference
 
-    async def execute(
-        self, call: ToolCall, ctx: Any = None
-    ) -> ToolResult:
+    async def execute(self, call: ToolCall, ctx: Any = None) -> ToolResult:
         try:
             session = self._manager._session
             if session is None:
-                return ToolResult.error(
-                    f"MCP tool {self.name}: session not connected"
-                )
+                return ToolResult.error(f"MCP tool {self.name}: session not connected")
             result = await session.call_tool(self.name, call.arguments)
             content = str(result.content) if result.content else "(empty)"
             return ToolResult.ok(content)
@@ -71,9 +67,7 @@ class _MCPConnectionManager:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
         except ImportError:
-            raise ImportError(
-                "mcp package required. Install with: pip install mcp"
-            )
+            raise ImportError("mcp package required. Install with: pip install mcp")
 
         async def _run_connection():
             params = StdioServerParameters(command=self._command)

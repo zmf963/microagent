@@ -15,7 +15,9 @@ from ...core.types import ToolResult
 async def read_file(
     path: Annotated[str, Field(description="Path to the file to read")],
     offset: Annotated[int, Field(description="Line number to start from (1-indexed)", ge=1)] = 1,
-    limit: Annotated[int, Field(description="Maximum number of lines to read", ge=1, le=2000)] = 500,
+    limit: Annotated[
+        int, Field(description="Maximum number of lines to read", ge=1, le=2000)
+    ] = 500,
 ) -> ToolResult:
     p = Path(path).expanduser().resolve()
 
@@ -26,6 +28,7 @@ async def read_file(
 
     # Binary detection
     import asyncio
+
     raw = await asyncio.to_thread(p.read_bytes)
     if b"\x00" in raw:
         return ToolResult.error(f"binary file, cannot display: {path}")

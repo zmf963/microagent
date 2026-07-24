@@ -11,35 +11,38 @@ Design (from design doc §4):
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatch
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from .types import ToolCall
-
 
 # ---------------------------------------------------------------------------
 # Decision enum
 # ---------------------------------------------------------------------------
 
+
 class Decision(Enum):
     """Tool permission decision: ALLOW, DENY, or ASK (interactive prompt)."""
+
     ALLOW = "allow"
     DENY = "deny"
-    ASK = "ask"   # interactive prompt (requires a Surface)
+    ASK = "ask"  # interactive prompt (requires a Surface)
 
 
 # ---------------------------------------------------------------------------
 # Rule + PermissionDecision
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class Rule:
     """Permission rule: fnmatch tool name + argument constraints → decision."""
 
-    tool_pattern: str            # fnmatch: "fs.*", "bash", "write_*"
-    arguments_constraint: dict   # {"path": "/workspace/**"}, supports fnmatch
+    tool_pattern: str  # fnmatch: "fs.*", "bash", "write_*"
+    arguments_constraint: dict  # {"path": "/workspace/**"}, supports fnmatch
     decision: Decision
     reason: str = ""
 
@@ -64,6 +67,7 @@ AskCallback = Callable[[ToolCall, Rule], Awaitable[Decision]]
 # PermissionEngine
 # ---------------------------------------------------------------------------
 
+
 class PermissionEngine:
     """Rule-based permission evaluator."""
 
@@ -75,9 +79,7 @@ class PermissionEngine:
         self.rules = rules
         self.ask_callback = ask_callback
 
-    async def evaluate(
-        self, call: ToolCall, ctx: Any = None
-    ) -> PermissionDecision:
+    async def evaluate(self, call: ToolCall, ctx: Any = None) -> PermissionDecision:
         """Evaluate a tool call against the rules."""
         for rule in self.rules:
             if not fnmatch(call.name, rule.tool_pattern):
@@ -117,6 +119,7 @@ class PermissionEngine:
 # ScriptRule — external script-based permissions
 # ---------------------------------------------------------------------------
 
+
 class ScriptRule:
     """Permission rule that delegates to an external Python script.
 
@@ -142,32 +145,38 @@ class ScriptRule:
 
     async def evaluate(self, call: ToolCall) -> PermissionDecision:
         """Run the external script and return its decision."""
-        import asyncio, json as _json
+        import asyncio
+        import contextlib
+        import json as _json
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                "python3", self.script,
+                "python3",
+                self.script,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            payload = _json.dumps({
-                "name": call.name,
-                "arguments": call.arguments,
-                "id": call.id,
-            })
+            payload = _json.dumps(
+                {
+                    "name": call.name,
+                    "arguments": call.arguments,
+                    "id": call.id,
+                }
+            )
             try:
                 stdout, _stderr = await asyncio.wait_for(
                     proc.communicate(payload.encode()),
                     timeout=self.timeout,
                 )
-            except asyncio.TimeoutError:
-                try:
+            except TimeoutError:
+                with contextlib.suppress(Exception):
                     proc.kill()
-                except Exception:
-                    pass
                 return PermissionDecision(Decision.DENY, "external script timeout")
             if proc.returncode != 0:
-                return PermissionDecision(Decision.DENY, f"external script exit code {proc.returncode}")
+                return PermissionDecision(
+                    Decision.DENY, f"external script exit code {proc.returncode}"
+                )
             result = stdout.decode().strip().lower()
             if result == "allow":
                 return PermissionDecision(Decision.ALLOW, "external script: allow")
@@ -175,6 +184,7 @@ class ScriptRule:
                 return PermissionDecision(Decision.DENY, f"external script: {result}")
         except Exception as e:
             return PermissionDecision(Decision.DENY, f"external script error: {e}")
+
 
 DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("read_file", {}, Decision.ALLOW),

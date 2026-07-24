@@ -9,9 +9,8 @@ from __future__ import annotations
 import json
 import re
 
+from ..core.store import SQLiteStore, Store
 from ..core.types import Message
-from ..core.store import Store, SQLiteStore
-
 
 # ---------------------------------------------------------------------------
 # FTS5 schema helpers
@@ -56,8 +55,8 @@ def ensure_fts5(store: SQLiteStore) -> None:
 # ---------------------------------------------------------------------------
 
 # CJK character ranges
-_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3040-\u30ff]+')
-_LATIN_WORD_RE = re.compile(r'[a-zA-Z0-9_]+')
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]+")
+_LATIN_WORD_RE = re.compile(r"[a-zA-Z0-9_]+")
 
 
 def _build_fts_query(query: str) -> str:
@@ -71,14 +70,14 @@ def _build_fts_query(query: str) -> str:
     pos = 0
     for m in _CJK_RE.finditer(query):
         # Add Latin text before this CJK segment
-        latin = query[pos:m.start()].strip()
+        latin = query[pos : m.start()].strip()
         if latin:
             words = _LATIN_WORD_RE.findall(latin)
             parts.extend(f'"{w}"' for w in words)
 
         # Split CJK into bigrams
         cjk = m.group()
-        bigrams = [cjk[i:i+2] for i in range(len(cjk) - 1)]
+        bigrams = [cjk[i : i + 2] for i in range(len(cjk) - 1)]
         if bigrams:
             parts.extend(bigrams)
         else:
@@ -92,7 +91,7 @@ def _build_fts_query(query: str) -> str:
         words = _LATIN_WORD_RE.findall(remaining)
         parts.extend(f'"{w}"' for w in words)
 
-    return ' OR '.join(parts) if parts else f'"{query}"'
+    return " OR ".join(parts) if parts else f'"{query}"'
 
 
 async def search_sessions(
@@ -124,14 +123,16 @@ async def search_sessions(
             return ()
 
         results = []
-        for data, rank in rows:
+        for data, _rank in rows:
             try:
                 obj = json.loads(data)
-                results.append(Message(
-                    role=obj.get("role", "user"),
-                    content=obj.get("content", ""),
-                ))
-            except (json.JSONDecodeError, KeyError):
+                results.append(
+                    Message(
+                        role=obj.get("role", "user"),
+                        content=obj.get("content", ""),
+                    )
+                )
+            except json.JSONDecodeError, KeyError:
                 continue
         return tuple(results)
 
@@ -140,9 +141,7 @@ async def search_sessions(
         safe_query = query.replace("%", "\\%").replace("_", "\\_")
         pattern = f"%{safe_query}%"
         rows = store._conn.execute(
-            "SELECT data FROM messages "
-            "WHERE data LIKE ? ESCAPE '\\' "
-            "ORDER BY id DESC LIMIT ?",
+            "SELECT data FROM messages WHERE data LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
             (pattern, k),
         ).fetchall()
 
@@ -150,10 +149,12 @@ async def search_sessions(
         for (data,) in rows:
             try:
                 obj = json.loads(data)
-                results.append(Message(
-                    role=obj.get("role", "user"),
-                    content=obj.get("content", ""),
-                ))
-            except (json.JSONDecodeError, KeyError):
+                results.append(
+                    Message(
+                        role=obj.get("role", "user"),
+                        content=obj.get("content", ""),
+                    )
+                )
+            except json.JSONDecodeError, KeyError:
                 continue
         return tuple(results)

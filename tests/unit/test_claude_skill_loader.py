@@ -1,8 +1,8 @@
 """Tests for ClaudeSkillLoader — discovers and parses SKILL.md files."""
 
-import pytest
 from pathlib import Path
-from microagent.skill.loader import ClaudeSkillLoader, Skill
+
+from microagent.skill.loader import ClaudeSkillLoader
 
 
 def _make_skill_dir(base: Path, name: str, frontmatter: str, body: str = "body"):
@@ -16,10 +16,11 @@ def _make_skill_dir(base: Path, name: str, frontmatter: str, body: str = "body")
 
 class TestClaudeSkillLoader:
     async def test_load_single_skill(self, tmp_path):
-        _make_skill_dir(tmp_path, "test-skill", (
-            "name: test-skill\n"
-            "description: A test skill for verification.\n"
-        ))
+        _make_skill_dir(
+            tmp_path,
+            "test-skill",
+            ("name: test-skill\ndescription: A test skill for verification.\n"),
+        )
         loader = ClaudeSkillLoader(search_paths=(tmp_path,))
         skills = await loader.load()
         assert len(skills) == 1
@@ -36,11 +37,11 @@ class TestClaudeSkillLoader:
         assert len(skills) == 2
 
     async def test_triggers_from_frontmatter(self, tmp_path):
-        _make_skill_dir(tmp_path, "triggered", (
-            "name: triggered\n"
-            "description: With triggers.\n"
-            "triggers: [search, deep, find]\n"
-        ))
+        _make_skill_dir(
+            tmp_path,
+            "triggered",
+            ("name: triggered\ndescription: With triggers.\ntriggers: [search, deep, find]\n"),
+        )
         loader = ClaudeSkillLoader(search_paths=(tmp_path,))
         skills = await loader.load()
         assert skills[0].triggers == ("search", "deep", "find")
@@ -54,31 +55,29 @@ class TestClaudeSkillLoader:
         assert len(skills) == 1
 
     async def test_match_by_keyword(self, tmp_path):
-        _make_skill_dir(tmp_path, "search-skill", (
-            "name: search-skill\n"
-            "description: Searches things.\n"
-            "triggers: [search, lookup]\n"
-        ))
+        _make_skill_dir(
+            tmp_path,
+            "search-skill",
+            ("name: search-skill\ndescription: Searches things.\ntriggers: [search, lookup]\n"),
+        )
         loader = ClaudeSkillLoader(search_paths=(tmp_path,))
         matches = await loader.match("I want to search for something")
         assert len(matches) == 1
         assert matches[0].match_reason == "keyword:search"
 
     async def test_match_by_fuzzy(self, tmp_path):
-        _make_skill_dir(tmp_path, "fuzzy-skill", (
-            "name: fuzzy-skill\n"
-            "description: Fuzzy matching test.\n"
-        ))
+        _make_skill_dir(
+            tmp_path, "fuzzy-skill", ("name: fuzzy-skill\ndescription: Fuzzy matching test.\n")
+        )
         loader = ClaudeSkillLoader(search_paths=(tmp_path,))
         matches = await loader.match("fuzzy matching test")
         assert len(matches) >= 1
         assert matches[0].match_score > 0.4
 
     async def test_no_match(self, tmp_path):
-        _make_skill_dir(tmp_path, "unrelated", (
-            "name: unrelated\n"
-            "description: Completely unrelated skill.\n"
-        ))
+        _make_skill_dir(
+            tmp_path, "unrelated", ("name: unrelated\ndescription: Completely unrelated skill.\n")
+        )
         loader = ClaudeSkillLoader(search_paths=(tmp_path,))
         matches = await loader.match("xyzzy nonsense gibberish")
         assert len(matches) == 0

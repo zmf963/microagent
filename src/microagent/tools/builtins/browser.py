@@ -9,7 +9,6 @@ Requires: pip install playwright && playwright install chromium
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from typing import Annotated
 
@@ -17,7 +16,6 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
-
 
 # Module-level browser state — guarded by _lock for concurrent safety
 _page: object = None
@@ -108,7 +106,9 @@ async def browser_snapshot() -> ToolResult:
 
 @tool("browser_click", description="Click an element by its CSS selector or text content.")
 async def browser_click(
-    ref: Annotated[str, Field(description="CSS selector (e.g. '#id', '.class', 'button') or link text")],
+    ref: Annotated[
+        str, Field(description="CSS selector (e.g. '#id', '.class', 'button') or link text")
+    ],
 ) -> ToolResult:
     if _page is None:
         return ToolResult.error("no page open — call browser_navigate first")

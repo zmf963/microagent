@@ -2,9 +2,9 @@
 
 import json
 import time
-import pytest
 from pathlib import Path
-from microagent.skill.curator import Curator, SkillUsage
+
+from microagent.skill.curator import Curator
 
 
 class TestCurator:
@@ -28,10 +28,23 @@ class TestCurator:
 
         usage_file = tmp_path / ".usage.json"
         now = time.time()
-        self._make_usage(usage_file, {
-            "agent-skill": {"use_count": 0, "last_activity": now - 100 * 86400, "state": "active", "pinned": False},
-            "user-skill": {"use_count": 0, "last_activity": now - 100 * 86400, "state": "active", "pinned": False},
-        })
+        self._make_usage(
+            usage_file,
+            {
+                "agent-skill": {
+                    "use_count": 0,
+                    "last_activity": now - 100 * 86400,
+                    "state": "active",
+                    "pinned": False,
+                },
+                "user-skill": {
+                    "use_count": 0,
+                    "last_activity": now - 100 * 86400,
+                    "state": "active",
+                    "pinned": False,
+                },
+            },
+        )
 
         curator = Curator(stale_after_days=30.0, archive_after_days=90.0)
         await curator.run_once(skills_dir, usage_file)
@@ -49,9 +62,17 @@ class TestCurator:
 
         usage_file = tmp_path / ".usage.json"
         now = time.time()
-        self._make_usage(usage_file, {
-            "old-skill": {"use_count": 0, "last_activity": now - 100 * 86400, "state": "stale", "pinned": False},
-        })
+        self._make_usage(
+            usage_file,
+            {
+                "old-skill": {
+                    "use_count": 0,
+                    "last_activity": now - 100 * 86400,
+                    "state": "stale",
+                    "pinned": False,
+                },
+            },
+        )
 
         curator = Curator(stale_after_days=30.0, archive_after_days=90.0)
         await curator.run_once(skills_dir, usage_file)
@@ -69,9 +90,17 @@ class TestCurator:
 
         usage_file = tmp_path / ".usage.json"
         now = time.time()
-        self._make_usage(usage_file, {
-            "pinned-skill": {"use_count": 10, "last_activity": now - 200 * 86400, "state": "active", "pinned": True},
-        })
+        self._make_usage(
+            usage_file,
+            {
+                "pinned-skill": {
+                    "use_count": 10,
+                    "last_activity": now - 200 * 86400,
+                    "state": "active",
+                    "pinned": True,
+                },
+            },
+        )
 
         curator = Curator(stale_after_days=30.0, archive_after_days=90.0)
         await curator.run_once(skills_dir, usage_file)

@@ -20,10 +20,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from .types import Message, ToolCall, Usage
 
-
 # ---------------------------------------------------------------------------
 # Store Protocol
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class Store(Protocol):
@@ -40,13 +40,13 @@ class Store(Protocol):
 # Message serialization
 # ---------------------------------------------------------------------------
 
+
 def _serialize_message(msg: Message) -> str:
     """Serialize a Message to JSON for SQLite storage."""
     d: dict[str, Any] = {"role": msg.role, "content": msg.content}
     if msg.tool_calls:
         d["tool_calls"] = [
-            {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-            for tc in msg.tool_calls
+            {"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in msg.tool_calls
         ]
     if msg.tool_call_id:
         d["tool_call_id"] = msg.tool_call_id
@@ -88,6 +88,7 @@ def _deserialize_message(data: str) -> Message:
 # SQLiteStore
 # ---------------------------------------------------------------------------
 
+
 class SQLiteStore:
     """SQLite WAL-mode store for session persistence."""
 
@@ -113,9 +114,7 @@ class SQLiteStore:
                 UNIQUE(session_id, seq)
             )
         """)
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id, seq)"
-        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id, seq)")
 
     async def append(self, session_id: str, msg: Message) -> None:
         # Get next seq for this session
@@ -182,6 +181,7 @@ class SQLiteStore:
 # ---------------------------------------------------------------------------
 # InMemoryStore — for testing without disk I/O
 # ---------------------------------------------------------------------------
+
 
 class InMemoryStore:
     """Simple dict-based store for unit tests."""

@@ -9,13 +9,19 @@ purely by ``base_url`` — no code-level provider adapters.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
-from typing import Any, AsyncIterator, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .pool import CredentialPool
 
 from ..core.types import (
-    Message, ToolCall, TextDelta, ToolCallDelta, Usage,
+    Message,
+    TextDelta,
+    ToolCallDelta,
+    Usage,
 )
-
 
 # ---------------------------------------------------------------------------
 # Model pricing (USD per 1M tokens)
@@ -83,6 +89,7 @@ def get_context_window(model: str) -> int:
 # LLMConfig
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class LLMConfig:
     """OpenAI-compatible LLM configuration.
@@ -94,6 +101,7 @@ class LLMConfig:
         reasoning_effort: For o-series models — 'low', 'medium', 'high'
         service_tier: OpenAI service tier — 'auto', 'default', 'flex'
     """
+
     base_url: str
     api_key: str
     model: str
@@ -113,6 +121,7 @@ class LLMConfig:
 # Stream events produced by LLMClient.stream()
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class StreamDone:
     """Stream finished — final usage + stop reason."""
@@ -128,6 +137,7 @@ StreamEvent = TextDelta | ToolCallDelta | Usage | StreamDone
 # LLMClient Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class LLMClient(Protocol):
     """LLM provider interface — stream responses + model forking."""
@@ -135,7 +145,8 @@ class LLMClient(Protocol):
     config: LLMConfig
 
     async def stream(
-        self, *,
+        self,
+        *,
         system: str,
         messages: tuple[Message, ...],
         tools: list[dict[str, Any]] | None = None,
@@ -148,6 +159,7 @@ class LLMClient(Protocol):
 # OpenAIChatClient — the only built-in implementation
 # ---------------------------------------------------------------------------
 
+
 class OpenAIChatClient:
     """Uses the openai SDK v2 AsyncOpenAI client.
 
@@ -157,7 +169,7 @@ class OpenAIChatClient:
     Supports CredentialPool for API key rotation on failure.
     """
 
-    def __init__(self, config: LLMConfig, pool: "CredentialPool | None" = None):
+    def __init__(self, config: LLMConfig, pool: CredentialPool | None = None):
         self.config = config
         self.pool = pool
         self._client = None
@@ -165,6 +177,7 @@ class OpenAIChatClient:
     def _get_client(self):
         if self._client is None:
             from openai import AsyncOpenAI
+
             self._client = AsyncOpenAI(
                 base_url=self.config.base_url,
                 api_key=self.config.api_key,
@@ -184,7 +197,8 @@ class OpenAIChatClient:
         return OpenAIChatClient(replace(self.config, model=model), pool=self.pool)
 
     async def stream(
-        self, *,
+        self,
+        *,
         system: str,
         messages: tuple[Message, ...],
         tools: list[dict[str, Any]] | None = None,
@@ -210,7 +224,7 @@ class OpenAIChatClient:
 
         try:
             stream = await client.chat.completions.create(**kwargs)
-        except Exception as e:
+        except Exception:
             # Auth / rate-limit error — try credential rotation
             if self._on_auth_error():
                 client = self._get_client()

@@ -16,7 +16,6 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 from ...subagent.manager import SubagentManager
 
-
 # Singleton — built at import time with default subagent specs
 _manager = SubagentManager()
 
@@ -29,7 +28,9 @@ _current_runner: contextvars.ContextVar = contextvars.ContextVar(
 @tool("task", description="Spawn a subagent to handle a task. Returns only the final result.")
 async def task(
     goal: Annotated[str, Field(description="The task for the subagent to complete")],
-    subagent_type: Annotated[str, Field(description="Subagent type: explore | general")] = "general",
+    subagent_type: Annotated[
+        str, Field(description="Subagent type: explore | general")
+    ] = "general",
     context: Annotated[str, Field(description="Background info for the subagent")] = "",
 ) -> ToolResult:
     prompt = goal
@@ -41,7 +42,8 @@ async def task(
         if runner is None:
             return ToolResult.error("task tool: runner not available (not in a session)")
         result = await _manager.spawn(
-            subagent_type, prompt,
+            subagent_type,
+            prompt,
             runner,
         )
         return ToolResult.ok(result)
@@ -49,5 +51,3 @@ async def task(
         return ToolResult.error(f"unknown subagent type: {subagent_type}")
     except Exception as e:
         return ToolResult.error(f"subagent failed: {e!r}")
-
-

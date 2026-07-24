@@ -1,23 +1,27 @@
 """Tests for token estimation edge cases."""
 
 import pytest
-from microagent.session.compress import estimate_tokens, count_tokens
+
 from microagent.core.types import Message
+from microagent.session.compress import count_tokens, estimate_tokens
 
 
 class TestTokenEstimation:
-    @pytest.mark.parametrize("text,expected_range", [
-        ("", (0, 0)),
-        ("a", (1, 1)),
-        ("hello", (1, 3)),
-        ("hello world", (2, 5)),
-        ("你好", (1, 3)),
-        ("你好世界", (1, 5)),
-        ("hello 你好 world", (2, 8)),
-        ("\n\n\n", (0, 3)),
-        (" " * 10, (1, 5)),
-        ("x" * 1000, (200, 300)),
-    ])
+    @pytest.mark.parametrize(
+        "text,expected_range",
+        [
+            ("", (0, 0)),
+            ("a", (1, 1)),
+            ("hello", (1, 3)),
+            ("hello world", (2, 5)),
+            ("你好", (1, 3)),
+            ("你好世界", (1, 5)),
+            ("hello 你好 world", (2, 8)),
+            ("\n\n\n", (0, 3)),
+            (" " * 10, (1, 5)),
+            ("x" * 1000, (200, 300)),
+        ],
+    )
     def test_estimate_range(self, text, expected_range):
         """Token count falls within a reasonable range."""
         lo, hi = expected_range

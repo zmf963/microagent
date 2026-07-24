@@ -1,6 +1,5 @@
 """Tests for EventBus — the pub/sub observer mechanism."""
 
-import pytest
 from microagent.core.event import EventBus
 
 

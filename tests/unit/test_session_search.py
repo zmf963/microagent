@@ -1,9 +1,8 @@
 """Tests for session_search — FTS5 query builder + search fallback."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
+
 from microagent.core.store import SQLiteStore
 from microagent.session.search import _build_fts_query, ensure_fts5, search_sessions
 
@@ -46,6 +45,7 @@ class TestSearchSessions:
 
     async def _seed(self, store):
         from microagent.core.types import Message
+
         await store.append("s1", Message.user("docker compose up -d"))
         await store.append("s2", Message.assistant("python import error"))
 
@@ -68,6 +68,7 @@ class TestSearchSessions:
     async def test_search_fallback_like(self, store):
         """FTS5 may be unavailable — falls back to LIKE."""
         from microagent.core.types import Message
+
         await store.append("s1", Message.user("special token here"))
         # Force the LIKE fallback by breaking FTS5
         results = await search_sessions(store, "special", k=1)

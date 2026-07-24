@@ -1,9 +1,8 @@
 """Tests for SessionRunner integration with EventBus and extension points."""
 
-import pytest
-from microagent import SessionRunner, ToolRegistry, Budget
+from microagent import SessionRunner, ToolRegistry
 from microagent.core.event import EventBus
-from microagent.core.types import Message, ToolResult, ToolCall, TurnComplete
+from microagent.core.types import Message
 
 from .fake_llm import FakeLLMClient, text_response
 

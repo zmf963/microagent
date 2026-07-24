@@ -1,7 +1,6 @@
 """Tests for session resume functionality."""
 
-import pytest
-from microagent import SessionRunner, ToolRegistry, InMemoryStore, SQLiteStore, Message
+from microagent import InMemoryStore, Message, SessionRunner, SQLiteStore, ToolRegistry
 from microagent.core.types import TurnComplete
 from tests.unit.fake_llm import FakeLLMClient, text_response
 

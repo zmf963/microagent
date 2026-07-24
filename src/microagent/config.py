@@ -20,6 +20,7 @@ from .llm.client import LLMConfig
 @dataclass(frozen=True, slots=True)
 class Config:
     """Resolved configuration for an Agent."""
+
     llm: LLMConfig
     system_prompt: str = "You are a helpful assistant."
 
@@ -44,16 +45,10 @@ class Config:
             or "https://api.openai.com/v1"
         )
         api_key = (
-            cli_api_key
-            or os.environ.get("MICROAGENT_API_KEY")
-            or file_data.get("api_key")
-            or ""
+            cli_api_key or os.environ.get("MICROAGENT_API_KEY") or file_data.get("api_key") or ""
         )
         model = (
-            cli_model
-            or os.environ.get("MICROAGENT_MODEL")
-            or file_data.get("model")
-            or "gpt-4o"
+            cli_model or os.environ.get("MICROAGENT_MODEL") or file_data.get("model") or "gpt-4o"
         )
         system_prompt = (
             cli_system_prompt
@@ -79,6 +74,7 @@ class Config:
 
         try:
             import yaml
+
             data = yaml.safe_load(path.read_text()) or {}
         except Exception:
             return {}

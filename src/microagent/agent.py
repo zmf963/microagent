@@ -10,10 +10,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from .core.types import Message, TurnComplete, TurnFailed
-from .core.tool import ToolRegistry, _default_builtins
-from .llm.client import LLMConfig, OpenAIChatClient
 from .core.store import Store
+from .core.tool import ToolRegistry, _default_builtins
+from .core.types import Message, TurnComplete, TurnFailed
+from .llm.client import LLMConfig, OpenAIChatClient
 from .session.budget import Budget
 from .session.runner import SessionRunner
 
@@ -24,7 +24,7 @@ class Agent:
 
     runner: SessionRunner
     registry: ToolRegistry
-    cron: "object | None" = None  # CronScheduler, populated when enable_cron=True
+    cron: object | None = None  # CronScheduler, populated when enable_cron=True
 
     @classmethod
     def from_config(
@@ -34,7 +34,7 @@ class Agent:
         system_prompt: str = "You are a helpful assistant.",
         max_iterations: int = 25,
         tools: list[Any] | None = None,
-        store: "Store | None" = None,
+        store: Store | None = None,
         session_id: str = "default",
         enable_cron: bool = False,
     ) -> Agent:
@@ -58,6 +58,7 @@ class Agent:
 
         if enable_cron:
             from .cron.scheduler import CronScheduler
+
             agent.cron = CronScheduler(agent=agent, store=store)
 
         return agent

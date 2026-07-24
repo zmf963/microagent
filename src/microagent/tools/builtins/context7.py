@@ -14,16 +14,25 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("context7", description="Fetch up-to-date library/framework docs from Context7. Use for APIs, config, or patterns you don't know.")
+@tool(
+    "context7",
+    description="Fetch up-to-date library/framework docs from Context7. Use for APIs, config, or patterns you don't know.",
+)
 async def context7(
-    query: Annotated[str, Field(description="What library/API/pattern to look up (e.g. 'pydantic v2 model validator')")],
-    library: Annotated[str, Field(description="Library name (e.g. 'fastapi', 'pydantic', 'react')")] = "",
+    query: Annotated[
+        str,
+        Field(
+            description="What library/API/pattern to look up (e.g. 'pydantic v2 model validator')"
+        ),
+    ],
+    library: Annotated[
+        str, Field(description="Library name (e.g. 'fastapi', 'pydantic', 'react')")
+    ] = "",
     max_results: Annotated[int, Field(description="Maximum results", ge=1, le=10)] = 5,
 ) -> ToolResult:
     if not query.strip():
         return ToolResult.error("query is required")
 
-    import asyncio
     import httpx
 
     try:

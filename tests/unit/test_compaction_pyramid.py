@@ -1,14 +1,11 @@
 """Tests for the 4-layer compression pyramid."""
 
-import pytest
 from microagent.core.types import Message, ToolResult
 from microagent.session.compress import (
+    CompactionState,
+    build_compaction_summary_prompt,
     micro_compact,
     snip_tool_results,
-    build_compaction_summary_prompt,
-    CompactionState,
-    estimate_tokens,
-    count_tokens,
 )
 
 
@@ -28,17 +25,13 @@ class TestMicroCompact:
 
     def test_preserves_user_messages(self):
         """User messages are never truncated."""
-        messages = (
-            Message.user("hello " + "x" * 600),
-        )
+        messages = (Message.user("hello " + "x" * 600),)
         result = micro_compact(messages)
         assert len(result[0].content) > 600  # unchanged
 
     def test_preserves_errors(self):
         """Error tool results are never truncated (is_error=True)."""
-        messages = (
-            Message.tool_result(ToolResult.error("e" * 600), tool_call_id="c1"),
-        )
+        messages = (Message.tool_result(ToolResult.error("e" * 600), tool_call_id="c1"),)
         result = micro_compact(messages)
         # Error results preserved (not truncated)
         assert "truncated" not in result[0].content.lower()
@@ -54,9 +47,7 @@ class TestMicroCompact:
 
     def test_short_tool_results_preserved(self):
         """Short tool results (<500 chars) are preserved."""
-        messages = (
-            Message.tool_result(ToolResult.ok("short"), tool_call_id="c1"),
-        )
+        messages = (Message.tool_result(ToolResult.ok("short"), tool_call_id="c1"),)
         result = micro_compact(messages)
         assert result[0].content == "short"
 

@@ -26,7 +26,7 @@ async def bash(
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
             partial = ""

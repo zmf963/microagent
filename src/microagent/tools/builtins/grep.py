@@ -13,7 +13,9 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("grep", description="Search file contents by regex. Returns matching lines with line numbers.")
+@tool(
+    "grep", description="Search file contents by regex. Returns matching lines with line numbers."
+)
 async def grep(
     pattern: Annotated[str, Field(description="Regular expression pattern to search for")],
     path: Annotated[str, Field(description="Directory or file to search in")] = ".",

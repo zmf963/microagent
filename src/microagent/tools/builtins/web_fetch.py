@@ -16,8 +16,8 @@ async def web_fetch(
     timeout: Annotated[int, Field(description="Timeout in seconds", ge=1, le=60)] = 30,
 ) -> ToolResult:
     # Validate URL first — SSRF protection
-    from urllib.parse import urlparse
     import ipaddress
+    from urllib.parse import urlparse
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):

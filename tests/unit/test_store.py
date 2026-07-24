@@ -1,7 +1,6 @@
 """Tests for SQLiteStore and InMemoryStore."""
 
-import pytest
-from microagent.core.store import SQLiteStore, InMemoryStore
+from microagent.core.store import InMemoryStore, SQLiteStore
 from microagent.core.types import Message, ToolCall, ToolResult, Usage
 
 

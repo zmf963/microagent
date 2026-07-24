@@ -19,16 +19,22 @@ import unicodedata
 from ..agent import Agent
 from ..config import Config
 from ..core.types import (
-    Message, TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta, TurnComplete, TurnFailed,
+    Message,
+    TextDelta,
+    ToolCallDelta,
+    ToolProgressDelta,
+    ToolResultDelta,
+    TurnComplete,
+    TurnFailed,
 )
 
 # ANSI
-GRAY   = "\033[90m"
-CYAN   = "\033[96m"
-GREEN  = "\033[92m"
-RED    = "\033[91m"
-BOLD   = "\033[1m"
-RST    = "\033[0m"
+GRAY = "\033[90m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+BOLD = "\033[1m"
+RST = "\033[0m"
 
 
 def _term_width() -> int:
@@ -42,18 +48,18 @@ def _display_width(s: str) -> int:
     Emoji and other wide chars also count as 2.
     """
     # Strip ANSI
-    clean = re.sub(r'\033\[[0-9;]*m', '', s)
+    clean = re.sub(r"\033\[[0-9;]*m", "", s)
     w = 0
     for ch in clean:
         ea = unicodedata.east_asian_width(ch)
-        if ea in ('W', 'F'):  # Wide / Fullwidth
+        if ea in ("W", "F"):  # Wide / Fullwidth
             w += 2
         else:
             w += 1
     return w
 
 
-def _pad_to(s: str, target_width: int, fill: str = '─') -> str:
+def _pad_to(s: str, target_width: int, fill: str = "─") -> str:
     """Pad s with fill chars to reach target display width."""
     current = _display_width(s)
     return s + fill * max(0, target_width - current)
@@ -61,11 +67,15 @@ def _pad_to(s: str, target_width: int, fill: str = '─') -> str:
 
 def main():
     import asyncio
+
     asyncio.run(_main())
 
 
 async def _main():
-    cli_base_url = None; cli_api_key = None; cli_model = None; cli_system_prompt = None
+    cli_base_url = None
+    cli_api_key = None
+    cli_model = None
+    cli_system_prompt = None
     positional: list[str] = []
 
     args = sys.argv[1:]
@@ -73,34 +83,46 @@ async def _main():
     while i < len(args):
         arg = args[i]
         if arg == "--base-url" and i + 1 < len(args):
-            cli_base_url = args[i + 1]; i += 2
+            cli_base_url = args[i + 1]
+            i += 2
         elif arg == "--api-key" and i + 1 < len(args):
-            cli_api_key = args[i + 1]; i += 2
+            cli_api_key = args[i + 1]
+            i += 2
         elif arg == "--model" and i + 1 < len(args):
-            cli_model = args[i + 1]; i += 2
+            cli_model = args[i + 1]
+            i += 2
         elif arg == "--system-prompt" and i + 1 < len(args):
-            cli_system_prompt = args[i + 1]; i += 2
+            cli_system_prompt = args[i + 1]
+            i += 2
         elif arg in ("--help", "-h"):
-            _print_help(); return
+            _print_help()
+            return
         else:
-            positional.append(arg); i += 1
+            positional.append(arg)
+            i += 1
 
     config = Config.from_file(
-        cli_base_url=cli_base_url, cli_api_key=cli_api_key,
-        cli_model=cli_model, cli_system_prompt=cli_system_prompt,
+        cli_base_url=cli_base_url,
+        cli_api_key=cli_api_key,
+        cli_model=cli_model,
+        cli_system_prompt=cli_system_prompt,
     )
     if not config.llm.api_key:
         print("Warning: API key not set.", file=sys.stderr)
 
     # Default: persist sessions to ~/.microagent/sessions.db
     from pathlib import Path as _Path
+
     from ..core.store import SQLiteStore
+
     db_path = _Path.home() / ".microagent" / "sessions.db"
     store = SQLiteStore(db_path)
     session_id = f"cli-{int(time.time())}"
     agent = Agent.from_config(
-        config.llm, system_prompt=config.system_prompt,
-        store=store, session_id=session_id,
+        config.llm,
+        system_prompt=config.system_prompt,
+        store=store,
+        session_id=session_id,
     )
 
     if positional:
@@ -117,8 +139,9 @@ async def _main():
     while True:
         try:
             raw = input(f"{BOLD}>>>{RST} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nBye!"); break
+        except EOFError, KeyboardInterrupt:
+            print("\nBye!")
+            break
         if not raw:
             continue
 
@@ -131,8 +154,10 @@ async def _main():
                 session_id = f"cli-{int(time.time())}"
                 messages = []
                 agent = Agent.from_config(
-                    config.llm, system_prompt=config.system_prompt,
-                    store=store, session_id=session_id,
+                    config.llm,
+                    system_prompt=config.system_prompt,
+                    store=store,
+                    session_id=session_id,
                 )
                 print(f"{GREEN}✓{RST} New session: {session_id}")
 
@@ -154,8 +179,10 @@ async def _main():
                         messages = list(history)
                         session_id = target
                         agent = Agent.from_config(
-                            config.llm, system_prompt=config.system_prompt,
-                            store=store, session_id=session_id,
+                            config.llm,
+                            system_prompt=config.system_prompt,
+                            store=store,
+                            session_id=session_id,
                         )
                         print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
                     else:
@@ -167,26 +194,37 @@ async def _main():
                 if len(messages) < 5:
                     print(f"{GRAY}(not enough messages to compact){RST}")
                 else:
-                    from ..session.compress import count_tokens, compact_conversation, CompactionState
+                    from ..session.compress import (
+                        CompactionState,
+                        compact_conversation,
+                        count_tokens,
+                    )
+
                     before_count = len(messages)
                     before_tokens = count_tokens(tuple(messages))
-                    state = getattr(agent.runner, '_compaction_state', CompactionState())
+                    state = getattr(agent.runner, "_compaction_state", CompactionState())
                     compressed = await compact_conversation(
-                        tuple(messages), agent.runner.llm,
+                        tuple(messages),
+                        agent.runner.llm,
                         context_window=before_tokens + 8000,
-                        state=state, force=True,
+                        state=state,
+                        force=True,
                     )
                     messages[:] = list(compressed)
                     # Rebuild agent so runner state is consistent with compacted messages
                     agent = Agent.from_config(
-                        config.llm, system_prompt=config.system_prompt,
-                        store=store, session_id=session_id,
+                        config.llm,
+                        system_prompt=config.system_prompt,
+                        store=store,
+                        session_id=session_id,
                     )
                     agent.runner._compaction_state = state
                     after_count = len(messages)
                     after_tokens = count_tokens(tuple(messages))
-                    print(f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
-                          f"{before_tokens} → {after_tokens} tokens")
+                    print(
+                        f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
+                        f"{before_tokens} → {after_tokens} tokens"
+                    )
 
             elif cmd == "help":
                 print(f"{GRAY}/new{RST}       Start a new session")
@@ -228,7 +266,7 @@ async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
             """Dynamic box width: terminal - 2 margin, capped at 100."""
             return min(_term_width() - 2, 100)
 
-        def _box_line(prefix: str, suffix: str, fill: str = '─') -> str:
+        def _box_line(prefix: str, suffix: str, fill: str = "─") -> str:
             """Build a box border line: prefix + fill + suffix, width-matched."""
             W = _box_width()
             body = _pad_to(prefix, W - _display_width(suffix), fill)
@@ -295,7 +333,7 @@ async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
 
 def _short_args(args: dict) -> str:
     parts = []
-    for k, v in args.items():
+    for _k, v in args.items():
         s = str(v)
         if " " in s:
             s = f'"{s}"'

@@ -29,21 +29,27 @@ from pathlib import Path
 
 from ..core.types import Message
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-AUTOCOMPACT_BUFFER = 8_000       # p99 summary output length
+AUTOCOMPACT_BUFFER = 8_000  # p99 summary output length
 MAX_CONSECUTIVE_FAILURES = 3
 COOLDOWN_SECONDS = 300
 
 # Tool types whose results can be re-obtained
-REOBTAINABLE_TOOLS = frozenset({
-    "read_file", "grep", "glob", "bash",
-    "web_fetch", "web_search", "context7",
-    "browser_snapshot",
-})
+REOBTAINABLE_TOOLS = frozenset(
+    {
+        "read_file",
+        "grep",
+        "glob",
+        "bash",
+        "web_fetch",
+        "web_search",
+        "context7",
+        "browser_snapshot",
+    }
+)
 
 TRUNCATION_THRESHOLD = 500  # chars — truncate results longer than this
 TRUNCATION_PLACEHOLDER = "[Tool result truncated: {n} chars — re-run the tool to get full output]"
@@ -53,12 +59,13 @@ TRUNCATION_PLACEHOLDER = "[Tool result truncated: {n} chars — re-run the tool 
 # Token estimation
 # ---------------------------------------------------------------------------
 
+
 def estimate_tokens(text: str) -> int:
     """Estimate token count: latin ~4 chars/token, CJK ~2 chars/token."""
     if not text:
         return 0
     chars = len(text)
-    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff')
+    cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff" or "\u3040" <= c <= "\u30ff")
     return ((chars - cjk) // 4) + (cjk // 2) + 1
 
 
@@ -70,6 +77,7 @@ def count_tokens(messages: tuple[Message, ...]) -> int:
 # ---------------------------------------------------------------------------
 # Layer 1: Micro-Compact — truncate re-obtainable tool results
 # ---------------------------------------------------------------------------
+
 
 def micro_compact(
     messages: tuple[Message, ...],
@@ -102,6 +110,7 @@ def micro_compact(
 # ---------------------------------------------------------------------------
 # Layer 2: Snip — remove oldest tool_result messages
 # ---------------------------------------------------------------------------
+
 
 def snip_tool_results(
     messages: tuple[Message, ...],
@@ -184,9 +193,7 @@ def build_compaction_summary_prompt(
 ) -> str:
     """Build the structured summary prompt with all user messages enumerated."""
     user_messages = "\n".join(
-        f"- [{m.role}] {m.content[:200]}"
-        for m in messages
-        if m.role == "user"
+        f"- [{m.role}] {m.content[:200]}" for m in messages if m.role == "user"
     )
     if not user_messages:
         user_messages = "(no user messages)"
@@ -244,9 +251,7 @@ def build_incremental_summary_prompt(
 ) -> str:
     """Build prompt for updating an existing summary with new messages."""
     user_messages = "\n".join(
-        f"- [{m.role}] {m.content[:200]}"
-        for m in messages
-        if m.role == "user"
+        f"- [{m.role}] {m.content[:200]}" for m in messages if m.role == "user"
     )
     if not user_messages:
         user_messages = "(no new user messages)"
@@ -260,6 +265,7 @@ def build_incremental_summary_prompt(
 # ---------------------------------------------------------------------------
 # Layer 4: CompactionState — circuit breaker + recursion guard
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class CompactionState:
@@ -291,6 +297,7 @@ class CompactionState:
 # Main compression pipeline
 # ---------------------------------------------------------------------------
 
+
 async def compact_conversation(
     messages: tuple[Message, ...],
     llm: object,
@@ -321,6 +328,7 @@ async def compact_conversation(
                 current = await _llm_summarize(messages, llm, previous_summary=prev)
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
+
                 current = recover_file_attachments(messages, current)
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
@@ -355,6 +363,7 @@ async def compact_conversation(
                 current = await _llm_summarize(current, llm, previous_summary=prev)
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
+
                 current = recover_file_attachments(messages, current)
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
@@ -400,6 +409,7 @@ async def _llm_summarize(
         tools=None,
     ):
         from ..core.types import TextDelta
+
         if isinstance(event, TextDelta) and event.kind == "content":
             summary_text += event.text
 
@@ -408,7 +418,8 @@ async def _llm_summarize(
 
     # Strip <analysis> block, keep <summary>
     import re
-    summary_only = re.sub(r'<analysis>.*?</analysis>', '', summary_text, flags=re.DOTALL).strip()
+
+    summary_only = re.sub(r"<analysis>.*?</analysis>", "", summary_text, flags=re.DOTALL).strip()
 
     # Build compressed result: summary message
     preamble = (
@@ -460,7 +471,7 @@ def layer5_full_dump(
     for fpath in list(files)[:LAYER5_MAX_FILES]:
         try:
             content = Path(fpath).expanduser().read_text()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
         if len(content) > LAYER5_MAX_CHARS:
             content = content[:LAYER5_MAX_CHARS] + "\n...[truncated]..."
@@ -470,7 +481,5 @@ def layer5_full_dump(
     if not parts:
         return messages
 
-    dump_msg = Message.user(
-        f"[L5 Full Dump — {count} critical file(s)]\n\n" + "\n\n".join(parts)
-    )
+    dump_msg = Message.user(f"[L5 Full Dump — {count} critical file(s)]\n\n" + "\n\n".join(parts))
     return messages + (dump_msg,)

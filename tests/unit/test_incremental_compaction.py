@@ -1,16 +1,9 @@
 """Tests for incremental compaction — append to existing summary."""
 
-import pytest
-from microagent.core.types import Message, ToolResult
+from microagent.core.types import Message
 from microagent.session.compress import (
-    micro_compact,
-    snip_tool_results,
-    build_compaction_summary_prompt,
-    build_incremental_summary_prompt,
     CompactionState,
-    compact_conversation,
-    estimate_tokens,
-    count_tokens,
+    build_incremental_summary_prompt,
 )
 
 
@@ -31,7 +24,11 @@ class TestIncrementalSummary:
         """Incremental prompt specifies it's updating, not creating from scratch."""
         messages = (Message.user("msg1"),)
         prompt = build_incremental_summary_prompt(messages, previous_summary="old")
-        assert "update" in prompt.lower() or "existing" in prompt.lower() or "previous" in prompt.lower()
+        assert (
+            "update" in prompt.lower()
+            or "existing" in prompt.lower()
+            or "previous" in prompt.lower()
+        )
 
     def test_state_stores_previous_summary(self):
         """CompactionState stores and retrieves previous summary."""

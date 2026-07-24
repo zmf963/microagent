@@ -15,7 +15,9 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("web_search", description="Search the web via DuckDuckGo. Returns titles, URLs, and snippets.")
+@tool(
+    "web_search", description="Search the web via DuckDuckGo. Returns titles, URLs, and snippets."
+)
 async def web_search(
     query: Annotated[str, Field(description="Search query")],
     max_results: Annotated[int, Field(description="Maximum results", ge=1, le=20)] = 5,
@@ -23,7 +25,6 @@ async def web_search(
     if not query.strip():
         return ToolResult.error("query is required")
 
-    import asyncio
     import httpx
 
     try:
@@ -66,12 +67,12 @@ def _parse_ddg_lite(html: str, max_results: int) -> list[dict]:
         if i >= max_results:
             break
         # Clean HTML from title
-        title = re.sub(r'<[^>]+>', '', title).strip()
+        title = re.sub(r"<[^>]+>", "", title).strip()
         if not title or not url:
             continue
         snippet = ""
         if i < len(snippets):
-            snippet = re.sub(r'<[^>]+>', '', snippets[i]).strip()
+            snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
         results.append({"title": title, "url": url, "snippet": snippet})
 
     return results

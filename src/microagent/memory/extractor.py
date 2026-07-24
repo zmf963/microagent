@@ -64,9 +64,7 @@ class MemoryExtractor:
         self._pending: set[asyncio.Task] = set()
         self._client = None
 
-    async def extract_async(
-        self, history: tuple[dict[str, str], ...]
-    ) -> None:
+    async def extract_async(self, history: tuple[dict[str, str], ...]) -> None:
         """Run extraction in the background (fire-and-forget).
 
         Task reference is tracked to prevent GC of in-flight extractions.
@@ -75,9 +73,7 @@ class MemoryExtractor:
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
-    async def _extract(
-        self, history: tuple[dict[str, str], ...]
-    ) -> None:
+    async def _extract(self, history: tuple[dict[str, str], ...]) -> None:
         """Internal: call LLM, parse response, write memories."""
         if AsyncOpenAI is None:
             return  # openai not installed
@@ -131,11 +127,13 @@ class MemoryExtractor:
             category = line[idx + 1 : -1].strip().lower()
 
             if category in ("fact", "preference", "task"):
-                memories.append(Memory(
-                    id=f"extract-{uuid.uuid4().hex[:12]}",
-                    content=content,
-                    category=category,
-                    created_at=time.time(),
-                ))
+                memories.append(
+                    Memory(
+                        id=f"extract-{uuid.uuid4().hex[:12]}",
+                        content=content,
+                        category=category,
+                        created_at=time.time(),
+                    )
+                )
 
         return tuple(memories)

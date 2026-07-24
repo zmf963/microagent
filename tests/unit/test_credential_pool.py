@@ -1,6 +1,7 @@
 """Tests for CredentialPool — API key rotation on failure."""
 
 import pytest
+
 from microagent.llm.client import LLMConfig
 from microagent.llm.pool import CredentialPool
 

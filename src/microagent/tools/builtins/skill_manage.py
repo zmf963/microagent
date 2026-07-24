@@ -39,7 +39,7 @@ def _is_agent_created(name: str) -> bool:
     try:
         data = json.loads(pf.read_text())
         return data.get("created_by") == "agent"
-    except (json.JSONDecodeError, KeyError):
+    except json.JSONDecodeError, KeyError:
         return False
 
 
@@ -59,6 +59,7 @@ async def skill_manage(
         skill_path = skills_dir / name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         import asyncio
+
         await asyncio.to_thread(skill_path.write_text, content)
         _record_provenance(name, created_by="agent")
         return ToolResult.ok(f"Skill '{name}' created at {skill_path}")
@@ -70,6 +71,7 @@ async def skill_manage(
         if not skill_path.exists():
             return ToolResult.error(f"Skill '{name}' not found")
         import asyncio
+
         text = await asyncio.to_thread(skill_path.read_text)
         if old_string not in text:
             return ToolResult.error(f"old_string not found in skill '{name}'")
@@ -86,7 +88,9 @@ async def skill_manage(
                 agent_skills.append(d.name)
         if not agent_skills:
             return ToolResult.ok("(no agent-created skills)")
-        return ToolResult.ok("agent-created skills:\n" + "\n".join(f"  - {s}" for s in agent_skills))
+        return ToolResult.ok(
+            "agent-created skills:\n" + "\n".join(f"  - {s}" for s in agent_skills)
+        )
 
     elif action == "delete":
         if not name:

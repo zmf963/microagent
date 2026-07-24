@@ -1,8 +1,9 @@
 """Tests for SessionRunner — the core conversation loop."""
 
 import pytest
-from microagent.core.types import Message, ToolCall, ToolResult, TurnComplete, TurnFailed
+
 from microagent.core.tool import ToolRegistry
+from microagent.core.types import Message, ToolResult, TurnComplete, TurnFailed
 from microagent.session.budget import Budget, BudgetExceeded
 from microagent.session.runner import SessionRunner
 
@@ -79,6 +80,7 @@ class TestSessionRunnerSimple:
         deltas = []
         async for event in runner.run_turn(messages):
             from microagent.core.types import TextDelta
+
             if isinstance(event, TextDelta):
                 deltas.append(event.text)
         assert "".join(deltas) == "Hello, world!"
@@ -90,20 +92,24 @@ class TestSessionRunnerWithTools:
     async def test_tool_call_then_text(self):
         # LLM first calls read_file, then returns text
         from typing import Annotated
+
         from pydantic import Field
+
         from microagent.core.tool import tool
 
         @tool("echo_tool", description="Echoes back the input")
         async def echo_tool(
-            msg: Annotated[str, Field(description="Message to echo")]
+            msg: Annotated[str, Field(description="Message to echo")],
         ) -> ToolResult:
             return ToolResult.ok(f"echoed: {msg}")
 
         registry = ToolRegistry([echo_tool])
-        llm = FakeLLMClient([
-            tool_response([("call_1", "echo_tool", {"msg": "hello"})]),
-            text_response("I echoed your message."),
-        ])
+        llm = FakeLLMClient(
+            [
+                tool_response([("call_1", "echo_tool", {"msg": "hello"})]),
+                text_response("I echoed your message."),
+            ]
+        )
 
         runner = SessionRunner(llm=llm, registry=registry)
         messages = [Message.user("echo hello")]
@@ -125,9 +131,11 @@ class TestSessionRunnerWithTools:
 class TestSessionRunnerBudgetExhaustion:
     async def test_budget_exhaustion(self):
         # LLM always returns tool calls → never finishes → budget exhausted
-        llm = FakeLLMClient([
-            tool_response([("c", "unknown_tool", {})]),
-        ])
+        llm = FakeLLMClient(
+            [
+                tool_response([("c", "unknown_tool", {})]),
+            ]
+        )
         runner = SessionRunner(
             llm=llm,
             registry=ToolRegistry(),

@@ -1,8 +1,9 @@
 """Tests for Memory dataclass, MemoryProvider Protocol, and SQLiteMemoryProvider."""
 
 import pytest
-from microagent.memory.provider import Memory, MemoryProvider, SQLiteMemoryProvider
+
 from microagent.core.types import Message
+from microagent.memory.provider import Memory, MemoryProvider, SQLiteMemoryProvider
 
 
 class TestMemory:
@@ -57,8 +58,10 @@ class TestSQLiteMemoryProvider:
     async def test_write_and_recall(self, tmp_path):
         store = SQLiteMemoryProvider(tmp_path / "mem.db")
         m = Memory(
-            id="m1", content="User likes Python.",
-            category="preference", created_at=1000.0,
+            id="m1",
+            content="User likes Python.",
+            category="preference",
+            created_at=1000.0,
             session_id="s1",
         )
         await store.batch_write((m,))
@@ -73,11 +76,13 @@ class TestSQLiteMemoryProvider:
 
     async def test_recall_ordered_by_relevance(self, tmp_path):
         store = SQLiteMemoryProvider(tmp_path / "mem3.db")
-        await store.batch_write((
-            Memory(id="m1", content="Python is great.", category="fact", created_at=1.0),
-            Memory(id="m2", content="Java is verbose.", category="fact", created_at=2.0),
-            Memory(id="m3", content="Python async is tricky.", category="fact", created_at=3.0),
-        ))
+        await store.batch_write(
+            (
+                Memory(id="m1", content="Python is great.", category="fact", created_at=1.0),
+                Memory(id="m2", content="Java is verbose.", category="fact", created_at=2.0),
+                Memory(id="m3", content="Python async is tricky.", category="fact", created_at=3.0),
+            )
+        )
         results = await store.recall("Python", k=5)
         assert len(results) == 2
         # "Python is great" should rank higher than "Python async is tricky"
@@ -85,9 +90,9 @@ class TestSQLiteMemoryProvider:
 
     async def test_delete(self, tmp_path):
         store = SQLiteMemoryProvider(tmp_path / "mem4.db")
-        await store.batch_write((
-            Memory(id="m1", content="delete me.", category="fact", created_at=1.0),
-        ))
+        await store.batch_write(
+            (Memory(id="m1", content="delete me.", category="fact", created_at=1.0),)
+        )
         await store.delete("m1")
         results = await store.recall("delete", k=5)
         assert len(results) == 0

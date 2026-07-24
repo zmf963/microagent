@@ -14,8 +14,10 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("execute_code", description="Run Python code in a subprocess. "
-       "Returns stdout. Timeout in seconds.")
+@tool(
+    "execute_code",
+    description="Run Python code in a subprocess. Returns stdout. Timeout in seconds.",
+)
 async def execute_code(
     code: Annotated[str, Field(description="Python code to execute")],
     timeout: Annotated[
@@ -30,28 +32,27 @@ async def execute_code(
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", code,
+            sys.executable,
+            "-c",
+            code,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
         try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
-        except asyncio.TimeoutError:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            return ToolResult.error(
-                f"execution timed out after {timeout}s"
-            )
+            return ToolResult.error(f"execution timed out after {timeout}s")
 
         output = stdout.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
             return ToolResult.error(
                 f"exit code {proc.returncode}\n{output}"
-                if output else f"exit code {proc.returncode}"
+                if output
+                else f"exit code {proc.returncode}"
             )
 
         return ToolResult.ok(output if output else "(no output)")

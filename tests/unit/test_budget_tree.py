@@ -1,6 +1,7 @@
 """Tests for tree-shaped Budget (spawn, cancel_event, descendants tracking)."""
 
 import pytest
+
 from microagent.session.budget import Budget, BudgetExceeded
 
 

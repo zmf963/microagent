@@ -1,6 +1,7 @@
 """Tests for Budget — tree-shaped resource tracking."""
 
 import pytest
+
 from microagent.session.budget import Budget, BudgetExceeded
 
 

@@ -1,9 +1,10 @@
 """Tests for @tool decorator, schema inference, and ToolRegistry."""
 
 from typing import Annotated
+
 from pydantic import Field
 
-from microagent.core.tool import tool, ToolRegistry, _registry
+from microagent.core.tool import ToolRegistry, tool
 from microagent.core.types import ToolCall, ToolResult
 
 
@@ -78,9 +79,7 @@ class TestToolRegistry:
 
     async def test_execute(self):
         @tool("exec_test", description="exec")
-        async def exec_test(
-            msg: Annotated[str, Field(description="message")]
-        ) -> ToolResult:
+        async def exec_test(msg: Annotated[str, Field(description="message")]) -> ToolResult:
             return ToolResult.ok(f"echo: {msg}")
 
         registry = ToolRegistry([exec_test])

@@ -1,7 +1,6 @@
 """Tests for Skill data model and SkillLoader Protocol."""
 
-import pytest
-from microagent.skill.loader import Skill, LoadedSkill, SkillLoader, CompositeSkillLoader
+from microagent.skill.loader import LoadedSkill, Skill
 
 
 class TestSkill:
@@ -23,9 +22,13 @@ class TestSkill:
 class TestLoadedSkill:
     def test_create_loaded(self):
         s = Skill(
-            name="test", namespace="claude",
-            description="test skill", body="body",
-            triggers=(), source="", mtime=0.0,
+            name="test",
+            namespace="claude",
+            description="test skill",
+            body="body",
+            triggers=(),
+            source="",
+            mtime=0.0,
         )
         ls = LoadedSkill(skill=s, match_reason="keyword:search", match_score=1.0)
         assert ls.skill is s

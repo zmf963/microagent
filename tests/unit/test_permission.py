@@ -1,8 +1,10 @@
 """Tests for permission engine."""
 
-import pytest
 from microagent.core.permission import (
-    PermissionEngine, Rule, Decision, DEFAULT_RULES,
+    DEFAULT_RULES,
+    Decision,
+    PermissionEngine,
+    Rule,
 )
 from microagent.core.types import ToolCall
 
@@ -15,9 +17,7 @@ class TestRule:
 
 class TestPermissionEngine:
     async def test_allow(self):
-        engine = PermissionEngine(rules=(
-            Rule("read_file", {}, Decision.ALLOW),
-        ))
+        engine = PermissionEngine(rules=(Rule("read_file", {}, Decision.ALLOW),))
         call = ToolCall(id="c1", name="read_file", arguments={})
         decision = await engine.evaluate(call)
         assert decision.decision is Decision.ALLOW
@@ -30,27 +30,25 @@ class TestPermissionEngine:
         assert "no rule" in decision.reason
 
     async def test_deny_explicit(self):
-        engine = PermissionEngine(rules=(
-            Rule("bash", {}, Decision.DENY, reason="blocked"),
-        ))
+        engine = PermissionEngine(rules=(Rule("bash", {}, Decision.DENY, reason="blocked"),))
         call = ToolCall(id="c1", name="bash", arguments={})
         decision = await engine.evaluate(call)
         assert decision.is_deny
         assert "blocked" in decision.reason
 
     async def test_fnmatch_wildcard(self):
-        engine = PermissionEngine(rules=(
-            Rule("write_*", {}, Decision.ALLOW),
-        ))
+        engine = PermissionEngine(rules=(Rule("write_*", {}, Decision.ALLOW),))
         call = ToolCall(id="c1", name="write_file", arguments={})
         decision = await engine.evaluate(call)
         assert decision.decision is Decision.ALLOW
 
     async def test_first_match_wins(self):
-        engine = PermissionEngine(rules=(
-            Rule("bash", {"command": "ls *"}, Decision.ALLOW),
-            Rule("bash", {}, Decision.DENY),
-        ))
+        engine = PermissionEngine(
+            rules=(
+                Rule("bash", {"command": "ls *"}, Decision.ALLOW),
+                Rule("bash", {}, Decision.DENY),
+            )
+        )
         call_ok = ToolCall(id="c1", name="bash", arguments={"command": "ls -la"})
         decision_ok = await engine.evaluate(call_ok)
         assert decision_ok.decision is Decision.ALLOW
@@ -76,17 +74,28 @@ class TestPermissionEngine:
         assert results == ["bash"]
 
     def test_resolve(self):
-        engine = PermissionEngine(rules=(
-            Rule("read_file", {}, Decision.ALLOW),
-        ))
+        engine = PermissionEngine(rules=(Rule("read_file", {}, Decision.ALLOW),))
         assert engine.resolve("read_file") is Decision.ALLOW
         assert engine.resolve("bash") is Decision.DENY
 
     def test_default_rules_cover_all_builtins(self):
         engine = PermissionEngine(DEFAULT_RULES)
         builtins = [
-            "read_file", "bash", "write_file", "edit_file",
-            "grep", "glob", "web_fetch", "web_search", "execute_code", "vision_analyze", "todo", "plan", "exit", "task", "skill_manage",
+            "read_file",
+            "bash",
+            "write_file",
+            "edit_file",
+            "grep",
+            "glob",
+            "web_fetch",
+            "web_search",
+            "execute_code",
+            "vision_analyze",
+            "todo",
+            "plan",
+            "exit",
+            "task",
+            "skill_manage",
         ]
         for name in builtins:
             assert engine.resolve(name) is Decision.ALLOW, f"{name} not allowed"

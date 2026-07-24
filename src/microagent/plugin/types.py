@@ -10,7 +10,7 @@ All three are PEP 544 Protocols — no base class inheritance required.
 
 from __future__ import annotations
 
-from typing import Protocol, Any
+from typing import Any, Protocol
 
 from ..core.types import ToolCall, ToolResult
 

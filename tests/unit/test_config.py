@@ -1,9 +1,6 @@
 """Tests for Config — multi-source config resolution."""
 
-import os
-import pytest
-from pathlib import Path
-from microagent.config import Config, LLMConfig
+from microagent.config import Config
 
 
 class TestConfig:

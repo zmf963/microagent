@@ -30,16 +30,22 @@ async def _encode_image(image_url: str) -> str | None:
         return None
 
     import asyncio
+
     raw = await asyncio.to_thread(p.read_bytes)
     mime = mimetypes.guess_type(str(p))[0] or "image/png"
     b64 = base64.b64encode(raw).decode()
     return f"data:{mime};base64,{b64}"
 
 
-@tool("vision_analyze", description="Analyze an image. Supports local files, URLs, and data: URLs. Requires a vision-capable model.")
+@tool(
+    "vision_analyze",
+    description="Analyze an image. Supports local files, URLs, and data: URLs. Requires a vision-capable model.",
+)
 async def vision_analyze(
     image_url: Annotated[str, Field(description="Image path, URL, or data: URL")],
-    question: Annotated[str, Field(description="What to ask about the image")] = "Describe this image.",
+    question: Annotated[
+        str, Field(description="What to ask about the image")
+    ] = "Describe this image.",
 ) -> ToolResult:
     if not image_url.strip():
         return ToolResult.error("image_url is required")

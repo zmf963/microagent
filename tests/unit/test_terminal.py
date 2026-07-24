@@ -1,11 +1,13 @@
 """Tests for TerminalBackend Protocol and implementations."""
 
 import os
+
 import pytest
-from pathlib import Path
+
 from microagent.terminal.backend import (
-    TerminalResult, TerminalBackend,
-    LocalTerminal, DockerTerminal,
+    DockerTerminal,
+    LocalTerminal,
+    TerminalResult,
 )
 
 

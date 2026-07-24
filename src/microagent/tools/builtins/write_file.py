@@ -11,12 +11,15 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("write_file", description="Write content to a file. Creates parent dirs. Overwrites if exists.")
+@tool(
+    "write_file", description="Write content to a file. Creates parent dirs. Overwrites if exists."
+)
 async def write_file(
     path: Annotated[str, Field(description="Path to the file to write")],
     content: Annotated[str, Field(description="The content to write")],
 ) -> ToolResult:
     import asyncio
+
     p = Path(path).expanduser().resolve()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

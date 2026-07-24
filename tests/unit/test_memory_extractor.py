@@ -1,7 +1,5 @@
 """Tests for MemoryExtractor — LLM-based memory extraction from conversations."""
 
-import pytest
-from microagent.memory.provider import Memory
 from microagent.memory.extractor import MemoryExtractor
 
 
@@ -15,10 +13,12 @@ class TestMemoryExtractor:
             {"role": "assistant", "content": "Got it. I'll check that directory for files."},
         )
 
-        memories = await MemoryExtractor._parse_llm_response("""
+        memories = await MemoryExtractor._parse_llm_response(
+            """
 User prefers Python over JavaScript. (preference)
 User project is at /home/user/myapp. (fact)
-        """.strip())
+        """.strip()
+        )
 
         assert len(memories) == 2
         assert memories[0].category == "preference"
@@ -40,9 +40,7 @@ User project is at /home/user/myapp. (fact)
 
     def test_extract_prompt_includes_history(self):
         """The extraction prompt references the conversation."""
-        history = (
-            {"role": "user", "content": "I like cats."},
-        )
+        history = ({"role": "user", "content": "I like cats."},)
         prompt = MemoryExtractor._build_prompt(history)
         assert "I like cats" in prompt
         assert "fact" in prompt.lower() or "preference" in prompt.lower()

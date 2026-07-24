@@ -14,25 +14,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.types import Message, TurnComplete, TurnFailed
 from ..core.tool import ToolRegistry
+from ..core.types import Message, TurnComplete, TurnFailed
 from ..session.budget import Budget
 from ..session.runner import SessionRunner
-
 
 # ---------------------------------------------------------------------------
 # SubagentSpec
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class SubagentSpec:
     """Declarative config for a subagent type."""
-    name: str                       # "explore" | "general"
+
+    name: str  # "explore" | "general"
     description: str
     system_prompt: str
     tools_allowed: tuple[str, ...]  # whitelist (empty = all)
     tools_blocked: tuple[str, ...]  # blacklist
-    model: str | None = None        # None = inherit parent
+    model: str | None = None  # None = inherit parent
     max_iterations: int = 10
     max_cost_usd: float = 1.0
 
@@ -72,6 +73,7 @@ DEFAULT_SUBAGENTS: tuple[SubagentSpec, ...] = (
 # ---------------------------------------------------------------------------
 # SubagentManager
 # ---------------------------------------------------------------------------
+
 
 class SubagentManager:
     """Manages subagent specs and spawns child agents."""
@@ -131,9 +133,7 @@ class SubagentManager:
 
         return "".join(parts) or f"[subagent {spec_name} returned empty]"
 
-    def _filter_registry(
-        self, spec: SubagentSpec, parent_registry: ToolRegistry
-    ) -> ToolRegistry:
+    def _filter_registry(self, spec: SubagentSpec, parent_registry: ToolRegistry) -> ToolRegistry:
         """Build a filtered registry based on spec's allowlist/blocklist."""
         filtered = ToolRegistry()
 

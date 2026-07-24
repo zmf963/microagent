@@ -13,20 +13,27 @@ yield ToolProgressDelta events for real-time display.
 
 from __future__ import annotations
 
-import asyncio
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import anyio
 
-from ..core.types import (
-    Message, ToolCall, ToolResult,
-    TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta,
-    TurnComplete, TurnFailed, Event, Usage,
-)
-from ..core.tool import ToolRegistry
-from ..core.store import Store
-from ..llm.client import LLMClient, StreamDone
 from ..core.event import EventBus
+from ..core.store import Store
+from ..core.tool import ToolRegistry
+from ..core.types import (
+    Event,
+    Message,
+    TextDelta,
+    ToolCall,
+    ToolCallDelta,
+    ToolProgressDelta,
+    ToolResult,
+    ToolResultDelta,
+    TurnComplete,
+    TurnFailed,
+    Usage,
+)
+from ..llm.client import LLMClient, StreamDone
 from .budget import Budget, BudgetExceeded
 
 
@@ -40,9 +47,9 @@ class SessionRunner:
         registry: ToolRegistry,
         budget: Budget | None = None,
         system_prompt: str = "",
-        store: "Store | None" = None,
+        store: Store | None = None,
         session_id: str = "default",
-        event_bus: "EventBus | None" = None,
+        event_bus: EventBus | None = None,
         pre_llm_hooks: tuple = (),
         tool_hooks: tuple = (),
         context_sources: tuple = (),
@@ -70,10 +77,12 @@ class SessionRunner:
 
         if store is not None:
             from ..tools.builtins import session_search as _ss
+
             _ss._current_store.set(store)
 
         if self.memory is not None:
             from ..memory.extractor import MemoryExtractor
+
             self._extractor = MemoryExtractor(
                 provider=self.memory,
                 base_url=self.llm.config.base_url,
@@ -81,9 +90,7 @@ class SessionRunner:
                 model=self.llm.config.model,
             )
 
-    async def resume(
-        self, session_id: str, store: Store
-    ) -> tuple[Message, ...]:
+    async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
 
     async def run_turn(
@@ -109,16 +116,19 @@ class SessionRunner:
             _threshold = self.compression_threshold
             if _threshold <= 0:
                 from ..llm.client import get_context_window
+
                 _window = get_context_window(self.llm.config.model)
                 _threshold = int(_window * 0.6)
 
             if len(messages) > 10:
-                from .compress import count_tokens, compact_conversation, CompactionState
+                from .compress import CompactionState, compact_conversation, count_tokens
+
                 if count_tokens(tuple(messages)) > _threshold:
-                    if not hasattr(self, '_compaction_state'):
+                    if not hasattr(self, "_compaction_state"):
                         self._compaction_state = CompactionState()
                     messages_list = await compact_conversation(
-                        tuple(messages), self.llm,
+                        tuple(messages),
+                        self.llm,
                         context_window=_threshold + 8000,
                         state=self._compaction_state,
                     )
@@ -190,12 +200,11 @@ class SessionRunner:
                 if self.event_bus:
                     await self.event_bus.emit(
                         "turn_complete", self.session_id, assistant_msg.content
-                )
+                    )
                 if self._extractor is not None:
                     try:
                         history = tuple(
-                            {"role": m.role, "content": m.content}
-                            for m in messages[-10:]
+                            {"role": m.role, "content": m.content} for m in messages[-10:]
                         )
                         await self._extractor.extract_async(history)
                     except Exception:
@@ -216,7 +225,8 @@ class SessionRunner:
                 if self.store is not None:
                     await self.store.append(self.session_id, msg)
                 yield ToolResultDelta(
-                    id=tc.id, name=tc.name,
+                    id=tc.id,
+                    name=tc.name,
                     content=result.content[:200],
                     is_error=result.is_error,
                 )
@@ -233,6 +243,7 @@ class SessionRunner:
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
                 from ..tools.builtins import task as _task_module
+
                 _task_module._current_runner.set(self)
 
                 modified = call
@@ -246,6 +257,7 @@ class SessionRunner:
                 # Try streaming, fall back to regular execution
                 try:
                     from ..core.tool import ToolProgressDelta
+
                     async for event in self.registry.execute_stream(call):
                         if isinstance(event, ToolProgressDelta):
                             progress_events.append(event)
@@ -254,7 +266,7 @@ class SessionRunner:
                             break
                     else:
                         result = ToolResult.ok("(no output)")
-                except (TypeError, AttributeError):
+                except TypeError, AttributeError:
                     # execute_stream not available — fall back to execute
                     result = await self.registry.execute(call)
 

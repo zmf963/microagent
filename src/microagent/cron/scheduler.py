@@ -7,7 +7,6 @@ delivered (delivery is a future feature).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Literal
@@ -18,9 +17,10 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class CronJob:
     """A scheduled agent task."""
+
     name: str
-    schedule: str           # cron expression or "interval:N"
-    prompt: str             # prompt fed to the agent
+    schedule: str  # cron expression or "interval:N"
+    prompt: str  # prompt fed to the agent
     session_strategy: Literal["new", "resume:last"] = "new"
     enabled: bool = True
 
@@ -55,8 +55,6 @@ class CronScheduler:
     def start(self) -> None:
         """Start the scheduler. Schedules all enabled jobs."""
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        from apscheduler.triggers.cron import CronTrigger
-        from apscheduler.triggers.interval import IntervalTrigger
 
         self._scheduler = AsyncIOScheduler()
         self._started = True

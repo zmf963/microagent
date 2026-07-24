@@ -1,9 +1,8 @@
 """Tests for SQLiteMemoryProvider — FTS5 search, write, recall."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
+
 from microagent.memory.provider import Memory, SQLiteMemoryProvider
 
 
@@ -40,17 +39,19 @@ class TestProviderWrite:
         assert results[0].content == "Python 3.14"
 
     async def test_recall_multiple(self, provider):
-        await provider.batch_write((
-            Memory(id="a", content="Kubernetes pods", category="fact", created_at=1.0),
-            Memory(id="b", content="Docker pods", category="fact", created_at=2.0),
-        ))
+        await provider.batch_write(
+            (
+                Memory(id="a", content="Kubernetes pods", category="fact", created_at=1.0),
+                Memory(id="b", content="Docker pods", category="fact", created_at=2.0),
+            )
+        )
         results = await provider.recall("pods", k=5)
         assert len(results) == 2
 
     async def test_recall_no_match(self, provider):
-        await provider.batch_write((
-            Memory(id="x", content="some data", category="fact", created_at=1.0),
-        ))
+        await provider.batch_write(
+            (Memory(id="x", content="some data", category="fact", created_at=1.0),)
+        )
         results = await provider.recall("zzz", k=5)
         assert len(results) == 0
 
@@ -64,15 +65,16 @@ class TestProviderWrite:
         assert len(results) == 3
 
     async def test_delete(self, provider):
-        await provider.batch_write((
-            Memory(id="delme", content="remove this", category="fact", created_at=1.0),
-        ))
+        await provider.batch_write(
+            (Memory(id="delme", content="remove this", category="fact", created_at=1.0),)
+        )
         await provider.delete("delme")
         results = await provider.recall("remove", k=1)
         assert len(results) == 0
 
     async def test_sync_turn(self, provider):
         from microagent.core.types import Message
+
         msgs = (
             Message.user("build the docker image"),
             Message.assistant("ok running docker build"),

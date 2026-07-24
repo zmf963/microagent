@@ -6,6 +6,7 @@ from microagent.core.types import ToolCall, ToolResult
 class TestPreLLMHook:
     async def test_protocol_accepted(self):
         """Verify a class implementing PreLLMHook is accepted."""
+
         # PreLLMHook is a simple Protocol — any callable works
         async def hook(ctx):
             return ctx  # identity

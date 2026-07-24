@@ -7,14 +7,12 @@ by a session_id string. The exit tool signals turn termination.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
 from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
-
 
 # ---------------------------------------------------------------------------
 # In-process state store (session-scoped)
@@ -31,12 +29,18 @@ def _get_state(session_id: str = "default") -> dict:
 # todo
 # ---------------------------------------------------------------------------
 
+
 @tool("todo", description="Manage a TODO list. Actions: list, add, update, remove.")
 async def todo(
     action: Annotated[str, Field(description="Action: list | add | update | remove")],
     item_id: Annotated[int, Field(description="Item index (0-based) for update/remove", ge=0)] = 0,
     content: Annotated[str, Field(description="Task description (for add/update)")] = "",
-    status: Annotated[str, Field(description="Status: pending | in_progress | completed", )] = "pending",
+    status: Annotated[
+        str,
+        Field(
+            description="Status: pending | in_progress | completed",
+        ),
+    ] = "pending",
 ) -> ToolResult:
     state = _get_state()
     todos = state["todos"]
@@ -75,6 +79,7 @@ async def todo(
 # plan
 # ---------------------------------------------------------------------------
 
+
 @tool("plan", description="Create or view a multi-step plan (does not execute).")
 async def plan(
     action: Annotated[str, Field(description="Action: show | set | clear")],
@@ -105,6 +110,7 @@ async def plan(
 # ---------------------------------------------------------------------------
 # exit
 # ---------------------------------------------------------------------------
+
 
 @tool("exit", description="Signal that the task is complete and the session should end.")
 async def exit() -> ToolResult:

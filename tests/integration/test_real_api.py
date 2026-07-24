@@ -9,17 +9,19 @@ If any of these are missing, tests are skipped automatically.
 """
 
 import os
-import tempfile
 
 import pytest
 
-from microagent import Agent, Config, Message, LLMConfig, SQLiteStore
+from microagent import Agent, LLMConfig, Message, SQLiteStore
 
-SKIP = not all(os.environ.get(k) for k in (
-    "MICROAGENT_TEST_BASE_URL",
-    "MICROAGENT_TEST_API_KEY",
-    "MICROAGENT_TEST_MODEL",
-))
+SKIP = not all(
+    os.environ.get(k)
+    for k in (
+        "MICROAGENT_TEST_BASE_URL",
+        "MICROAGENT_TEST_API_KEY",
+        "MICROAGENT_TEST_MODEL",
+    )
+)
 
 pytestmark = pytest.mark.skipif(
     SKIP,
@@ -38,6 +40,7 @@ def _get_config() -> LLMConfig:
 # =========================================================================
 # Basic integration tests
 # =========================================================================
+
 
 @pytest.mark.integration
 async def test_simple_chat():
@@ -100,6 +103,7 @@ async def test_multi_turn_conversation():
 # Deep integration tests: multi-tool, compression, session resume
 # =========================================================================
 
+
 @pytest.mark.integration
 async def test_multi_tool_task(tmp_path):
     """Agent completes a multi-step task using bash + write_file + read_file."""
@@ -126,7 +130,7 @@ async def test_multi_tool_task(tmp_path):
     hello_py = test_dir / "hello.py"
     if not hello_py.exists():
         # Agent might have used a different path
-        import glob
+
         candidates = list(test_dir.rglob("hello.py"))
         if candidates:
             hello_py = candidates[0]
@@ -198,7 +202,8 @@ async def test_compaction_with_tool_calls(tmp_path):
 
     before_tokens = count_tokens(tuple(messages))
     compressed = await compact_conversation(
-        tuple(messages), agent.runner.llm,
+        tuple(messages),
+        agent.runner.llm,
         context_window=before_tokens + 8000,
         force=True,
     )
@@ -206,8 +211,7 @@ async def test_compaction_with_tool_calls(tmp_path):
     after_tokens = count_tokens(compressed)
     # Compaction restructures the conversation (fewer messages with summary)
     assert len(compressed) < len(messages), (
-        f"Compaction should reduce message count: "
-        f"{len(messages)} → {len(compressed)}"
+        f"Compaction should reduce message count: {len(messages)} → {len(compressed)}"
     )
 
     # Compressed result should mention the steps

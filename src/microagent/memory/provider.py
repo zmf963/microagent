@@ -12,31 +12,33 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable, Any
+from typing import Any, Protocol, runtime_checkable
 
 from ..core.types import Message
-
 
 # ---------------------------------------------------------------------------
 # Memory dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class Memory:
     """A single memory entry."""
+
     id: str
     content: str
-    category: str           # "fact" | "preference" | "task" | "context"
+    category: str  # "fact" | "preference" | "task" | "context"
     created_at: float
-    relevance_score: float = 0.0   # larger = more relevant (FTS5 bm25 negated)
+    relevance_score: float = 0.0  # larger = more relevant (FTS5 bm25 negated)
     session_id: str | None = None  # None = cross-session
-    visibility: str = "private"    # private | shared | redacted
+    visibility: str = "private"  # private | shared | redacted
     metadata: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
 # MemoryProvider Protocol
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class MemoryProvider(Protocol):
@@ -50,9 +52,7 @@ class MemoryProvider(Protocol):
         """Retrieve top-k relevant memories."""
         ...
 
-    async def sync_turn(
-        self, session_id: str, history: tuple[Message, ...]
-    ) -> None:
+    async def sync_turn(self, session_id: str, history: tuple[Message, ...]) -> None:
         """Store new memories from a completed turn."""
         ...
 
@@ -72,6 +72,7 @@ class MemoryProvider(Protocol):
 # ---------------------------------------------------------------------------
 # SQLiteMemoryProvider — FTS5 full-text search, zero dependencies
 # ---------------------------------------------------------------------------
+
 
 class SQLiteMemoryProvider:
     """SQLite + FTS5 implementation of MemoryProvider."""
@@ -119,38 +120,41 @@ class SQLiteMemoryProvider:
         ).fetchall()
         return tuple(
             Memory(
-                id=r[0], content=r[1], category=r[2], created_at=r[3],
-                relevance_score=r[4], session_id=r[5], visibility=r[6],
+                id=r[0],
+                content=r[1],
+                category=r[2],
+                created_at=r[3],
+                relevance_score=r[4],
+                session_id=r[5],
+                visibility=r[6],
                 metadata=json.loads(r[7]) if r[7] else None,
             )
             for r in rows
         )
 
-    async def sync_turn(
-        self, session_id: str, history: tuple[Message, ...]
-    ) -> None:
+    async def sync_turn(self, session_id: str, history: tuple[Message, ...]) -> None:
         # Store recent messages as basic context memories
         now = time.time_ns()
         for i, msg in enumerate(history[-5:]):  # last 5 messages
             if not msg.content.strip():
                 continue
             mem_id = f"{session_id}-{now}-{i}"
-            self._insert(Memory(
-                id=mem_id,
-                content=msg.content[:500],  # truncate long messages
-                category="context",
-                created_at=now,
-                session_id=session_id,
-            ))
+            self._insert(
+                Memory(
+                    id=mem_id,
+                    content=msg.content[:500],  # truncate long messages
+                    category="context",
+                    created_at=now,
+                    session_id=session_id,
+                )
+            )
 
     async def batch_write(self, memories: tuple[Memory, ...]) -> None:
         for m in memories:
             self._insert(m)
 
     async def delete(self, memory_id: str) -> None:
-        self._conn.execute(
-            "DELETE FROM memories WHERE id = ?", (memory_id,)
-        )
+        self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         # FTS5 content table auto-deletes via content_rowid
 
     def system_prompt_block(self) -> str:
@@ -162,8 +166,12 @@ class SQLiteMemoryProvider:
             "(id, content, category, created_at, session_id, visibility, metadata) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                m.id, m.content, m.category, m.created_at,
-                m.session_id, m.visibility,
+                m.id,
+                m.content,
+                m.category,
+                m.created_at,
+                m.session_id,
+                m.visibility,
                 json.dumps(m.metadata) if m.metadata else None,
             ),
         )

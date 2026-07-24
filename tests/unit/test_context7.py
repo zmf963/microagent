@@ -1,6 +1,5 @@
 """Tests for context7 builtin tool."""
 
-import pytest
 from microagent.core.tool import ToolRegistry, _default_builtins
 from microagent.core.types import ToolCall
 
@@ -19,6 +18,7 @@ class TestContext7:
     async def test_parse_response(self):
         """Response parser extracts title and snippet."""
         from microagent.tools.builtins.context7 import _parse_results
+
         data = {
             "results": [
                 {
@@ -42,5 +42,6 @@ class TestContext7:
 
     async def test_parse_empty(self):
         from microagent.tools.builtins.context7 import _parse_results
+
         text = _parse_results({"results": []}, max_results=5)
         assert text == "(no results)"

@@ -16,7 +16,9 @@ async def edit_file(
     path: Annotated[str, Field(description="Path to the file to edit")],
     old_string: Annotated[str, Field(description="The text to find")],
     new_string: Annotated[str, Field(description="The replacement text")],
-    replace_all: Annotated[bool, Field(description="Replace all occurrences if true, else only first")] = False,
+    replace_all: Annotated[
+        bool, Field(description="Replace all occurrences if true, else only first")
+    ] = False,
 ) -> ToolResult:
     p = Path(path).expanduser().resolve()
 
@@ -24,6 +26,7 @@ async def edit_file(
         return ToolResult.error(f"file not found: {path}")
 
     import asyncio
+
     text = await asyncio.to_thread(p.read_text)
     count = text.count(old_string)
 

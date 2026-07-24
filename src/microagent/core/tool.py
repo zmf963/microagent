@@ -16,15 +16,14 @@ automatic streaming support — each yielded string is emitted as a
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, runtime_checkable, get_type_hints, Union
+from typing import Any, Protocol, get_type_hints, runtime_checkable
 
-from pydantic import Field, create_model
+from pydantic import create_model
 from pydantic.fields import FieldInfo
 
-from .types import ToolCall, ToolResult, ToolProgressDelta
-
+from .types import ToolCall, ToolProgressDelta, ToolResult
 
 # ---------------------------------------------------------------------------
 # TurnContext forward reference
@@ -37,16 +36,16 @@ TurnContext = Any  # forward reference placeholder
 # Tool Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class Tool(Protocol):
     """The narrow waist — every tool implements this interface."""
+
     name: str
     description: str
     parameters: dict[str, Any]  # OpenAI function JSON Schema
 
-    async def execute(
-        self, call: ToolCall, ctx: TurnContext | None = None
-    ) -> ToolResult: ...
+    async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult: ...
 
 
 # Sentinel to signal streaming completion
@@ -57,6 +56,7 @@ _STREAM_END = object()
 # FunctionTool — wraps a plain async function into a Tool
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class FunctionTool:
     """Adapter that wraps an ``async def`` function into a Tool.
@@ -66,14 +66,13 @@ class FunctionTool:
     tool yields ``ToolProgressDelta`` events for each chunk and
     returns a final ``ToolResult``.
     """
+
     name: str
     fn: Callable[..., Any]
     parameters: dict[str, Any]
     description: str
 
-    async def execute(
-        self, call: ToolCall, ctx: TurnContext | None = None
-    ) -> ToolResult:
+    async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult:
         result = await self.fn(**call.arguments)
         if isinstance(result, ToolResult):
             return result
@@ -100,7 +99,9 @@ class FunctionTool:
                         text = str(chunk)
                         collected.append(text)
                         yield ToolProgressDelta(
-                            id=call.id, name=self.name, text=text,
+                            id=call.id,
+                            name=self.name,
+                            text=text,
                         )
             except Exception as e:
                 yield ToolResult.error(f"{self.name} failed: {e!r}")
@@ -119,6 +120,7 @@ class FunctionTool:
 # ---------------------------------------------------------------------------
 # Schema inference via Pydantic v2
 # ---------------------------------------------------------------------------
+
 
 def _infer_schema_from_signature(fn: Callable[..., Any]) -> dict[str, Any]:
     """Build an OpenAI function-calling JSON Schema from ``fn``'s signature.
@@ -184,8 +186,7 @@ def tool(
         @tool("read_file", description="Read a file from disk")
         async def read_file(
             path: Annotated[str, Field(description="File path")],
-        ) -> ToolResult:
-            ...
+        ) -> ToolResult: ...
 
     Async generators are auto-detected and get streaming support::
 
@@ -201,6 +202,7 @@ def tool(
     The returned ``FunctionTool`` is also stored in the module-level
     ``_registry`` for ``_default_builtins()`` discovery.
     """
+
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         desc = description or (fn.__doc__ or "").strip().split("\n")[0]
         params = _infer_schema_from_signature(fn)
@@ -214,6 +216,7 @@ def tool(
 # ---------------------------------------------------------------------------
 # ToolRegistry
 # ---------------------------------------------------------------------------
+
 
 class ToolRegistry:
     """Manages a collection of tools, provides lookup and schema export."""
@@ -250,9 +253,7 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    async def execute(
-        self, call: ToolCall, ctx: TurnContext | None = None
-    ) -> ToolResult:
+    async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult.error(f"unknown tool: {call.name}")
@@ -270,7 +271,7 @@ class ToolRegistry:
             yield ToolResult.error(f"unknown tool: {call.name}")
             return
 
-        if hasattr(tool, 'execute_stream'):
+        if hasattr(tool, "execute_stream"):
             async for event in tool.execute_stream(call, ctx):  # type: ignore[union-attr]
                 yield event
         else:
@@ -286,22 +287,22 @@ def _default_builtins() -> list[Tool]:
     the "imported but unused" lint warning while making the side-effect
     intent explicit.
     """
-    from ..tools.builtins import read_file as _rf  # side-effect: registers @tool
-    from ..tools.builtins import bash as _bash  # side-effect: registers @tool
-    from ..tools.builtins import write_file as _wf  # side-effect: registers @tool
-    from ..tools.builtins import edit_file as _ef  # side-effect: registers @tool
-    from ..tools.builtins import grep as _grep  # side-effect: registers @tool
-    from ..tools.builtins import glob as _glob  # side-effect: registers @tool
-    from ..tools.builtins import web_fetch as _wfetch  # side-effect: registers @tool
-    from ..tools.builtins import todo_plan_exit as _tpe  # side-effect: registers @tool
-    from ..tools.builtins import task as _task  # side-effect: registers @tool
-    from ..tools.builtins import skill_manage as _sm  # side-effect: registers @tool
-    from ..tools.builtins import web_search as _ws  # side-effect: registers @tool
-    from ..tools.builtins import execute_code as _ec  # side-effect: registers @tool
-    from ..tools.builtins import vision_analyze as _va  # side-effect: registers @tool
-    from ..tools.builtins import browser as _br  # side-effect: registers @tool
-    from ..tools.builtins import context7 as _c7  # side-effect: registers @tool
-    from ..tools.builtins import session_search as _ss  # side-effect: registers @tool
-    from ..tools.builtins import process as _pr  # side-effect: registers @tool
+    from ..tools.builtins import bash as _bash  # noqa: F401
+    from ..tools.builtins import browser as _br  # noqa: F401
+    from ..tools.builtins import context7 as _c7  # noqa: F401
+    from ..tools.builtins import edit_file as _ef  # noqa: F401
+    from ..tools.builtins import execute_code as _ec  # noqa: F401
+    from ..tools.builtins import glob as _glob  # noqa: F401
+    from ..tools.builtins import grep as _grep  # noqa: F401
+    from ..tools.builtins import process as _pr  # noqa: F401
+    from ..tools.builtins import read_file as _rf  # noqa: F401
+    from ..tools.builtins import session_search as _ss  # noqa: F401
+    from ..tools.builtins import skill_manage as _sm  # noqa: F401
+    from ..tools.builtins import task as _task  # noqa: F401
+    from ..tools.builtins import todo_plan_exit as _tpe  # noqa: F401
+    from ..tools.builtins import vision_analyze as _va  # noqa: F401
+    from ..tools.builtins import web_fetch as _wfetch  # noqa: F401
+    from ..tools.builtins import web_search as _ws  # noqa: F401
+    from ..tools.builtins import write_file as _wf  # noqa: F401
 
     return list(_registry.values())

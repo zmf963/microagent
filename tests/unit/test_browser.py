@@ -1,6 +1,5 @@
 """Tests for browser_navigate builtin tools."""
 
-import pytest
 from microagent.core.tool import ToolRegistry, _default_builtins
 from microagent.core.types import ToolCall
 

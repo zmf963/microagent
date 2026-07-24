@@ -19,10 +19,11 @@ from pathlib import Path
 @dataclass(frozen=True, slots=True)
 class SkillUsage:
     """Tracked usage stats for a single skill."""
+
     name: str
     use_count: int
     last_activity: float
-    state: str           # "active" | "stale" | "archived"
+    state: str  # "active" | "stale" | "archived"
     pinned: bool = False
 
 
@@ -77,7 +78,7 @@ class Curator:
         try:
             data = json.loads(pf.read_text())
             return data.get("created_by") == "agent"
-        except (json.JSONDecodeError, KeyError):
+        except json.JSONDecodeError, KeyError:
             return False
 
     @staticmethod

@@ -7,16 +7,17 @@ SessionRunner, LLMClient, and Tool implementations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Message — the universal LLM message format
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class Usage:
     """Token usage from an LLM response."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
@@ -29,6 +30,7 @@ class Message:
     For role='tool', ``tool_call_id`` must be set to associate the
     result with the originating tool call.
     """
+
     role: str
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
@@ -41,8 +43,9 @@ class Message:
         return cls(role="user", content=text)
 
     @classmethod
-    def assistant(cls, text: str, *, tool_calls: tuple[ToolCall, ...] = (),
-                  usage: Usage | None = None) -> Message:
+    def assistant(
+        cls, text: str, *, tool_calls: tuple[ToolCall, ...] = (), usage: Usage | None = None
+    ) -> Message:
         return cls(role="assistant", content=text, tool_calls=tool_calls, usage=usage)
 
     @classmethod
@@ -51,8 +54,9 @@ class Message:
 
         ``tool_call_id`` is required — the LLM API enforces it.
         """
-        return cls(role="tool", content=result.content, tool_call_id=tool_call_id,
-                   is_error=result.is_error)
+        return cls(
+            role="tool", content=result.content, tool_call_id=tool_call_id, is_error=result.is_error
+        )
 
     def to_openai_dict(self) -> dict[str, Any]:
         """Convert to the dict format expected by the openai SDK."""
@@ -68,15 +72,18 @@ class Message:
 # ToolCall / ToolResult
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class ToolCall:
     """A single tool invocation requested by the LLM."""
+
     id: str
     name: str
     arguments: dict[str, Any]
 
     def to_openai_dict(self) -> dict[str, Any]:
         import json
+
         return {
             "id": self.id,
             "type": "function",
@@ -90,6 +97,7 @@ class ToolCall:
 @dataclass(frozen=True, slots=True)
 class ToolResult:
     """The outcome of executing a tool."""
+
     content: str
     is_error: bool = False
     metadata: dict[str, Any] | None = None
@@ -104,13 +112,13 @@ class ToolResult:
 
     @classmethod
     def denied(cls, reason: str) -> ToolResult:
-        return cls(content=f"denied: {reason}", is_error=True,
-                   metadata={"denied": True})
+        return cls(content=f"denied: {reason}", is_error=True, metadata={"denied": True})
 
 
 # ---------------------------------------------------------------------------
 # Events — yielded by SessionRunner.run_turn()
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class TextDelta:
@@ -118,6 +126,7 @@ class TextDelta:
 
     kind: 'thinking' (reasoning/CoT) or 'content' (final response)
     """
+
     text: str
     kind: str = "content"
 
@@ -125,6 +134,7 @@ class TextDelta:
 @dataclass(frozen=True, slots=True)
 class ToolCallDelta:
     """A complete tool call (emitted after all deltas are accumulated)."""
+
     id: str
     name: str
     arguments: dict[str, Any]
@@ -133,6 +143,7 @@ class ToolCallDelta:
 @dataclass(frozen=True, slots=True)
 class ToolResultDelta:
     """Result of a tool execution."""
+
     id: str
     name: str
     content: str
@@ -147,6 +158,7 @@ class ToolProgressDelta:
     these deltas while executing, so the user sees live progress
     instead of waiting for the full result.
     """
+
     id: str
     name: str
     text: str
@@ -155,13 +167,22 @@ class ToolProgressDelta:
 @dataclass(frozen=True, slots=True)
 class TurnComplete:
     """The turn finished with a text response."""
+
     content: str
 
 
 @dataclass(frozen=True, slots=True)
 class TurnFailed:
     """The turn ended without a normal response."""
+
     reason: str
 
 
-Event = Union[TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta, TurnComplete, TurnFailed]
+Event = (
+    TextDelta
+    | ToolCallDelta
+    | ToolProgressDelta
+    | ToolResultDelta
+    | TurnComplete
+    | TurnFailed
+)

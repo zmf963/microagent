@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # TerminalResult
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True, slots=True)
 class TerminalResult:
@@ -24,8 +24,9 @@ class TerminalResult:
     timed_out: bool = False
 
     @classmethod
-    def ok(cls, stdout: str, stderr: str = "", exit_code: int = 0,
-           timed_out: bool = False) -> TerminalResult:
+    def ok(
+        cls, stdout: str, stderr: str = "", exit_code: int = 0, timed_out: bool = False
+    ) -> TerminalResult:
         return cls(stdout=stdout, stderr=stderr, exit_code=exit_code, timed_out=timed_out)
 
     @property
@@ -41,10 +42,13 @@ class TerminalResult:
 # TerminalBackend Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class TerminalBackend(Protocol):
     async def run(
-        self, command: str, *,
+        self,
+        command: str,
+        *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
@@ -55,11 +59,14 @@ class TerminalBackend(Protocol):
 # LocalTerminal
 # ---------------------------------------------------------------------------
 
+
 class LocalTerminal:
     """Execute commands via local subprocess."""
 
     async def run(
-        self, command: str, *,
+        self,
+        command: str,
+        *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
@@ -67,33 +74,36 @@ class LocalTerminal:
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                "bash", "-c", command,
+                "bash",
+                "-c",
+                command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             return TerminalResult.ok(
                 stdout=stdout.decode("utf-8", errors="replace"),
                 stderr=stderr.decode("utf-8", errors="replace"),
                 exit_code=proc.returncode or 0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if proc is not None:
                 try:
                     proc.kill()
                 except Exception:
                     pass
             return TerminalResult.ok(
-                stdout="", stderr="command timed out",
-                exit_code=-1, timed_out=True,
+                stdout="",
+                stderr="command timed out",
+                exit_code=-1,
+                timed_out=True,
             )
         except Exception as e:
             return TerminalResult.ok(
-                stdout="", stderr=f"command failed: {e}",
+                stdout="",
+                stderr=f"command failed: {e}",
                 exit_code=-1,
             )
 
@@ -101,6 +111,7 @@ class LocalTerminal:
 # ---------------------------------------------------------------------------
 # DockerTerminal
 # ---------------------------------------------------------------------------
+
 
 class DockerTerminal:
     """Execute commands inside a Docker container."""
@@ -110,7 +121,9 @@ class DockerTerminal:
         self._name = container_name or f"microagent-{id(self):x}"
 
     async def run(
-        self, command: str, *,
+        self,
+        command: str,
+        *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         timeout: float | None = None,
@@ -119,8 +132,11 @@ class DockerTerminal:
         try:
             # docker run --rm <image> bash -c "<command>"
             docker_cmd = [
-                "docker", "run", "--rm",
-                "--name", self._name,
+                "docker",
+                "run",
+                "--rm",
+                "--name",
+                self._name,
             ]
             if cwd:
                 docker_cmd.extend(["-w", str(cwd)])
@@ -134,26 +150,27 @@ class DockerTerminal:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             return TerminalResult.ok(
                 stdout=stdout.decode("utf-8", errors="replace"),
                 stderr=stderr.decode("utf-8", errors="replace"),
                 exit_code=proc.returncode or 0,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if proc is not None:
                 try:
                     proc.kill()
                 except Exception:
                     pass
             return TerminalResult.ok(
-                stdout="", stderr="command timed out",
-                exit_code=-1, timed_out=True,
+                stdout="",
+                stderr="command timed out",
+                exit_code=-1,
+                timed_out=True,
             )
         except FileNotFoundError:
             return TerminalResult.ok(
-                stdout="", stderr="docker not found — is Docker installed?",
+                stdout="",
+                stderr="docker not found — is Docker installed?",
                 exit_code=127,
             )

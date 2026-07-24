@@ -1,17 +1,17 @@
 """Tests for attachment file path extraction edge cases."""
 
-import pytest
-from microagent.session.attachments import _extract_file_paths, _is_readable_file
 from microagent.core.types import Message, ToolCall
+from microagent.session.attachments import _extract_file_paths, _is_readable_file
 
 
 class TestFilePathExtraction:
     def test_absolute_path(self):
         """Absolute paths are extracted."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "/etc/hosts"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": "/etc/hosts"}),),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert "/etc/hosts" in files
@@ -19,9 +19,12 @@ class TestFilePathExtraction:
     def test_relative_path(self):
         """Relative paths are extracted."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "src/main.py"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(
+                    ToolCall(id="c1", name="read_file", arguments={"path": "src/main.py"}),
+                ),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert "src/main.py" in files
@@ -29,9 +32,12 @@ class TestFilePathExtraction:
     def test_dot_slash_path(self):
         """Paths starting with ./ are extracted."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "./config.yaml"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(
+                    ToolCall(id="c1", name="read_file", arguments={"path": "./config.yaml"}),
+                ),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert "./config.yaml" in files or "config.yaml" in files
@@ -39,9 +45,10 @@ class TestFilePathExtraction:
     def test_tilde_path(self):
         """Paths with ~/ are extracted."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "~/.bashrc"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": "~/.bashrc"}),),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert any("bashrc" in f for f in files)
@@ -49,9 +56,12 @@ class TestFilePathExtraction:
     def test_no_extension_ignored(self):
         """Files without extensions are ignored."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "/usr/bin/python3"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(
+                    ToolCall(id="c1", name="read_file", arguments={"path": "/usr/bin/python3"}),
+                ),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert len(files) == 0, f"extension-less files should be ignored: {files}"
@@ -59,11 +69,16 @@ class TestFilePathExtraction:
     def test_urls_ignored(self):
         """URLs are not treated as file paths."""
         msgs = (
-            Message.assistant("fetch", tool_calls=(
-                ToolCall(id="c1", name="web_fetch", arguments={
-                    "url": "https://example.com/data.json"
-                }),
-            )),
+            Message.assistant(
+                "fetch",
+                tool_calls=(
+                    ToolCall(
+                        id="c1",
+                        name="web_fetch",
+                        arguments={"url": "https://example.com/data.json"},
+                    ),
+                ),
+            ),
         )
         files = _extract_file_paths(msgs)
         assert not files, f"URLs should be ignored: {files}"
@@ -71,12 +86,14 @@ class TestFilePathExtraction:
     def test_most_recent_ordered(self):
         """Files are ordered by last seen (most recent first)."""
         msgs = (
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c1", name="read_file", arguments={"path": "old.py"}),
-            )),
-            Message.assistant("read", tool_calls=(
-                ToolCall(id="c2", name="read_file", arguments={"path": "new.py"}),
-            )),
+            Message.assistant(
+                "read",
+                tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": "old.py"}),),
+            ),
+            Message.assistant(
+                "read",
+                tool_calls=(ToolCall(id="c2", name="read_file", arguments={"path": "new.py"}),),
+            ),
         )
         files = _extract_file_paths(msgs)
         keys = list(files.keys())
@@ -85,9 +102,12 @@ class TestFilePathExtraction:
     def test_max_three_files(self):
         """Only 3 most recent files are returned."""
         msgs = tuple(
-            Message.assistant("read", tool_calls=(
-                ToolCall(id=f"c{i}", name="read_file", arguments={"path": f"file{i}.py"}),
-            ))
+            Message.assistant(
+                "read",
+                tool_calls=(
+                    ToolCall(id=f"c{i}", name="read_file", arguments={"path": f"file{i}.py"}),
+                ),
+            )
             for i in range(10)
         )
         files = _extract_file_paths(msgs)

@@ -69,21 +69,32 @@ def _is_readable_file(path: str) -> bool:
     if not path or len(path) > 500:
         return False
     # Exclude obvious non-files
-    if path.endswith(('/', '\\', ':', '>', '<', '|', '&', ';')):
+    if path.endswith(("/", "\\", ":", ">", "<", "|", "&", ";")):
         return False
-    if '://' in path:
+    if "://" in path:
         return False
     # Has extension, or is a known extensionless file
-    filename = path.split('/')[-1]
-    if '.' in filename:
+    filename = path.split("/")[-1]
+    if "." in filename:
         return True
-    if filename in ('Makefile', 'Dockerfile', 'AGENTS', 'CLAUDE', 'Gemfile', 'Rakefile', 'CMakeLists'):
+    if filename in (
+        "Makefile",
+        "Dockerfile",
+        "AGENTS",
+        "CLAUDE",
+        "Gemfile",
+        "Rakefile",
+        "CMakeLists",
+    ):
         return True
     # Absolute paths with no extension but that look like files
-    if filename and not filename.endswith('/'):
-        if path.startswith('/') and len(filename) < 60:
+    if filename and not filename.endswith("/"):
+        if path.startswith("/") and len(filename) < 60:
             # Skip binary/system paths
-            if any(p in path for p in ('/bin/', '/sbin/', '/usr/lib/', '/usr/share/', '/dev/', '/proc/')):
+            if any(
+                p in path
+                for p in ("/bin/", "/sbin/", "/usr/lib/", "/usr/share/", "/dev/", "/proc/")
+            ):
                 return False
             return True
     return False
@@ -110,7 +121,7 @@ def recover_file_attachments(
     for fpath in files:
         try:
             content = Path(fpath).expanduser().read_text()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             continue
 
         if len(content) > MAX_CHARS_PER_FILE:
@@ -128,8 +139,7 @@ def recover_file_attachments(
 
     # Append attachments as a single message after the summary
     attachment_msg = Message.user(
-        f"[上下文压缩附件 — {len(attachments)} 个文件恢复]\n\n"
-        + "\n\n---\n\n".join(attachments)
+        f"[上下文压缩附件 — {len(attachments)} 个文件恢复]\n\n" + "\n\n---\n\n".join(attachments)
     )
 
     return compressed + (attachment_msg,)

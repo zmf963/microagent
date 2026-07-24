@@ -5,16 +5,17 @@ Yields pre-programmed StreamEvent sequences without any network calls.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from microagent.core.types import Message, TextDelta, ToolCallDelta, Usage
-from microagent.llm.client import LLMClient, LLMConfig, StreamEvent, StreamDone
+from microagent.llm.client import LLMConfig, StreamDone, StreamEvent
 
 
 @dataclass
 class ScriptedResponse:
     """One 'LLM response' consisting of stream events to replay."""
+
     events: list  # list of StreamEvent or callable
 
 
@@ -31,22 +32,25 @@ class FakeLLMClient:
         self._call_index = 0
         self.calls: list[dict] = []  # record of all calls made
 
-    def for_model(self, model: str) -> "FakeLLMClient":
-        return FakeLLMClient(self._responses, config=LLMConfig(
-            self.config.base_url, self.config.api_key, model
-        ))
+    def for_model(self, model: str) -> FakeLLMClient:
+        return FakeLLMClient(
+            self._responses, config=LLMConfig(self.config.base_url, self.config.api_key, model)
+        )
 
     async def stream(
-        self, *,
+        self,
+        *,
         system: str,
         messages: tuple[Message, ...],
         tools: list | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        self.calls.append({
-            "system": system,
-            "messages": list(messages),
-            "tools": tools,
-        })
+        self.calls.append(
+            {
+                "system": system,
+                "messages": list(messages),
+                "tools": tools,
+            }
+        )
 
         if not self._responses:
             yield Usage()
@@ -71,13 +75,16 @@ class FakeLLMClient:
 
 # --- Helpers for building scripted responses ---
 
+
 def text_response(text: str) -> ScriptedResponse:
     """A simple text response (no tool calls)."""
-    return ScriptedResponse(events=[
-        TextDelta(text=text),
-        Usage(input_tokens=10, output_tokens=5),
-        StreamDone(usage=Usage(input_tokens=10, output_tokens=5), stop_reason="stop"),
-    ])
+    return ScriptedResponse(
+        events=[
+            TextDelta(text=text),
+            Usage(input_tokens=10, output_tokens=5),
+            StreamDone(usage=Usage(input_tokens=10, output_tokens=5), stop_reason="stop"),
+        ]
+    )
 
 
 def tool_response(tool_calls: list[tuple[str, str, dict]]) -> ScriptedResponse:
@@ -85,13 +92,13 @@ def tool_response(tool_calls: list[tuple[str, str, dict]]) -> ScriptedResponse:
 
     Args: list of (id, name, arguments) tuples.
     """
-    return ScriptedResponse(events=[
-        ToolCallDelta(id=tid, name=name, arguments=args)
-        for tid, name, args in tool_calls
-    ] + [
-        Usage(input_tokens=10, output_tokens=5),
-        StreamDone(usage=Usage(input_tokens=10, output_tokens=5), stop_reason="tool_calls"),
-    ])
+    return ScriptedResponse(
+        events=[ToolCallDelta(id=tid, name=name, arguments=args) for tid, name, args in tool_calls]
+        + [
+            Usage(input_tokens=10, output_tokens=5),
+            StreamDone(usage=Usage(input_tokens=10, output_tokens=5), stop_reason="tool_calls"),
+        ]
+    )
 
 
 def multi_turn(

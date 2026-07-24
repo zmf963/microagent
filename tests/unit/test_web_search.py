@@ -1,6 +1,5 @@
 """Tests for web_search builtin tool."""
 
-import pytest
 from microagent.core.tool import ToolRegistry, _default_builtins
 from microagent.core.types import ToolCall
 
@@ -21,6 +20,7 @@ class TestWebSearch:
     async def test_parse_results(self):
         """Result parser works on mock HTML."""
         from microagent.tools.builtins.web_search import _parse_ddg_lite
+
         html = """
         <a href="https://example.com/page">Example Title</a>
         <td class="result-snippet">This is a snippet.</td>
@@ -35,5 +35,6 @@ class TestWebSearch:
 
     async def test_parse_empty(self):
         from microagent.tools.builtins.web_search import _parse_ddg_lite
+
         results = _parse_ddg_lite("", max_results=5)
         assert results == []

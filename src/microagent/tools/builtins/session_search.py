@@ -10,7 +10,6 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 from ...session.search import search_sessions
-from ...core.store import SQLiteStore
 
 # ContextVar for passing store to session_search tool (thread-safe + async-safe)
 _current_store: contextvars.ContextVar = contextvars.ContextVar(

@@ -10,28 +10,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-
 # ---------------------------------------------------------------------------
 # Skill + LoadedSkill data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class Skill:
     """A single skill definition."""
-    name: str                     # "deepsearch"
-    namespace: str                # "claude" | "agentskills" | "user"
-    description: str              # used for fuzzy matching
-    body: str                     # markdown body
-    triggers: tuple[str, ...]     # explicit keywords for matching
-    source: str                   # file path or URL
-    mtime: float                  # for cache invalidation
+
+    name: str  # "deepsearch"
+    namespace: str  # "claude" | "agentskills" | "user"
+    description: str  # used for fuzzy matching
+    body: str  # markdown body
+    triggers: tuple[str, ...]  # explicit keywords for matching
+    source: str  # file path or URL
+    mtime: float  # for cache invalidation
 
 
 @dataclass(frozen=True, slots=True)
 class LoadedSkill:
     """A skill matched against a user query."""
+
     skill: Skill
-    match_reason: str             # "keyword:deepsearch" | "fuzzy:0.83"
+    match_reason: str  # "keyword:deepsearch" | "fuzzy:0.83"
     match_score: float
 
 
@@ -39,9 +41,11 @@ class LoadedSkill:
 # SkillLoader Protocol
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class SkillLoader(Protocol):
     """Protocol for skill backends."""
+
     async def load(self) -> tuple[Skill, ...]: ...
     async def match(self, user_input: str) -> tuple[LoadedSkill, ...]: ...
 
@@ -49,6 +53,7 @@ class SkillLoader(Protocol):
 # ---------------------------------------------------------------------------
 # CompositeSkillLoader — deduplicates and ranks across backends
 # ---------------------------------------------------------------------------
+
 
 class CompositeSkillLoader:
     """Combines multiple skill loaders, deduplicates by namespace:name,
@@ -78,6 +83,7 @@ class CompositeSkillLoader:
 import difflib
 import re
 from pathlib import Path
+
 import yaml
 
 
@@ -145,9 +151,7 @@ class ClaudeSkillLoader:
                     break
             else:
                 # Fuzzy match on description
-                ratio = difflib.SequenceMatcher(
-                    None, text, s.description.lower()
-                ).ratio()
+                ratio = difflib.SequenceMatcher(None, text, s.description.lower()).ratio()
                 if ratio > 0.4:
                     matches.append(LoadedSkill(s, f"fuzzy:{ratio:.2f}", ratio))
         return tuple(matches)

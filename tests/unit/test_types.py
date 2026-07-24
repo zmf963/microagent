@@ -1,8 +1,12 @@
 """Tests for core types: Message, ToolCall, ToolResult, Events."""
 
 from microagent.core.types import (
-    Message, ToolCall, ToolResult, Usage,
-    TextDelta, ToolCallDelta, TurnComplete, TurnFailed,
+    Message,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+    TurnComplete,
+    TurnFailed,
 )
 
 
@@ -73,6 +77,7 @@ class TestToolCall:
         assert d["type"] == "function"
         assert d["function"]["name"] == "read_file"
         import json
+
         assert json.loads(d["function"]["arguments"]) == {"path": "/tmp/x"}
 
 
