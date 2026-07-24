@@ -103,6 +103,8 @@ class TestSessionRunnerContextSource:
         messages = [Message.user("hi")]
         async for _ in runner.run_turn(messages):
             pass
-        # Context source added to system prompt — verify via LLM call record
+        # Context source injected to user message (ADR-0005: system prompt frozen)
         assert len(runner.llm.calls) == 1
-        assert "git: main" in runner.llm.calls[0]["system"]
+        user_msgs = [m for m in runner.llm.calls[0]["messages"] if m.role == "user"]
+        user_content = " ".join(m.content for m in user_msgs)
+        assert "git: main" in user_content

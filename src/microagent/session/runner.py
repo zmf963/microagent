@@ -147,7 +147,8 @@ class SessionRunner:
                 yield TurnFailed(f"budget exhausted: {e}")
                 return
 
-            system = self.system_prompt
+            # System prompt is frozen (ADR-0005) — skills/memory/context
+            # sources are injected into the user message, not system prompt.
 
             _threshold = self.compression_threshold
             if _threshold <= 0:
@@ -175,6 +176,11 @@ class SessionRunner:
                         yield TurnFailed(f"budget exhausted during compaction: {e}")
                         return
 
+            system = self.system_prompt
+
+            # Build context injection block for user message
+            context_parts: list[str] = []
+
             if self.skill_loader is not None and messages:
                 last_user = next((m for m in reversed(messages) if m.role == "user"), None)
                 if last_user:
@@ -182,12 +188,29 @@ class SessionRunner:
                         matched = await self.skill_loader.match(last_user.content)
                         if matched:
                             skill_texts = [m.skill.body for m in matched[:3]]
-                            system += "\n\n## Relevant Skills\n\n" + "\n---\n".join(skill_texts)
+                            context_parts.append(
+                                "## Relevant Skills\n\n" + "\n---\n".join(skill_texts)
+                            )
                     except Exception:
                         pass
 
             for src in self.context_sources:
-                system += await src.contribute(None)
+                contribution = await src.contribute(None)
+                if contribution:
+                    context_parts.append(contribution)
+
+            # Inject context into the last user message (frozen system prompt)
+            send_messages = messages
+            if context_parts:
+                context_block = "<context>\n" + "\n\n".join(context_parts) + "\n</context>"
+                # Find last user message and append context
+                send_messages = list(messages)
+                for i in range(len(send_messages) - 1, -1, -1):
+                    if send_messages[i].role == "user":
+                        send_messages[i] = Message.user(
+                            send_messages[i].content + "\n\n" + context_block
+                        )
+                        break
 
             for hook in self.pre_llm_hooks:
                 system = await hook(system)
@@ -204,7 +227,7 @@ class SessionRunner:
 
             async for event in self.llm.stream(
                 system=system,
-                messages=tuple(messages),
+                messages=tuple(send_messages),
                 tools=oai_tools,
             ):
                 if isinstance(event, TextDelta):
