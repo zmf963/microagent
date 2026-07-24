@@ -21,8 +21,10 @@ from .session.runner import SessionRunner
 @dataclass
 class Agent:
     """One-stop facade: assembles all components internally."""
+
     runner: SessionRunner
     registry: ToolRegistry
+    cron: "object | None" = None  # CronScheduler, populated when enable_cron=True
 
     @classmethod
     def from_config(
@@ -34,6 +36,7 @@ class Agent:
         tools: list[Any] | None = None,
         store: "Store | None" = None,
         session_id: str = "default",
+        enable_cron: bool = False,
     ) -> Agent:
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
@@ -51,7 +54,13 @@ class Agent:
             store=store,
             session_id=session_id,
         )
-        return cls(runner=runner, registry=registry)
+        agent = cls(runner=runner, registry=registry)
+
+        if enable_cron:
+            from .cron.scheduler import CronScheduler
+            agent.cron = CronScheduler(agent=agent, store=store)
+
+        return agent
 
     def run(self, text: str | list[Message]) -> str:
         """Sync entry point: accept a string (auto-wraps as user msg) or Message list."""
