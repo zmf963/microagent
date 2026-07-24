@@ -63,6 +63,7 @@ packages = ["src/microagent"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests that hit a real LLM API (set MICROAGENT_TEST_* env vars)",
+    "benchmark: performance benchmark tests",
 ]
 testpaths = ["tests"]
 
