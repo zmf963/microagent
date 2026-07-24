@@ -62,6 +62,7 @@ class MemoryExtractor:
         self._api_key = api_key
         self._model = model
         self._pending: set[asyncio.Task] = set()
+        self._client = None
 
     async def extract_async(
         self, history: tuple[dict[str, str], ...]
@@ -82,12 +83,13 @@ class MemoryExtractor:
             return  # openai not installed
 
         try:
-            client = AsyncOpenAI(
-                base_url=self._base_url,
-                api_key=self._api_key,
-            )
+            if self._client is None:
+                self._client = AsyncOpenAI(
+                    base_url=self._base_url,
+                    api_key=self._api_key,
+                )
             prompt = self._build_prompt(history)
-            response = await client.chat.completions.create(
+            response = await self._client.chat.completions.create(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,

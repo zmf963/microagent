@@ -74,7 +74,12 @@ class SessionRunner:
 
         if self.memory is not None:
             from ..memory.extractor import MemoryExtractor
-            self._extractor = MemoryExtractor(provider=self.memory)
+            self._extractor = MemoryExtractor(
+                provider=self.memory,
+                base_url=self.llm.config.base_url,
+                api_key=self.llm.config.api_key,
+                model=self.llm.config.model,
+            )
 
     async def resume(
         self, session_id: str, store: Store

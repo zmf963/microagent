@@ -130,7 +130,7 @@ class SQLiteMemoryProvider:
         self, session_id: str, history: tuple[Message, ...]
     ) -> None:
         # Store recent messages as basic context memories
-        now = time.time()
+        now = time.time_ns()
         for i, msg in enumerate(history[-5:]):  # last 5 messages
             if not msg.content.strip():
                 continue
