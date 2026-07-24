@@ -8,7 +8,9 @@ purely by ``base_url`` — no code-level provider adapters.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -83,6 +85,15 @@ def get_context_window(model: str) -> int:
         if model.startswith(prefix):
             return window
     return 128_000  # safe default
+
+
+# ---------------------------------------------------------------------------
+# Backoff retry configuration
+# ---------------------------------------------------------------------------
+
+MAX_BACKOFF_RETRIES = 3
+BACKOFF_BASE = 2.0  # exponential base
+BACKOFF_JITTER = 0.25  # ±25% jitter
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +195,33 @@ class OpenAIChatClient:
             )
         return self._client
 
+    async def _create_with_backoff(self, kwargs: dict[str, Any]):
+        """Call chat.completions.create with jittered exponential backoff.
+
+        Retries on rate-limit/timeout/connection/5xx errors up to
+        MAX_BACKOFF_RETRIES times. Auth errors (401/403) are NOT retried
+        here — they fall through to the credential pool rotation in stream().
+        """
+        client = self._get_client()
+        last_exc: Exception | None = None
+        for attempt in range(MAX_BACKOFF_RETRIES + 1):
+            try:
+                return await client.chat.completions.create(**kwargs)
+            except Exception as e:
+                if not self._is_backoff_retryable(e):
+                    raise
+                # Auth errors (401/403) are handled by credential pool, not backoff
+                status = getattr(e, "status_code", None)
+                if status in (401, 403):
+                    raise
+                last_exc = e
+                if attempt < MAX_BACKOFF_RETRIES:
+                    delay = (BACKOFF_BASE**attempt) * (1 + random.uniform(-BACKOFF_JITTER, BACKOFF_JITTER))
+                    await asyncio.sleep(max(0, delay))
+                else:
+                    raise
+        raise last_exc  # unreachable
+
     async def close(self) -> None:
         """Close the underlying AsyncOpenAI client, releasing connection pools."""
         if self._client is not None:
@@ -203,6 +241,34 @@ class OpenAIChatClient:
         # Also check by attribute for proxy/gateway errors without the SDK
         status_code = getattr(exc, "status_code", None)
         return status_code in (401, 403, 429)
+
+    @staticmethod
+    def _is_backoff_retryable(exc: Exception) -> bool:
+        """Check if an exception should trigger jittered backoff retry.
+
+        Covers: 429 (rate limit), timeout, connection error, 5xx.
+        Does NOT cover: 401/403 (auth — handled by credential pool),
+        400 (bad request — retrying won't help).
+        """
+        try:
+            from openai import (
+                APIConnectionError,
+                APIStatusError,
+                APITimeoutError,
+                InternalServerError,
+                RateLimitError,
+            )
+        except ImportError:
+            return False
+        if isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError)):
+            return True
+        if isinstance(exc, InternalServerError):
+            return True
+        if isinstance(exc, APIStatusError):
+            return exc.status_code >= 500
+        # Fallback: check by status_code attribute
+        status_code = getattr(exc, "status_code", None)
+        return status_code is not None and status_code >= 500
 
     def _on_auth_error(self) -> bool:
         """Handle auth/rate-limit error. Returns True if retry possible."""
@@ -243,7 +309,7 @@ class OpenAIChatClient:
             kwargs["service_tier"] = self.config.service_tier
 
         try:
-            stream = await client.chat.completions.create(**kwargs)
+            stream = await self._create_with_backoff(kwargs)
         except Exception as e:
             # Only rotate credentials on auth / rate-limit errors
             if self._is_retryable(e) and self._on_auth_error():
