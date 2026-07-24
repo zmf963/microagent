@@ -186,7 +186,7 @@ async def _main():
         store.close()
         return
 
-    print(f"{CYAN}{BOLD}MicroAgent v0.1.0{RST}  (model={config.llm.model})")
+    print(f"{CYAN}{BOLD}MicroAgent v1.0.0{RST}  (model={config.llm.model})")
     print(f"Session: {session_id}")
     print("Commands: /new /list /resume /compact /model /history /skill /clear /cost  |  Ctrl-D to exit\n")
 
