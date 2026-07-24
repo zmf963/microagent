@@ -24,6 +24,7 @@ from .types import ToolCall
 # ---------------------------------------------------------------------------
 
 class Decision(Enum):
+    """Tool permission decision: ALLOW, DENY, or ASK (interactive prompt)."""
     ALLOW = "allow"
     DENY = "deny"
     ASK = "ask"   # interactive prompt (requires a Surface)
@@ -35,6 +36,8 @@ class Decision(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Rule:
+    """Permission rule: fnmatch tool name + argument constraints → decision."""
+
     tool_pattern: str            # fnmatch: "fs.*", "bash", "write_*"
     arguments_constraint: dict   # {"path": "/workspace/**"}, supports fnmatch
     decision: Decision
@@ -43,6 +46,8 @@ class Rule:
 
 @dataclass(frozen=True, slots=True)
 class PermissionDecision:
+    """Result of evaluating a tool call — ALLOW/DENY/ASK + reason."""
+
     decision: Decision
     reason: str = ""
 

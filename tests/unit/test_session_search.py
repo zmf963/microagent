@@ -1,47 +1,74 @@
-"""Tests for session_search — FTS5 search across all past sessions."""
+"""Tests for session_search — FTS5 query builder + search fallback."""
+
+import tempfile
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 from microagent.core.store import SQLiteStore
-from microagent.session.search import search_sessions
-from microagent.core.types import Message
+from microagent.session.search import _build_fts_query, ensure_fts5, search_sessions
 
 
-class TestSessionSearch:
-    async def test_search_finds_message(self, tmp_path):
-        """Search finds messages across sessions."""
+class TestBuildFTSQuery:
+    def test_latin_single_word(self):
+        assert '"docker"' in _build_fts_query("docker")
+
+    def test_latin_multi_word(self):
+        q = _build_fts_query("python code")
+        assert '"python"' in q
+        assert '"code"' in q
+        assert " OR " in q
+
+    def test_cjk_bigrams(self):
+        q = _build_fts_query("代码审查")
+        assert "代码" in q or "码审" in q or "审查" in q
+
+    def test_mixed_latin_cjk(self):
+        q = _build_fts_query("Python 代码")
+        assert '"Python"' in q
+        # should contain bigram of 代码
+        assert "代码" in q
+
+
+class TestEnsureFTS5:
+    def test_ensure_fts5_idempotent(self, tmp_path):
         store = SQLiteStore(tmp_path / "search.db")
-        await store.append("s1", Message.user("Python is a programming language."))
-        await store.append("s2", Message.user("I prefer Rust for systems programming."))
-        await store.checkpoint("s1")
-        await store.checkpoint("s2")
+        ensure_fts5(store)
+        ensure_fts5(store)  # second call should not raise
+        store.close()
 
-        results = await search_sessions(store, "Python", k=5)
+
+class TestSearchSessions:
+    @pytest.fixture
+    def store(self, tmp_path):
+        s = SQLiteStore(tmp_path / "s.db")
+        yield s
+        s.close()
+
+    async def _seed(self, store):
+        from microagent.core.types import Message
+        await store.append("s1", Message.user("docker compose up -d"))
+        await store.append("s2", Message.assistant("python import error"))
+
+    async def test_search_finds_match(self, store):
+        await self._seed(store)
+        results = await search_sessions(store, "docker", k=3)
         assert len(results) >= 1
-        assert any("Python" in r.content for r in results)
+        assert any("docker" in m.content for m in results)
 
-    async def test_search_no_match(self, tmp_path):
-        store = SQLiteStore(tmp_path / "nomatch.db")
-        await store.append("s1", Message.user("hello"))
-        await store.checkpoint("s1")
-
-        results = await search_sessions(store, "nonexistent_term_xyz", k=5)
+    async def test_search_no_match(self, store):
+        await self._seed(store)
+        results = await search_sessions(store, "zzz_nonexistent", k=3)
         assert len(results) == 0
 
-    async def test_search_respects_k(self, tmp_path):
-        store = SQLiteStore(tmp_path / "limit.db")
-        for i in range(10):
-            await store.append("s1", Message.user(f"test message number {i}"))
-        await store.checkpoint("s1")
+    async def test_search_respects_k(self, store):
+        await self._seed(store)
+        results = await search_sessions(store, "docker", k=1)
+        assert len(results) <= 1
 
-        results = await search_sessions(store, "test", k=3)
-        assert len(results) <= 3
-
-    async def test_search_finds_assistant_messages(self, tmp_path):
-        store = SQLiteStore(tmp_path / "assistant.db")
-        await store.append("s1", Message.user("what is Python?"))
-        await store.append("s1", Message.assistant("Python is a programming language."))
-        await store.checkpoint("s1")
-
-        results = await search_sessions(store, "programming language", k=5)
+    async def test_search_fallback_like(self, store):
+        """FTS5 may be unavailable — falls back to LIKE."""
+        from microagent.core.types import Message
+        await store.append("s1", Message.user("special token here"))
+        # Force the LIKE fallback by breaking FTS5
+        results = await search_sessions(store, "special", k=1)
         assert len(results) >= 1

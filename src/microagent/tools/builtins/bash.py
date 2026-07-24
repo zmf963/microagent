@@ -41,7 +41,10 @@ async def bash(
 
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
         if len(output) > MAX_OUTPUT:
-            output = output[:MAX_OUTPUT] + f"\n[truncated: {len(output) - MAX_OUTPUT} bytes beyond {MAX_OUTPUT} limit]"
+            output = (
+                output[:MAX_OUTPUT]
+                + f"\n[truncated: {len(output) - MAX_OUTPUT} bytes beyond {MAX_OUTPUT} limit]"
+            )
         exit_code = proc.returncode
 
         if exit_code != 0:

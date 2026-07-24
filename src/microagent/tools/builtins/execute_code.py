@@ -14,10 +14,13 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-@tool("execute_code", description="Run Python code in a subprocess. Returns stdout. Timeout in seconds.")
+@tool("execute_code", description="Run Python code in a subprocess. "
+       "Returns stdout. Timeout in seconds.")
 async def execute_code(
     code: Annotated[str, Field(description="Python code to execute")],
-    timeout: Annotated[float, Field(description="Max execution time in seconds", ge=0.1, le=300)] = 60.0,
+    timeout: Annotated[
+        float, Field(description="Max execution time in seconds", ge=0.1, le=300)
+    ] = 60.0,
 ) -> ToolResult:
     if not code.strip():
         return ToolResult.error("code is required")
@@ -47,7 +50,8 @@ async def execute_code(
         output = stdout.decode("utf-8", errors="replace").strip()
         if proc.returncode != 0:
             return ToolResult.error(
-                f"exit code {proc.returncode}\n{output}" if output else f"exit code {proc.returncode}"
+                f"exit code {proc.returncode}\n{output}"
+                if output else f"exit code {proc.returncode}"
             )
 
         return ToolResult.ok(output if output else "(no output)")

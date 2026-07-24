@@ -54,6 +54,7 @@ TRUNCATION_PLACEHOLDER = "[Tool result truncated: {n} chars — re-run the tool 
 # ---------------------------------------------------------------------------
 
 def estimate_tokens(text: str) -> int:
+    """Estimate token count: latin ~4 chars/token, CJK ~2 chars/token."""
     if not text:
         return 0
     chars = len(text)
@@ -62,6 +63,7 @@ def estimate_tokens(text: str) -> int:
 
 
 def count_tokens(messages: tuple[Message, ...]) -> int:
+    """Sum estimated tokens across all messages."""
     return sum(estimate_tokens(m.content or "") for m in messages)
 
 

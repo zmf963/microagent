@@ -115,6 +115,8 @@ class LLMConfig:
 
 @dataclass(frozen=True, slots=True)
 class StreamDone:
+    """Stream finished — final usage + stop reason."""
+
     usage: Usage
     stop_reason: str
 
@@ -128,6 +130,8 @@ StreamEvent = TextDelta | ToolCallDelta | Usage | StreamDone
 
 @runtime_checkable
 class LLMClient(Protocol):
+    """LLM provider interface — stream responses + model forking."""
+
     config: LLMConfig
 
     async def stream(
