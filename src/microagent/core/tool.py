@@ -306,3 +306,54 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import write_file as _wf  # noqa: F401
 
     return list(_registry.values())
+
+
+# ---------------------------------------------------------------------------
+# Toolset layering — core / extended / scene
+# ---------------------------------------------------------------------------
+
+TOOLSETS: dict[str, frozenset[str]] = {
+    "core": frozenset({
+        "read_file",
+        "write_file",
+        "edit_file",
+        "grep",
+        "glob",
+        "bash",
+        "task",
+    }),
+    "extended": frozenset({
+        "web_search",
+        "web_fetch",
+        "context7",
+        "session_search",
+        "todo",
+        "plan",
+        "exit",
+        "skill_manage",
+        "process",
+    }),
+    "scene": frozenset({
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_click",
+        "browser_type",
+        "execute_code",
+        "vision_analyze",
+    }),
+}
+
+
+def resolve_toolset(spec: str) -> set[str]:
+    """Resolve a comma-separated toolset spec into a set of tool names.
+
+    Example: "core,extended" → union of core and extended tool names.
+    Unknown layers are silently ignored (empty contribution).
+    """
+    result: set[str] = set()
+    for layer in spec.split(","):
+        layer = layer.strip()
+        if layer in TOOLSETS:
+            result |= TOOLSETS[layer]
+    return result
+

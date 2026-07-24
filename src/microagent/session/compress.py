@@ -185,20 +185,25 @@ def snip_tool_results(
     messages: tuple[Message, ...],
     keep_recent: int = 10,
     max_tokens: int = 200_000,
+    protect_first_n: int = 3,
 ) -> tuple[Message, ...]:
     """Zero-cost: remove oldest tool_result messages until under token limit.
 
     - Preserves all user and assistant messages
-    - Preserves the most recent `keep_recent` messages (any role)
-    - Removes oldest tool_result messages first
+    - Preserves the first `protect_first_n` messages (head protection)
+    - Preserves the most recent `keep_recent` messages (tail protection)
+    - Removes oldest tool_result messages outside protected zones first
     """
     total_tokens = count_tokens(messages)
     if total_tokens <= max_tokens:
         return messages
 
     result = list(messages)
-    # Protected zone: last `keep_recent` messages
-    protected = set(range(max(0, len(result) - keep_recent), len(result)))
+    # Head protection: first protect_first_n messages
+    head_protected = set(range(min(protect_first_n, len(result))))
+    # Tail protection: last keep_recent messages
+    tail_protected = set(range(max(0, len(result) - keep_recent), len(result)))
+    protected = head_protected | tail_protected
 
     # Pre-compute per-message token counts to avoid O(n²) re-scanning
     msg_tokens = [estimate_tokens(m.content or "") for m in result]
@@ -350,6 +355,7 @@ class CompactionState:
     previous_summary: str | None = None  # iterative summary across compactions
     _cooldown_until: float = 0.0
     _is_compaction_call: bool = False  # recursion guard
+    _ineffective_count: int = 0  # anti-jitter: count consecutive ineffective compressions
 
     def record_failure(self) -> None:
         self.consecutive_failures += 1
@@ -357,6 +363,19 @@ class CompactionState:
     def record_success(self) -> None:
         self.consecutive_failures = 0
         self._cooldown_until = 0.0
+        self._ineffective_count = 0
+
+    def record_ineffective(self) -> None:
+        """Record a compression that saved <10% tokens."""
+        self._ineffective_count += 1
+
+    def should_skip_compression(self) -> bool:
+        """After 2 ineffective compressions, skip until next user input."""
+        return self._ineffective_count >= 2
+
+    def reset_for_new_turn(self) -> None:
+        """Reset anti-jitter counter on new user input."""
+        self._ineffective_count = 0
 
     def activate_cooldown(self) -> None:
         self._cooldown_until = time.monotonic() + COOLDOWN_SECONDS
