@@ -125,8 +125,12 @@ class SessionRunner:
         The text will be appended to the most recent tool_result on the
         next iteration boundary. If the current iteration has no tool
         calls (pure text response), the steer waits until the next turn.
+        Also propagates to active subagents (interrupt cascade).
         """
         self._steer_pending = text
+        # Cascade to active subagents
+        for child in getattr(self, "_active_subagents", []):
+            child.steer(text)
 
     # Tools blocked in plan mode (read-only mode)
     _PLAN_BLOCKED_TOOLS = frozenset({

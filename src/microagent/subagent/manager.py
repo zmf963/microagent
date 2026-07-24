@@ -89,14 +89,20 @@ class SubagentManager:
         """Spawn a subagent and return its final text result.
 
         The subagent runs with:
-        - Filtered tools (whitelist/blacklist from spec)
+        - Filtered tools (intersection of spec whitelist ∩ parent available)
         - Child Budget spawned from parent (tree-shaped tracking + shared cancel)
         - Same LLM (model overridden via spec.model if set)
+        - Parent's cancel_event propagates to child (interrupt cascade)
         """
         spec = self._specs[spec_name]
 
-        # Build filtered tool registry
-        child_registry = self._filter_registry(spec, parent_runner.registry)
+        # Build filtered tool registry — intersection with parent's available tools
+        child_registry = self._filter_registry(spec, parent_runner.registry, parent_runner)
+
+        # Check if parent is already cancelled
+        if parent_runner.budget._cancel_event is not None:
+            if parent_runner.budget._cancel_event.is_set():
+                return f"[subagent {spec_name} cancelled: parent budget exhausted]"
 
         # Spawn child budget from parent — shares cancel_event,
         # reports consumption up the parent chain
@@ -123,6 +129,11 @@ class SubagentManager:
             context_sources=parent_runner.context_sources,
         )
 
+        # Register child for steer propagation
+        if not hasattr(parent_runner, "_active_subagents"):
+            parent_runner._active_subagents = []
+        parent_runner._active_subagents.append(child_runner)
+
         # Run the subagent turn
         messages: list[Message] = [Message.user(prompt)]
         parts: list[str] = []
@@ -134,6 +145,8 @@ class SubagentManager:
                 if isinstance(event, TurnFailed):
                     return f"[subagent {spec_name} failed: {event.reason}]"
         finally:
+            if child_runner in parent_runner._active_subagents:
+                parent_runner._active_subagents.remove(child_runner)
             await child_runner.close()
             # Close forked LLM client (has its own AsyncOpenAI connection pool)
             if forked_llm and hasattr(llm, "close"):
@@ -141,15 +154,27 @@ class SubagentManager:
 
         return "".join(parts) or f"[subagent {spec_name} returned empty]"
 
-    def _filter_registry(self, spec: SubagentSpec, parent_registry: ToolRegistry) -> ToolRegistry:
-        """Build a filtered registry based on spec's allowlist/blocklist."""
+    def _filter_registry(self, spec: SubagentSpec, parent_registry: ToolRegistry, parent_runner: SessionRunner) -> ToolRegistry:
+        """Build a filtered registry based on spec's allowlist/blocklist.
+
+        Intersection principle: if tools_allowed is non-empty, the final
+        tool set = tools_allowed ∩ parent_available_tools. Parent's mode
+        (plan/build) also filters the available set.
+        Blacklist always takes priority over both.
+        """
+        # Get parent's available tools (considering mode)
+        parent_available = parent_runner._get_available_tools()
+
         filtered = ToolRegistry()
 
         for name in parent_registry.names:
+            # Must be in parent's available set (mode filtering)
+            if name not in parent_available:
+                continue
             # Blocklist takes priority
             if name in spec.tools_blocked:
                 continue
-            # If allowlist is set, only include those
+            # If allowlist is set, only include tools in BOTH allowlist AND parent
             if spec.tools_allowed and name not in spec.tools_allowed:
                 continue
             tool = parent_registry.get(name)
