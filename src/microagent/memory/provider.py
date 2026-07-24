@@ -134,7 +134,7 @@ class SQLiteMemoryProvider:
 
     async def sync_turn(self, session_id: str, history: tuple[Message, ...]) -> None:
         # Store recent messages as basic context memories
-        now = time.time_ns()
+        now = time.time()
         for i, msg in enumerate(history[-5:]):  # last 5 messages
             if not msg.content.strip():
                 continue
@@ -154,8 +154,17 @@ class SQLiteMemoryProvider:
             self._insert(m)
 
     async def delete(self, memory_id: str) -> None:
+        row = self._conn.execute(
+            "SELECT rowid FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
+        if row:
+            # External content FTS5 requires explicit 'delete' command
+            self._conn.execute(
+                "INSERT INTO memories_fts(memories_fts, rowid, content) "
+                "VALUES('delete', ?, '')",
+                (row[0],),
+            )
         self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        # FTS5 content table auto-deletes via content_rowid
 
     def system_prompt_block(self) -> str:
         return ""

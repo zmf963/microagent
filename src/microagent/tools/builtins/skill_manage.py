@@ -39,7 +39,7 @@ def _is_agent_created(name: str) -> bool:
     try:
         data = json.loads(pf.read_text())
         return data.get("created_by") == "agent"
-    except json.JSONDecodeError, KeyError:
+    except (json.JSONDecodeError, KeyError):
         return False
 
 

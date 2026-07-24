@@ -1,40 +1,71 @@
 """browser tools — Playwright-based web browsing.
 
 Provides navigate, snapshot, click, and type operations.
-Uses a module-level Playwright session to maintain browser state
-across tool calls within a session.
+Uses a per-session page state via ContextVar to maintain browser state
+across tool calls within a session, providing isolation between
+concurrent Agent sessions.
+
+The Playwright/browser instances are module-level (expensive to create,
+shared across sessions). Each session gets its own page via ContextVar.
 
 Requires: pip install playwright && playwright install chromium
 """
 
 from __future__ import annotations
 
-import threading
+import contextvars
+from dataclasses import dataclass
 from typing import Annotated
 
+import anyio
 from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
 
-# Module-level browser state — guarded by _lock for concurrent safety
-_page: object = None
+# Module-level browser instances (expensive to create, shared across sessions)
 _browser: object = None
 _playwright: object = None
-_lock = threading.Lock()
+_lock = anyio.Lock()
 
 
-async def _get_page() -> object | None:
-    """Get or raise if no page is open."""
-    return _page
+# ---------------------------------------------------------------------------
+# Per-session browser state (ContextVar — same pattern as process.py)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BrowserState:
+    """Per-session browser page state."""
+
+    page: object = None  # Playwright Page | None
+
+
+_current_state: contextvars.ContextVar[BrowserState | None] = contextvars.ContextVar(
+    "browser_current_state", default=None
+)
+
+
+def _get_state() -> BrowserState:
+    """Get the current session's browser state.
+
+    When running inside a SessionRunner, the ContextVar is set to the
+    runner's state. When called directly (e.g., in tests without a
+    runner), a temporary state is lazily created and stored.
+    """
+    state = _current_state.get()
+    if state is None:
+        state = BrowserState()
+        _current_state.set(state)
+    return state
 
 
 async def _ensure_browser():
-    """Lazily initialize Playwright and Chromium."""
+    """Lazily initialize Playwright and Chromium (shared across sessions)."""
     global _playwright, _browser
     if _browser is not None:
         return
-    with _lock:
+    async with _lock:
         if _browser is not None:
             return
         try:
@@ -51,18 +82,18 @@ async def _ensure_browser():
 async def browser_navigate(
     url: Annotated[str, Field(description="URL to navigate to")],
 ) -> ToolResult:
-    global _page
     if not url.strip():
         return ToolResult.error("url is required")
 
     try:
         await _ensure_browser()
-        if _page is not None:
-            await _page.close()
-        _page = await _browser.new_page()
-        await _page.goto(url, timeout=30000)
-        title = await _page.title()
-        return ToolResult.ok(f"Opened: {title}\n{_page.url}")
+        state = _get_state()
+        if state.page is not None:
+            await state.page.close()
+        state.page = await _browser.new_page()
+        await state.page.goto(url, timeout=30000)
+        title = await state.page.title()
+        return ToolResult.ok(f"Opened: {title}\n{state.page.url}")
     except ImportError as e:
         return ToolResult.error(str(e))
     except Exception as e:
@@ -71,12 +102,13 @@ async def browser_navigate(
 
 @tool("browser_snapshot", description="Get a text snapshot of the current page.")
 async def browser_snapshot() -> ToolResult:
-    if _page is None:
+    state = _get_state()
+    if state.page is None:
         return ToolResult.error("no page open — call browser_navigate first")
 
     try:
         # Extract text content and interactive elements
-        text = await _page.evaluate("""() => {
+        text = await state.page.evaluate("""() => {
             const body = document.body;
             if (!body) return '(empty page)';
             // Get all visible text
@@ -110,7 +142,8 @@ async def browser_click(
         str, Field(description="CSS selector (e.g. '#id', '.class', 'button') or link text")
     ],
 ) -> ToolResult:
-    if _page is None:
+    state = _get_state()
+    if state.page is None:
         return ToolResult.error("no page open — call browser_navigate first")
     if not ref.strip():
         return ToolResult.error("ref is required")
@@ -118,11 +151,11 @@ async def browser_click(
     try:
         # Try CSS selector first, then text match
         try:
-            await _page.click(ref, timeout=5000)
+            await state.page.click(ref, timeout=5000)
         except Exception:
-            await _page.click(f"text={ref}", timeout=5000)
-        await _page.wait_for_load_state("networkidle", timeout=10000)
-        title = await _page.title()
+            await state.page.click(f"text={ref}", timeout=5000)
+        await state.page.wait_for_load_state("networkidle", timeout=10000)
+        title = await state.page.title()
         return ToolResult.ok(f"Clicked '{ref}'. Current page: {title}")
     except Exception as e:
         return ToolResult.error(f"click failed: {e!r}")
@@ -133,13 +166,14 @@ async def browser_type(
     ref: Annotated[str, Field(description="CSS selector for the input field")],
     text: Annotated[str, Field(description="Text to type")],
 ) -> ToolResult:
-    if _page is None:
+    state = _get_state()
+    if state.page is None:
         return ToolResult.error("no page open — call browser_navigate first")
     if not ref.strip():
         return ToolResult.error("ref is required")
 
     try:
-        await _page.fill(ref, text, timeout=5000)
+        await state.page.fill(ref, text, timeout=5000)
         return ToolResult.ok(f"Typed '{text}' into {ref}")
     except Exception as e:
         return ToolResult.error(f"type failed: {e!r}")

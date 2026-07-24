@@ -119,8 +119,8 @@ class CronScheduler:
             if not sessions:
                 return [Message.user(job.prompt)]
 
-            # Pick the most recent session
-            last_sid = sessions[-1]
+            # Pick the most recent session (list_sessions returns DESC by recency)
+            last_sid = sessions[0]
             history = await self.store.load_history(last_sid)
             if not history:
                 return [Message.user(job.prompt)]

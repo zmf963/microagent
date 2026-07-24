@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-253%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-287%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~3k LOC**, **12 built-in tools**, **55 public API symbols**, **148 unit tests**.
+**~6k LOC**, **22 built-in tools**, **62 public API symbols**, **287 unit tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop is <200 LOC. Capability lives in tools and extension points, not in the core.
 
@@ -367,17 +367,17 @@ await scheduler.stop()
 
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
-| `core/` | 5 | 744 | types, tool registry, permission, store, event bus |
-| `tools/` | 10 | 573 | 12 built-in tools (read, write, bash, grep, etc.) |
-| `session/` | 2 | 356 | runner loop, tree-shaped budget (spawn + cancel) |
-| `memory/` | 2 | 307 | FTS5 memory provider, LLM extractor |
-| `skill/` | 2 | 254 | Claude skill loader, curator |
-| `terminal/` | 2 | 239 | local + docker + SSH backends |
-| `surface/` | 3 | 202 | CLI REPL, textual TUI, FastAPI web |
-| `llm/` | 1 | 184 | OpenAI-compatible client (SDK v2 streaming) |
-| `subagent/` | 1 | 151 | subagent manager with isolated budgets |
-| `cron/` | 1 | 100 | APScheduler-based cron jobs |
-| `mcp/` | 1 | 73 | MCP client (official SDK bridge) |
+| `core/` | 5 | 969 | types, tool registry, permission, store, event bus |
+| `tools/` | 17 | 1364 | 22 built-in tools (read, write, bash, grep, browser, etc.) |
+| `session/` | 5 | 1341 | runner loop, compression pyramid, budget, attachments, search |
+| `memory/` | 2 | 345 | FTS5 memory provider, LLM extractor |
+| `skill/` | 2 | 258 | Claude skill loader, curator |
+| `terminal/` | 2 | 266 | local + docker + SSH backends |
+| `surface/` | 1 | 369 | CLI REPL with /slash commands |
+| `llm/` | 2 | 382 | OpenAI-compatible client, credential pool |
+| `subagent/` | 1 | 159 | subagent manager with isolated budgets |
+| `cron/` | 1 | 132 | APScheduler-based cron jobs |
+| `mcp/` | 2 | 256 | MCP client + catalog |
 | `plugin/` | 1 | 36 | 3 extension Protocols |
 
 ## Built-in Tools
@@ -390,10 +390,20 @@ await scheduler.stop()
 | `bash` | Execute shell commands via local/docker/SSH backends |
 | `grep` | Regex search in files with line numbers |
 | `glob` | Find files by glob pattern, sorted output |
-| `web_fetch` | Fetch URL content via httpx |
+| `process` | Manage background processes (start/poll/kill/wait/log/write/list) |
+| `web_search` | Search the web via DuckDuckGo lite |
+| `web_fetch` | Fetch URL content via httpx (SSRF-protected) |
+| `context7` | Fetch up-to-date documentation via Context7 API |
+| `browser_navigate` | Open a URL in Playwright browser |
+| `browser_snapshot` | Get a text snapshot of the current page |
+| `browser_click` | Click an element by CSS selector or text content |
+| `browser_type` | Type text into an input field by CSS selector |
+| `execute_code` | Execute Python code in a subprocess sandbox |
+| `vision_analyze` | Analyze images via base64 + vision API |
+| `session_search` | Search past conversation history (FTS5) |
+| `task` | Spawn subagents (explore: read-only, general: multi-step) |
 | `todo` | Manage inline task list (list/add/update/remove) |
 | `plan` | Create multi-step plans without executing |
-| `task` | Spawn subagents (explore: read-only, general: multi-step) |
 | `skill_manage` | Runtime skill creation/patching/deletion |
 | `exit` | Signal task completion |
 
@@ -403,9 +413,8 @@ await scheduler.stop()
 |-------|---------|----------|
 | `mcp` | `pip install microagent[mcp]` | MCP client (official SDK, stdio transport) |
 | `cron` | `pip install microagent[cron]` | APScheduler cron jobs |
-| `tui` | `pip install microagent[tui]` | Textual terminal UI (`microagent-tui`) |
-| `web` | `pip install microagent[web]` | FastAPI SSE streaming API (`microagent-web`) |
 | `ssh` | `pip install microagent[ssh]` | SSH terminal backend via paramiko |
+| `browser` | `pip install microagent[browser]` | Playwright browser automation |
 | `dev` | `pip install microagent[dev]` | pytest + pytest-asyncio |
 
 ## Running Tests
@@ -413,7 +422,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 148 passed, 1 skipped
+# 287 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \

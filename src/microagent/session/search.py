@@ -132,7 +132,7 @@ async def search_sessions(
                         content=obj.get("content", ""),
                     )
                 )
-            except json.JSONDecodeError, KeyError:
+            except (json.JSONDecodeError, KeyError):
                 continue
         return tuple(results)
 
@@ -155,6 +155,6 @@ async def search_sessions(
                         content=obj.get("content", ""),
                     )
                 )
-            except json.JSONDecodeError, KeyError:
+            except (json.JSONDecodeError, KeyError):
                 continue
         return tuple(results)

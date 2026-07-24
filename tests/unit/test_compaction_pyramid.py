@@ -1,6 +1,6 @@
 """Tests for the 4-layer compression pyramid."""
 
-from microagent.core.types import Message, ToolResult
+from microagent.core.types import Message, ToolCall, ToolResult
 from microagent.session.compress import (
     CompactionState,
     build_compaction_summary_prompt,
@@ -11,10 +11,11 @@ from microagent.session.compress import (
 
 class TestMicroCompact:
     def test_truncates_long_tool_results(self):
-        """Tool results >500 chars are truncated to a placeholder."""
+        """Tool results >500 chars from re-obtainable tools are truncated."""
+        tc = ToolCall(id="c1", name="read_file", arguments={"path": "app.py"})
         messages = (
             Message.user("read app.py"),
-            Message.assistant("let me read", tool_calls=()),
+            Message.assistant("let me read", tool_calls=(tc,)),
             Message.tool_result(ToolResult.ok("x" * 600), tool_call_id="c1"),
             Message.assistant("file contents: " + "x" * 600),
         )
@@ -50,6 +51,19 @@ class TestMicroCompact:
         messages = (Message.tool_result(ToolResult.ok("short"), tool_call_id="c1"),)
         result = micro_compact(messages)
         assert result[0].content == "short"
+
+    def test_preserves_non_reobtainable_tool_results(self):
+        """Tool results from non-reobtainable tools (write_file) are not truncated."""
+        tc = ToolCall(id="c2", name="write_file", arguments={"path": "out.txt", "content": "data"})
+        messages = (
+            Message.user("write file"),
+            Message.assistant("writing", tool_calls=(tc,)),
+            Message.tool_result(ToolResult.ok("x" * 600), tool_call_id="c2"),
+        )
+        result = micro_compact(messages)
+        # Non-reobtainable tool result preserved (not truncated)
+        assert len(result[2].content) == 600
+        assert "truncated" not in result[2].content.lower()
 
 
 class TestSnipToolResults:

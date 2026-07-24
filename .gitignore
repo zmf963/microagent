@@ -25,3 +25,6 @@ htmlcov/
 
 # Coverage
 coverage.xml
+
+# Analysis docs (local only)
+docs/

@@ -4,13 +4,13 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~5k LOC, 22 tools, 253 tests).
+MicroAgent is an embeddable AI agent core library (~6k LOC, 22 tools, 287 tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
 The single most important principle: **the core is a narrow waist; capability
 lives in tools and extension points, not in the core loop.** SessionRunner
-(~280 LOC) is the sole execution path. Everything else — memory, skills,
+(~340 LOC) is the sole execution path. Everything else — memory, skills,
 compression, permissions, subagents — plugs in through Protocols.
 
 ## Project Structure
@@ -19,7 +19,7 @@ compression, permissions, subagents — plugs in through Protocols.
 microagent/
 ├── pyproject.toml          # hatchling build, 5 deps, 5 optional extras
 ├── src/microagent/
-│   ├── __init__.py          # Public API surface (~60 symbols)
+│   ├── __init__.py          # Public API surface (~62 symbols)
 │   ├── agent.py             # Agent facade — from_config(), run(), arun()
 │   ├── config.py            # Config resolution — CLI > env > file > default
 │   ├── core/
@@ -32,7 +32,7 @@ microagent/
 │   │   ├── client.py        # LLMConfig, OpenAIChatClient, pricing, context windows
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
-│   │   ├── runner.py        # SessionRunner — the core loop (~280 LOC)
+│   │   ├── runner.py        # SessionRunner — the core loop (~340 LOC)
 │   │   ├── compress.py      # 4-layer compression pyramid
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
@@ -54,7 +54,7 @@ microagent/
 │   ├── cron/                # APScheduler cron integration
 │   └── surface/cli.py       # ANSI streaming CLI with /slash commands
 └── tests/
-    ├── unit/                # 253 unit tests (mock LLM)
+    ├── unit/                # 287 unit tests (mock LLM)
     └── integration/         # 7 integration tests (real LLM API)
 ```
 
@@ -62,7 +62,7 @@ microagent/
 
 ### 1. The core loop is sacred
 
-`SessionRunner.run_turn()` is the only execution path. It is ~280 LOC and
+`SessionRunner.run_turn()` is the only execution path. It is ~340 LOC and
 every line traces to the core contract:
 
 ```
@@ -152,7 +152,7 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 253 tests
+python -m pytest tests/unit/ -q            # 287 tests
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

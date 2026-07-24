@@ -1,12 +1,14 @@
 """todo + plan + exit builtin tools — in-memory state tools, no external I/O.
 
 These tools manage lightweight in-process state. The session-level
-state (todo list, plan items) is stored in a module-level dict keyed
-by a session_id string. The exit tool signals turn termination.
+state (todo list, plan items) is stored in a per-session registry via
+ContextVar, providing isolation between concurrent Agent sessions.
 """
 
 from __future__ import annotations
 
+import contextvars
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from pydantic import Field
@@ -15,14 +17,35 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 # ---------------------------------------------------------------------------
-# In-process state store (session-scoped)
+# Per-session in-process state (ContextVar — same pattern as process.py)
 # ---------------------------------------------------------------------------
 
-_session_state: dict[str, dict] = {}
+
+@dataclass
+class SessionState:
+    """Per-session in-memory state (todos + plan)."""
+
+    todos: list[dict] = field(default_factory=list)
+    plan: list[str] = field(default_factory=list)
 
 
-def _get_state(session_id: str = "default") -> dict:
-    return _session_state.setdefault(session_id, {"todos": [], "plan": []})
+_current_state: contextvars.ContextVar[SessionState | None] = contextvars.ContextVar(
+    "todo_plan_current_state", default=None
+)
+
+
+def _get_state() -> SessionState:
+    """Get the current session's state.
+
+    When running inside a SessionRunner, the ContextVar is set to the
+    runner's state. When called directly (e.g., in tests without a
+    runner), a temporary state is lazily created and stored.
+    """
+    state = _current_state.get()
+    if state is None:
+        state = SessionState()
+        _current_state.set(state)
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +66,7 @@ async def todo(
     ] = "pending",
 ) -> ToolResult:
     state = _get_state()
-    todos = state["todos"]
+    todos = state.todos
 
     if action == "list":
         if not todos:
@@ -88,19 +111,19 @@ async def plan(
     state = _get_state()
 
     if action == "show":
-        if not state["plan"]:
+        if not state.plan:
             return ToolResult.ok("(no plan set)")
-        lines = [f"  {i + 1}. {s}" for i, s in enumerate(state["plan"])]
+        lines = [f"  {i + 1}. {s}" for i, s in enumerate(state.plan)]
         return ToolResult.ok("\n".join(lines))
 
     elif action == "set":
         if not steps.strip():
             return ToolResult.error("steps is required for set")
-        state["plan"] = [s.strip() for s in steps.strip().split("\n") if s.strip()]
-        return ToolResult.ok(f"plan set with {len(state['plan'])} steps")
+        state.plan = [s.strip() for s in steps.strip().split("\n") if s.strip()]
+        return ToolResult.ok(f"plan set with {len(state.plan)} steps")
 
     elif action == "clear":
-        state["plan"] = []
+        state.plan = []
         return ToolResult.ok("plan cleared")
 
     else:

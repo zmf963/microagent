@@ -128,6 +128,7 @@ async def _main():
     if positional:
         prompt = " ".join(positional)
         await _run_streaming(agent, [Message.user(prompt)])
+        await agent.close()
         store.close()
         return
 
@@ -139,7 +140,7 @@ async def _main():
     while True:
         try:
             raw = input(f"{BOLD}>>>{RST} ").strip()
-        except EOFError, KeyboardInterrupt:
+        except (EOFError, KeyboardInterrupt):
             print("\nBye!")
             break
         if not raw:
@@ -151,6 +152,7 @@ async def _main():
             arg = rest[0] if rest else ""
 
             if cmd == "new":
+                await agent.close()
                 session_id = f"cli-{int(time.time())}"
                 messages = []
                 agent = Agent.from_config(
@@ -165,7 +167,7 @@ async def _main():
                 sessions = await _list_sessions(store)
                 if sessions:
                     print(f"{GRAY}Sessions:{RST}")
-                    for sid, count, preview in sessions[-10:]:
+                    for sid, count, preview in sessions[:10]:
                         mark = f"{GREEN}*{RST}" if sid == session_id else " "
                         print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
                 else:
@@ -176,6 +178,7 @@ async def _main():
                 if target:
                     history = await store.load_history(target)
                     if history:
+                        await agent.close()
                         messages = list(history)
                         session_id = target
                         agent = Agent.from_config(
@@ -212,6 +215,7 @@ async def _main():
                     )
                     messages[:] = list(compressed)
                     # Rebuild agent so runner state is consistent with compacted messages
+                    await agent.close()
                     agent = Agent.from_config(
                         config.llm,
                         system_prompt=config.system_prompt,
@@ -240,6 +244,7 @@ async def _main():
         await _run_streaming(agent, messages)
         print()
 
+    await agent.close()
     store.close()
 
 
@@ -252,7 +257,7 @@ async def _list_sessions(store) -> list[tuple[str, int, str]]:
 async def _pick_last_session(store) -> str | None:
     """Pick the most recent session."""
     sessions = await store.list_sessions()
-    return sessions[-1] if sessions else None
+    return sessions[0] if sessions else None
 
 
 async def _run_streaming(agent: Agent, messages: list[Message]) -> None:

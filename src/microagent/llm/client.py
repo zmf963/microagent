@@ -184,6 +184,26 @@ class OpenAIChatClient:
             )
         return self._client
 
+    async def close(self) -> None:
+        """Close the underlying AsyncOpenAI client, releasing connection pools."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        """Check if an exception is an auth/rate-limit error worth retrying."""
+        try:
+            from openai import APIStatusError
+        except ImportError:
+            return False
+        if isinstance(exc, APIStatusError):
+            status = exc.status_code
+            return status == 401 or status == 403 or status == 429
+        # Also check by attribute for proxy/gateway errors without the SDK
+        status_code = getattr(exc, "status_code", None)
+        return status_code in (401, 403, 429)
+
     def _on_auth_error(self) -> bool:
         """Handle auth/rate-limit error. Returns True if retry possible."""
         if self.pool is None:
@@ -224,9 +244,11 @@ class OpenAIChatClient:
 
         try:
             stream = await client.chat.completions.create(**kwargs)
-        except Exception:
-            # Auth / rate-limit error — try credential rotation
-            if self._on_auth_error():
+        except Exception as e:
+            # Only rotate credentials on auth / rate-limit errors
+            if self._is_retryable(e) and self._on_auth_error():
+                # Update kwargs: new credential may have a different model
+                kwargs["model"] = self.config.model
                 client = self._get_client()
                 stream = await client.chat.completions.create(**kwargs)
             else:

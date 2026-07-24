@@ -7,7 +7,7 @@ tool calls and reasoning are invisible (context firewall).
 Design (from design doc §9):
 - SubagentSpec: declarative config for each subagent type
 - SubagentManager: spawns subagents, filters tools, collects results
-- M3a: independent Budget per subagent (no tree/descendants tracking yet)
+- M3b: child Budget spawned from parent (tree-shaped tracking + shared cancel)
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from dataclasses import dataclass
 
 from ..core.tool import ToolRegistry
 from ..core.types import Message, TurnComplete, TurnFailed
-from ..session.budget import Budget
 from ..session.runner import SessionRunner
 
 # ---------------------------------------------------------------------------
@@ -91,7 +90,7 @@ class SubagentManager:
 
         The subagent runs with:
         - Filtered tools (whitelist/blacklist from spec)
-        - Independent Budget (not shared with parent)
+        - Child Budget spawned from parent (tree-shaped tracking + shared cancel)
         - Same LLM (model overridden via spec.model if set)
         """
         spec = self._specs[spec_name]
@@ -99,16 +98,19 @@ class SubagentManager:
         # Build filtered tool registry
         child_registry = self._filter_registry(spec, parent_runner.registry)
 
-        # Build independent budget
-        child_budget = Budget(
+        # Spawn child budget from parent — shares cancel_event,
+        # reports consumption up the parent chain
+        child_budget = parent_runner.budget.spawn(
             max_iterations=spec.max_iterations,
             max_cost_usd=spec.max_cost_usd,
         )
 
         # Build child runner — reuse parent LLM, optionally override model
         llm = parent_runner.llm
+        forked_llm = False
         if spec.model:
             llm = llm.for_model(spec.model)
+            forked_llm = True
 
         child_runner = SessionRunner(
             llm=llm,
@@ -124,12 +126,18 @@ class SubagentManager:
         # Run the subagent turn
         messages: list[Message] = [Message.user(prompt)]
         parts: list[str] = []
-        async for event in child_runner.run_turn(messages):
-            if isinstance(event, TurnComplete):
-                parts.append(event.content)
-                break
-            if isinstance(event, TurnFailed):
-                return f"[subagent {spec_name} failed: {event.reason}]"
+        try:
+            async for event in child_runner.run_turn(messages):
+                if isinstance(event, TurnComplete):
+                    parts.append(event.content)
+                    break
+                if isinstance(event, TurnFailed):
+                    return f"[subagent {spec_name} failed: {event.reason}]"
+        finally:
+            await child_runner.close()
+            # Close forked LLM client (has its own AsyncOpenAI connection pool)
+            if forked_llm and hasattr(llm, "close"):
+                await llm.close()
 
         return "".join(parts) or f"[subagent {spec_name} returned empty]"
 

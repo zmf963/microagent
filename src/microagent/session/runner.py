@@ -75,6 +75,15 @@ class SessionRunner:
         self._cached_tools: list[dict] | None = None
         self._extractor = None
 
+        # Per-session process registry (isolation between concurrent agents)
+        from ..tools.builtins import browser as _br_module
+        from ..tools.builtins import process as _proc_module
+        from ..tools.builtins import todo_plan_exit as _tpe_module
+
+        self._proc_registry = _proc_module.ProcRegistry()
+        self._session_state = _tpe_module.SessionState()
+        self._browser_state = _br_module.BrowserState()
+
         if store is not None:
             from ..tools.builtins import session_search as _ss
 
@@ -89,6 +98,19 @@ class SessionRunner:
                 api_key=self.llm.config.api_key,
                 model=self.llm.config.model,
             )
+
+    async def close(self) -> None:
+        """Clean up resources (memory extractor, browser page, etc.)."""
+        # Close browser page if one was opened for this session
+        if self._browser_state.page is not None:
+            try:
+                await self._browser_state.page.close()
+            except Exception:
+                pass
+            self._browser_state.page = None
+
+        if self._extractor is not None:
+            await self._extractor.close()
 
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
@@ -126,13 +148,18 @@ class SessionRunner:
                 if count_tokens(tuple(messages)) > _threshold:
                     if not hasattr(self, "_compaction_state"):
                         self._compaction_state = CompactionState()
-                    messages_list = await compact_conversation(
-                        tuple(messages),
-                        self.llm,
-                        context_window=_threshold + 8000,
-                        state=self._compaction_state,
-                    )
-                    messages[:] = list(messages_list)
+                    try:
+                        messages_list = await compact_conversation(
+                            tuple(messages),
+                            self.llm,
+                            context_window=_threshold + 8000,
+                            state=self._compaction_state,
+                            budget=self.budget,
+                        )
+                        messages[:] = list(messages_list)
+                    except BudgetExceeded as e:
+                        yield TurnFailed(f"budget exhausted during compaction: {e}")
+                        return
 
             if self.skill_loader is not None and messages:
                 last_user = next((m for m in reversed(messages) if m.role == "user"), None)
@@ -174,10 +201,28 @@ class SessionRunner:
                 elif isinstance(event, Usage):
                     usage = event
                 elif isinstance(event, StreamDone):
+                    usage = event.usage
                     if event.stop_reason == "length":
+                        # Truncated — persist partial response, consume usage, then fail
+                        assistant_msg = Message.assistant(
+                            text="".join(content_parts),
+                            tool_calls=tuple(tool_calls),
+                            usage=usage,
+                        )
+                        messages.append(assistant_msg)
+                        if self.store is not None:
+                            await self.store.append(self.session_id, assistant_msg)
+                        if usage:
+                            try:
+                                self.budget.consume(
+                                    tokens=usage.input_tokens + usage.output_tokens,
+                                    cost_usd=usage.cost_usd,
+                                )
+                            except BudgetExceeded as e:
+                                yield TurnFailed(f"budget exhausted: {e}")
+                                return
                         yield TurnFailed("LLM response truncated (max tokens)")
                         return
-                    usage = event.usage
 
             assistant_msg = Message.assistant(
                 text="".join(content_parts),
@@ -185,16 +230,20 @@ class SessionRunner:
                 usage=usage,
             )
 
-            if usage:
-                self.budget.consume(
-                    tokens=usage.input_tokens + usage.output_tokens,
-                    cost_usd=usage.cost_usd,
-                )
-
             messages.append(assistant_msg)
 
             if self.store is not None:
                 await self.store.append(self.session_id, assistant_msg)
+
+            if usage:
+                try:
+                    self.budget.consume(
+                        tokens=usage.input_tokens + usage.output_tokens,
+                        cost_usd=usage.cost_usd,
+                    )
+                except BudgetExceeded as e:
+                    yield TurnFailed(f"budget exhausted: {e}")
+                    return
 
             if not tool_calls:
                 if self.event_bus:
@@ -242,8 +291,14 @@ class SessionRunner:
 
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
+                from ..tools.builtins import browser as _br_module
+                from ..tools.builtins import process as _proc_module
                 from ..tools.builtins import task as _task_module
+                from ..tools.builtins import todo_plan_exit as _tpe_module
 
+                _proc_module._current_registry.set(self._proc_registry)
+                _tpe_module._current_state.set(self._session_state)
+                _br_module._current_state.set(self._browser_state)
                 _task_module._current_runner.set(self)
 
                 modified = call
@@ -256,8 +311,6 @@ class SessionRunner:
 
                 # Try streaming, fall back to regular execution
                 try:
-                    from ..core.tool import ToolProgressDelta
-
                     async for event in self.registry.execute_stream(call):
                         if isinstance(event, ToolProgressDelta):
                             progress_events.append(event)
@@ -266,7 +319,7 @@ class SessionRunner:
                             break
                     else:
                         result = ToolResult.ok("(no output)")
-                except TypeError, AttributeError:
+                except (TypeError, AttributeError):
                     # execute_stream not available — fall back to execute
                     result = await self.registry.execute(call)
 

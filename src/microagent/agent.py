@@ -45,7 +45,7 @@ class Agent:
         registry = ToolRegistry(all_tools)
 
         llm = OpenAIChatClient(llm_config)
-        budget = Budget(max_iterations=max_iterations)
+        budget = Budget.root(max_iterations=max_iterations)
         runner = SessionRunner(
             llm=llm,
             registry=registry,
@@ -67,13 +67,33 @@ class Agent:
         """Sync entry point: accept a string (auto-wraps as user msg) or Message list."""
         if isinstance(text, str):
             text = [Message.user(text)]
-        return asyncio.run(self.arun(text))
+
+        async def _run() -> str:
+            try:
+                return await self.arun(text)
+            finally:
+                await self.close()
+
+        return asyncio.run(_run())
 
     async def arun(self, messages: list[Message]) -> str:
-        """Async entry point: run a turn and return the final text."""
+        """Async entry point: run a turn and return the final text.
+
+        Caller is responsible for calling ``await agent.close()`` when done
+        with the agent (releases browser pages, LLM clients, pending tasks).
+        """
         async for event in self.runner.run_turn(messages):
             if isinstance(event, TurnComplete):
                 return event.content
             if isinstance(event, TurnFailed):
                 return f"[error: {event.reason}]"
         return "[error: turn ended without completion]"
+
+    async def close(self) -> None:
+        """Clean up all resources (cron, runner, LLM client)."""
+        if self.cron is not None:
+            await self.cron.stop()
+        await self.runner.close()
+        # Close the LLM client if it supports close()
+        if hasattr(self.runner.llm, "close"):
+            await self.runner.llm.close()

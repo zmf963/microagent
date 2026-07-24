@@ -23,11 +23,16 @@ Layer 5 — Full Dump:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ..core.types import Message
+from ..core.types import Message, TextDelta, Usage
+
+if TYPE_CHECKING:
+    from .budget import Budget
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -88,7 +93,15 @@ def micro_compact(
     - Tool results from read_file/grep/bash etc. > threshold → placeholder
     - User messages are never truncated
     - Error messages are never truncated
+    - Non-reobtainable tool results are preserved (may contain unique data)
     """
+    # Build tool_call_id → tool_name mapping from assistant messages
+    tc_names: dict[str, str] = {}
+    for msg in messages:
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                tc_names[tc.id] = tc.name
+
     result = list(messages)
     for i, msg in enumerate(result):
         if msg.role != "tool":
@@ -97,6 +110,10 @@ def micro_compact(
             continue  # preserve errors
         if len(msg.content) <= threshold:
             continue
+        # Only truncate re-obtainable tool results (user can re-run the tool)
+        tool_name = tc_names.get(msg.tool_call_id or "", "")
+        if tool_name and tool_name not in REOBTAINABLE_TOOLS:
+            continue  # preserve non-reobtainable results
         # Truncate: keep first 100 + last 100 chars for context
         truncated = (
             msg.content[:100]
@@ -123,21 +140,27 @@ def snip_tool_results(
     - Preserves the most recent `keep_recent` messages (any role)
     - Removes oldest tool_result messages first
     """
-    if count_tokens(messages) <= max_tokens:
+    total_tokens = count_tokens(messages)
+    if total_tokens <= max_tokens:
         return messages
 
     result = list(messages)
     # Protected zone: last `keep_recent` messages
     protected = set(range(max(0, len(result) - keep_recent), len(result)))
 
+    # Pre-compute per-message token counts to avoid O(n²) re-scanning
+    msg_tokens = [estimate_tokens(m.content or "") for m in result]
+
     # Remove oldest tool_result messages outside protected zone
     i = 0
-    while i < len(result) and count_tokens(tuple(result)) > max_tokens:
+    while i < len(result) and total_tokens > max_tokens:
         if i in protected:
             i += 1
             continue
         if result[i].role == "tool":
+            total_tokens -= msg_tokens[i]
             result.pop(i)
+            msg_tokens.pop(i)
             # Adjust protected indices
             protected = {p - 1 if p > i else p for p in protected}
         else:
@@ -304,6 +327,7 @@ async def compact_conversation(
     context_window: int = 200_000,
     state: CompactionState | None = None,
     force: bool = False,
+    budget: Budget | None = None,
 ) -> tuple[Message, ...]:
     """Run the 4-layer compression pipeline.
 
@@ -311,6 +335,8 @@ async def compact_conversation(
       Clears circuit breaker cooldown so manual retry works immediately.
     force=False (auto): runs full L1-L2-L3-L4 pipeline with thresholds.
     Uses state.previous_summary for incremental compaction when available.
+
+    If budget is provided, LLM summary token usage is consumed against it.
     """
     if state is None:
         state = CompactionState()
@@ -320,12 +346,19 @@ async def compact_conversation(
     state._is_compaction_call = True
 
     try:
+        from .budget import BudgetExceeded
+
         # Manual /compact: clear cooldown, skip to LLM
         if force:
             state._cooldown_until = 0.0
             try:
                 prev = state.previous_summary
-                current = await _llm_summarize(messages, llm, previous_summary=prev)
+                current, usage = await _llm_summarize(messages, llm, previous_summary=prev)
+                if budget is not None and usage:
+                    budget.consume(
+                        tokens=usage.input_tokens + usage.output_tokens,
+                        cost_usd=usage.cost_usd,
+                    )
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
 
@@ -333,6 +366,8 @@ async def compact_conversation(
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
                 return current
+            except BudgetExceeded:
+                raise
             except Exception:
                 state.record_failure()
                 if state.is_circuit_broken():
@@ -360,13 +395,20 @@ async def compact_conversation(
         if count_tokens(current) > layer3_threshold:
             try:
                 prev = state.previous_summary
-                current = await _llm_summarize(current, llm, previous_summary=prev)
+                current, usage = await _llm_summarize(current, llm, previous_summary=prev)
+                if budget is not None and usage:
+                    budget.consume(
+                        tokens=usage.input_tokens + usage.output_tokens,
+                        cost_usd=usage.cost_usd,
+                    )
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
 
                 current = recover_file_attachments(messages, current)
                 state.previous_summary = _extract_summary_text(current)
                 state.record_success()
+            except BudgetExceeded:
+                raise
             except Exception:
                 state.record_failure()
                 if state.is_circuit_broken():
@@ -392,10 +434,12 @@ async def _llm_summarize(
     messages: tuple[Message, ...],
     llm: object,
     previous_summary: str | None = None,
-) -> tuple[Message, ...]:
-    """Generate structured LLM summary + return compressed messages.
+) -> tuple[tuple[Message, ...], Usage | None]:
+    """Generate structured LLM summary + return compressed messages and usage.
 
     If previous_summary is provided, uses incremental update mode.
+    Returns (compressed_messages, usage) where usage may be None if the
+    LLM stream did not include token counts.
     """
     if previous_summary:
         prompt = build_incremental_summary_prompt(messages, previous_summary)
@@ -403,22 +447,21 @@ async def _llm_summarize(
         prompt = build_compaction_summary_prompt(messages)
 
     summary_text = ""
+    usage: Usage | None = None
     async for event in llm.stream(
         system="You are a context compressor. Be thorough and specific.",
         messages=(Message.user(prompt),),
         tools=None,
     ):
-        from ..core.types import TextDelta
-
         if isinstance(event, TextDelta) and event.kind == "content":
             summary_text += event.text
+        elif isinstance(event, Usage):
+            usage = event
 
     if not summary_text.strip():
         raise ValueError("LLM returned empty summary")
 
     # Strip <analysis> block, keep <summary>
-    import re
-
     summary_only = re.sub(r"<analysis>.*?</analysis>", "", summary_text, flags=re.DOTALL).strip()
 
     # Build compressed result: summary message
@@ -428,7 +471,7 @@ async def _llm_summarize(
     )
     summary_msg = Message.user(preamble + summary_only)
 
-    return (summary_msg,)
+    return (summary_msg,), usage
 
 
 def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:
@@ -471,7 +514,7 @@ def layer5_full_dump(
     for fpath in list(files)[:LAYER5_MAX_FILES]:
         try:
             content = Path(fpath).expanduser().read_text()
-        except OSError, UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             continue
         if len(content) > LAYER5_MAX_CHARS:
             content = content[:LAYER5_MAX_CHARS] + "\n...[truncated]..."

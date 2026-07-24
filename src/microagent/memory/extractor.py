@@ -63,6 +63,19 @@ class MemoryExtractor:
         self._model = model
         self._pending: set[asyncio.Task] = set()
         self._client = None
+        self._closed = False
+
+    async def close(self) -> None:
+        """Close the underlying LLM client and cancel pending tasks."""
+        self._closed = True
+        for task in list(self._pending):
+            task.cancel()
+        if self._pending:
+            await asyncio.gather(*self._pending, return_exceptions=True)
+        self._pending.clear()
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
 
     async def extract_async(self, history: tuple[dict[str, str], ...]) -> None:
         """Run extraction in the background (fire-and-forget).
@@ -75,8 +88,8 @@ class MemoryExtractor:
 
     async def _extract(self, history: tuple[dict[str, str], ...]) -> None:
         """Internal: call LLM, parse response, write memories."""
-        if AsyncOpenAI is None:
-            return  # openai not installed
+        if AsyncOpenAI is None or self._closed:
+            return  # openai not installed or extractor closed
 
         try:
             if self._client is None:

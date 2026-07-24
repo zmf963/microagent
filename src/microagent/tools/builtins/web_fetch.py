@@ -29,15 +29,30 @@ async def web_fetch(
     if not host:
         return ToolResult.error(f"invalid URL: no hostname found in {url!r}")
 
-    # Block internal/private IPs and localhost
+    # Block internal hostnames that resolve to loopback/private addresses
+    blocked_hostnames = frozenset({
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+        "broadcasthost",
+    })
+    if host.lower() in blocked_hostnames or host.endswith(".local"):
+        return ToolResult.error(
+            f"blocked: {host!r} is a local/internal hostname (SSRF protection)"
+        )
+
+    # Block internal/private IPs
     blocked_ranges = [
         ipaddress.IPv4Network("127.0.0.0/8"),
         ipaddress.IPv4Network("10.0.0.0/8"),
         ipaddress.IPv4Network("172.16.0.0/12"),
         ipaddress.IPv4Network("192.168.0.0/16"),
         ipaddress.IPv4Network("169.254.0.0/16"),
+        ipaddress.IPv4Network("0.0.0.0/8"),
         ipaddress.IPv6Network("::1/128"),
         ipaddress.IPv6Network("fc00::/7"),
+        ipaddress.IPv6Network("fe80::/10"),
     ]
     try:
         addr = ipaddress.ip_address(host)

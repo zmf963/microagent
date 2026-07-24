@@ -1,8 +1,8 @@
 # MicroAgent 设计说明
 
-> 版本 0.1.0 | Python ≥3.14 | ~4,700 行核心代码 | 22 内置工具 | 215 测试
+> 版本 0.1.0 | Python ≥3.14 | ~6,200 行核心代码 | 22 内置工具 | 287 测试
 
-**MicroAgent 是一个将 AI Agent 的核心循环压缩到 5,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 6,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
 **核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
 
@@ -14,7 +14,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 
 1. **最小内核** — 核心循环 LLM→Tool→LLM 是唯一必选路径，所有能力通过 Protocol 扩展
 2. **零依赖核心** — 必装仅 5 个（openai、pydantic、anyio、httpx、pyyaml），其余 optional
-3. **TDD 全覆盖** — 215 测试，red-green-refactor 驱动
+3. **TDD 全覆盖** — 287 测试，red-green-refactor 驱动
 4. **信息分通道** — 借鉴 Claude Code，压缩走 4 层金字塔
 
 ### 架构全景
@@ -173,7 +173,7 @@ _estimate_cost("gpt-4o", 1000, 500) → $0.0075  # 11 模型定价
 
 ## 五、会话管理 (`session/`)
 
-### SessionRunner (`runner.py` — 277 行)
+### SessionRunner (`runner.py` — 340 行)
 
 核心循环：
 
@@ -193,7 +193,7 @@ while not budget.exhausted:
 - **自动持久化**：user/assistant/tool_result 自动写入 store
 - **压缩**：`compression_threshold=0` 时自动用 60% 窗口计算
 
-### 4 层压缩金字塔 (`compress.py` — 320 行)
+### 4 层压缩金字塔 (`compress.py` — 528 行)
 
 | 层 | 名称 | API | 触发 | 操作 |
 |----|------|-----|------|------|
@@ -204,7 +204,7 @@ while not budget.exhausted:
 
 **7 章节摘要模板**：请求和意图 | 技术决策 | 文件和代码 | 错误修复 | 所有用户消息 | 待办 | 当前进度
 
-### SQLiteStore (`core/store.py` — 170 行)
+### SQLiteStore (`core/store.py` — 225 行)
 
 ```python
 store = SQLiteStore("~/.microagent/sessions.db")  # WAL 模式
@@ -213,7 +213,7 @@ await store.load_history(session_id)               # → list[Message]
 await store.list_sessions()                        # → list[str]
 ```
 
-### Budget 树形预算 (`session/budget.py` — 168 行)
+### Budget 树形预算 (`session/budget.py` — 169 行)
 
 ```python
 root = Budget.root(max_iterations=25, max_tokens=200_000, max_cost_usd=5.0)
@@ -257,7 +257,7 @@ class ContextSource(Protocol):
 
 ## 九、Surface 层
 
-### CLI (`surface/cli.py` — 305 行)
+### CLI (`surface/cli.py` — 369 行)
 
 ```
 ────── 💭 thinking ──────      思考过程（灰色分割线）
@@ -297,7 +297,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-215 tests, 1 skipped, 0 failures  —  2,608 / 4,708 = 55% test/code ratio
+287 tests, 1 skipped, 0 failures  —  3,778 / 6,199 = 61% test/code ratio
 ```
 
 | 测试文件 | 覆盖 |
@@ -319,12 +319,12 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~4,700 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
-| 核心循环模块 | 277 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
+| 核心代码量 | ~6,200 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心循环模块 | 340 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 22 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
-| 压缩代码量 | 320 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
-| CLI 代码量 | 305 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 215（55% 覆盖比） | ~17,000 | 闭源 |
+| 压缩代码量 | 528 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
+| CLI 代码量 | 369 行 | 16,304 行 | 闭源（产品级 CLI） |
+| 测试数量 | 287（61% 覆盖比） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
@@ -497,4 +497,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。4,708 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。6,199 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。

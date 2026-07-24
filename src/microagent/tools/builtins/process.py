@@ -1,13 +1,16 @@
 """process builtin tool — background process management.
 
 Supports: start, poll, log, kill, wait, list, write.
-Processes are tracked in a module-level dict with asyncio subprocess handles.
+Processes are tracked in a per-session registry via ContextVar,
+providing isolation between concurrent Agent sessions.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from pydantic import Field
@@ -15,21 +18,50 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 
-# Module-level process registry
-_procs: dict[str, asyncio.subprocess.Process] = {}
-_outputs: dict[str, list[str]] = {}
+# ---------------------------------------------------------------------------
+# Per-session process registry (ContextVar — same pattern as _current_store)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProcRegistry:
+    """Per-session process and output tracking."""
+
+    procs: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
+    outputs: dict[str, list[str]] = field(default_factory=dict)
+
+
+_current_registry: contextvars.ContextVar[ProcRegistry | None] = contextvars.ContextVar(
+    "process_current_registry", default=None
+)
+
+
+def _get_registry() -> ProcRegistry:
+    """Get the current session's process registry.
+
+    When running inside a SessionRunner, the ContextVar is set to the
+    runner's registry. When called directly (e.g., in tests without a
+    runner), a temporary registry is lazily created and stored.
+    """
+    reg = _current_registry.get()
+    if reg is None:
+        reg = ProcRegistry()
+        _current_registry.set(reg)
+    return reg
 
 
 def _generate_id() -> str:
-    return f"proc-{int(time.time() * 1000)}-{len(_procs)}"
+    reg = _get_registry()
+    return f"proc-{int(time.time() * 1000)}-{len(reg.procs)}"
 
 
 def _cleanup_dead() -> None:
     """Remove exited processes from registry (called on each action)."""
-    dead = [sid for sid, p in _procs.items() if p.returncode is not None]
+    reg = _get_registry()
+    dead = [sid for sid, p in reg.procs.items() if p.returncode is not None]
     for sid in dead:
-        _procs.pop(sid, None)
-        _outputs.pop(sid, None)
+        reg.procs.pop(sid, None)
+        reg.outputs.pop(sid, None)
 
 
 @tool("process", description="Manage background processes: start, poll, kill, list, wait, write.")
@@ -44,6 +76,7 @@ async def process(
     ] = None,
     timeout: Annotated[float, Field(description="Max seconds for wait action")] = 30,
 ) -> ToolResult:
+    reg = _get_registry()
     match action:
         case "start":
             _cleanup_dead()  # prevent unbounded growth
@@ -56,20 +89,20 @@ async def process(
                     stderr=asyncio.subprocess.PIPE,
                 )
                 sid = _generate_id()
-                _procs[sid] = p
-                _outputs[sid] = []
+                reg.procs[sid] = p
+                reg.outputs[sid] = []
                 return ToolResult.ok(sid)
 
             except Exception as e:
                 return ToolResult.error(f"start failed: {e!r}")
 
         case "poll":
-            if not session_id or session_id not in _procs:
+            if not session_id or session_id not in reg.procs:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = _procs[session_id]
+            p = reg.procs[session_id]
             if p.returncode is not None:
                 # Already done — collect remaining output
-                out_lines = list(_outputs.get(session_id, []))
+                out_lines = list(reg.outputs.get(session_id, []))
                 if p.stdout:
                     remaining = await p.stdout.read()
                     if remaining:
@@ -83,20 +116,20 @@ async def process(
                         if not line:
                             break
                         decoded = line.decode("utf-8", errors="replace").rstrip()
-                        _outputs[session_id].append(decoded)
+                        reg.outputs[session_id].append(decoded)
             except TimeoutError:
                 pass
-            return ToolResult.ok("(running)\n" + "\n".join(_outputs.get(session_id, [])[-20:]))
+            return ToolResult.ok("(running)\n" + "\n".join(reg.outputs.get(session_id, [])[-20:]))
 
         case "log":
-            if not session_id or session_id not in _outputs:
+            if not session_id or session_id not in reg.outputs:
                 return ToolResult.error(f"no output for: {session_id}")
-            return ToolResult.ok("\n".join(_outputs[session_id]))
+            return ToolResult.ok("\n".join(reg.outputs[session_id]))
 
         case "kill":
-            if not session_id or session_id not in _procs:
+            if not session_id or session_id not in reg.procs:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = _procs[session_id]
+            p = reg.procs[session_id]
             try:
                 p.kill()
                 await p.wait()
@@ -105,9 +138,9 @@ async def process(
                 return ToolResult.error(f"kill failed: {e!r}")
 
         case "wait":
-            if not session_id or session_id not in _procs:
+            if not session_id or session_id not in reg.procs:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = _procs[session_id]
+            p = reg.procs[session_id]
             try:
                 await asyncio.wait_for(p.wait(), timeout=timeout)
                 stdout, stderr = await p.communicate()
@@ -120,17 +153,17 @@ async def process(
 
         case "list":
             lines = []
-            for sid, p in list(_procs.items()):
+            for sid, p in list(reg.procs.items()):
                 status = f"exit={p.returncode}" if p.returncode is not None else "running"
                 lines.append(f"{sid}: {status}")
             return ToolResult.ok("\n".join(lines) if lines else "(no processes)")
 
         case "write":
-            if not session_id or session_id not in _procs:
+            if not session_id or session_id not in reg.procs:
                 return ToolResult.error(f"process not found: {session_id}")
             if not data:
                 return ToolResult.error("data is required for action=write")
-            p = _procs[session_id]
+            p = reg.procs[session_id]
             if p.stdin is None:
                 return ToolResult.error("process has no stdin")
             try:

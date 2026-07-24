@@ -7,8 +7,13 @@ backends (Claude Code / agentskills.io / user).
 
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+import yaml
 
 # ---------------------------------------------------------------------------
 # Skill + LoadedSkill data model
@@ -79,12 +84,6 @@ class CompositeSkillLoader:
 # ---------------------------------------------------------------------------
 # ClaudeSkillLoader — reads ~/.claude/skills/<name>/SKILL.md
 # ---------------------------------------------------------------------------
-
-import difflib
-import re
-from pathlib import Path
-
-import yaml
 
 
 def _parse_skill_md(path: Path, namespace: str = "claude") -> Skill | None:

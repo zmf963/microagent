@@ -87,8 +87,8 @@ class TestSubagentManager:
         result = await manager.spawn("filtered", "search for x", parent_runner)
         assert isinstance(result, str)
 
-    async def test_subagent_runs_with_isolated_budget(self):
-        """Subagent gets its own Budget, not sharing parent's."""
+    async def test_subagent_runs_with_spawned_budget(self):
+        """Subagent budget is spawned from parent — tree-shaped tracking."""
         spec = SubagentSpec(
             name="budget-test",
             description="budget test",

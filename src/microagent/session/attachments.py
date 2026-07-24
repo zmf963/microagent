@@ -121,7 +121,7 @@ def recover_file_attachments(
     for fpath in files:
         try:
             content = Path(fpath).expanduser().read_text()
-        except OSError, UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             continue
 
         if len(content) > MAX_CHARS_PER_FILE:

@@ -56,6 +56,8 @@ def _serialize_message(msg: Message) -> str:
             "output_tokens": msg.usage.output_tokens,
             "cost_usd": msg.usage.cost_usd,
         }
+    if msg.is_error:
+        d["is_error"] = True
     return json.dumps(d, ensure_ascii=False)
 
 
@@ -81,6 +83,7 @@ def _deserialize_message(data: str) -> Message:
         tool_calls=tool_calls,
         tool_call_id=d.get("tool_call_id"),
         usage=usage,
+        is_error=d.get("is_error", False),
     )
 
 
@@ -140,7 +143,7 @@ class SQLiteStore:
 
     async def list_sessions(self) -> list[str]:
         rows = self._conn.execute(
-            "SELECT DISTINCT session_id FROM messages ORDER BY session_id"
+            "SELECT session_id FROM messages GROUP BY session_id ORDER BY MAX(id) DESC"
         ).fetchall()
         return [r[0] for r in rows]
 
@@ -159,7 +162,7 @@ class SQLiteStore:
                  ORDER BY m2.seq DESC LIMIT 1) AS last_data
             FROM messages m
             GROUP BY session_id
-            ORDER BY session_id
+            ORDER BY MAX(m.id) DESC
         """).fetchall()
         summaries = []
         for r in rows:
@@ -184,13 +187,21 @@ class SQLiteStore:
 
 
 class InMemoryStore:
-    """Simple dict-based store for unit tests."""
+    """Simple dict-based store for unit tests.
+
+    Maintains a global append counter to match SQLiteStore's
+    ``ORDER BY MAX(id) DESC`` recency ordering.
+    """
 
     def __init__(self):
         self._data: dict[str, list[Message]] = {}
+        self._seq: int = 0  # global append counter
+        self._last_seq: dict[str, int] = {}  # session_id → last append seq
 
     async def append(self, session_id: str, msg: Message) -> None:
         self._data.setdefault(session_id, []).append(msg)
+        self._seq += 1
+        self._last_seq[session_id] = self._seq
 
     async def load_history(self, session_id: str) -> list[Message]:
         return list(self._data.get(session_id, []))
@@ -199,14 +210,16 @@ class InMemoryStore:
         pass
 
     async def list_sessions(self) -> list[str]:
-        return list(self._data.keys())
+        # Return sessions in recency order (most recently appended first)
+        return sorted(self._last_seq, key=lambda s: self._last_seq[s], reverse=True)
 
     async def session_summaries(self) -> list[dict[str, Any]]:
+        sorted_sids = sorted(self._last_seq, key=lambda s: self._last_seq[s], reverse=True)
         summaries = []
-        for sid, msgs in self._data.items():
+        for sid in sorted_sids:
+            msgs = self._data.get(sid, [])
             preview = ""
             if msgs:
                 preview = msgs[-1].content[:50].replace("\n", " ")
             summaries.append({"session_id": sid, "count": len(msgs), "preview": preview})
-        summaries.sort(key=lambda s: s["session_id"])
         return summaries

@@ -81,6 +81,15 @@ class TestSQLiteStore:
         assert history[0].usage.input_tokens == 100
         store.close()
 
+    async def test_is_error_roundtrip(self, tmp_path):
+        """is_error field must survive serialization/deserialization."""
+        store = SQLiteStore(tmp_path / "error.db")
+        err_result = ToolResult.error("something went wrong")
+        await store.append("s1", Message.tool_result(err_result, tool_call_id="c1"))
+        history = await store.load_history("s1")
+        assert history[0].is_error is True
+        store.close()
+
     async def test_list_sessions(self, tmp_path):
         store = SQLiteStore(tmp_path / "multi.db")
         await store.append("s1", Message.user("a"))
