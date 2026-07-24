@@ -11,7 +11,7 @@ from microagent.session.compress import (
 
 class TestMicroCompact:
     def test_truncates_long_tool_results(self):
-        """Tool results >500 chars from re-obtainable tools are truncated."""
+        """Tool results >500 chars from re-obtainable tools are summarized."""
         tc = ToolCall(id="c1", name="read_file", arguments={"path": "app.py"})
         messages = (
             Message.user("read app.py"),
@@ -20,9 +20,10 @@ class TestMicroCompact:
             Message.assistant("file contents: " + "x" * 600),
         )
         result = micro_compact(messages)
-        # Tool result should be truncated
+        # Tool result should be summarized (shorter than original)
         assert len(result[2].content) < 600
-        assert "truncated" in result[2].content.lower()
+        # Summary contains tool name marker
+        assert "[read_file]" in result[2].content
 
     def test_preserves_user_messages(self):
         """User messages are never truncated."""

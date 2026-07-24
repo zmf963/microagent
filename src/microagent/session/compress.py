@@ -61,6 +61,62 @@ TRUNCATION_PLACEHOLDER = "[Tool result truncated: {n} chars — re-run the tool 
 
 
 # ---------------------------------------------------------------------------
+# Heuristic tool result summaries (zero API cost)
+# ---------------------------------------------------------------------------
+
+
+def _summarize_tool_result(tool_name: str, content: str) -> str:
+    """Generate a 1-line informative summary for a re-obtainable tool result.
+
+    Instead of pure truncation, produces a tool-specific summary that
+    preserves key information (exit codes, line counts, match counts).
+    """
+    lines = content.split("\n") if content else []
+    n_lines = len(lines)
+
+    if tool_name == "bash":
+        # Try to detect exit code from common patterns
+        exit_code = None
+        for line in lines[-5:]:
+            lowered = line.strip().lower()
+            if lowered.startswith("exit code:") or lowered.startswith("exit:"):
+                parts = lowered.split(":")
+                if len(parts) >= 2:
+                    try:
+                        exit_code = int(parts[-1].strip())
+                    except ValueError:
+                        pass
+        if exit_code is not None:
+            return f"[bash] exit:{exit_code}, {n_lines} lines output"
+        return f"[bash] {n_lines} lines output"
+
+    if tool_name == "read_file":
+        return f"[read_file] {n_lines} lines"
+
+    if tool_name == "grep":
+        match_count = sum(1 for l in lines if l.strip() and ":" in l)
+        return f"[grep] {match_count} matches"
+
+    if tool_name == "glob":
+        return f"[glob] {n_lines} entries"
+
+    if tool_name == "web_fetch":
+        return f"[web_fetch] {len(content)} chars"
+
+    if tool_name == "web_search":
+        return f"[web_search] {n_lines} results"
+
+    if tool_name == "context7":
+        return f"[context7] {len(content)} chars"
+
+    if tool_name == "browser_snapshot":
+        return f"[browser_snapshot] {len(content)} chars"
+
+    # Generic fallback
+    return TRUNCATION_PLACEHOLDER.format(n=len(content))
+
+
+# ---------------------------------------------------------------------------
 # Token estimation
 # ---------------------------------------------------------------------------
 
@@ -114,13 +170,9 @@ def micro_compact(
         tool_name = tc_names.get(msg.tool_call_id or "", "")
         if tool_name and tool_name not in REOBTAINABLE_TOOLS:
             continue  # preserve non-reobtainable results
-        # Truncate: keep first 100 + last 100 chars for context
-        truncated = (
-            msg.content[:100]
-            + f"\n\n{TRUNCATION_PLACEHOLDER.format(n=len(msg.content))}\n\n"
-            + msg.content[-100:]
-        )
-        result[i] = Message(role="tool", content=truncated, tool_call_id=msg.tool_call_id)
+        # Generate heuristic 1-line summary instead of raw truncation
+        summary = _summarize_tool_result(tool_name, msg.content)
+        result[i] = Message(role="tool", content=summary, tool_call_id=msg.tool_call_id)
     return tuple(result)
 
 
