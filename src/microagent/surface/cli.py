@@ -20,12 +20,14 @@ from ..agent import Agent
 from ..config import Config
 from ..core.types import (
     Message,
+    SteerEvent,
     TextDelta,
     ToolCallDelta,
     ToolProgressDelta,
     ToolResultDelta,
     TurnComplete,
     TurnFailed,
+    Usage,
 )
 
 # ANSI
@@ -35,6 +37,43 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 BOLD = "\033[1m"
 RST = "\033[0m"
+
+
+# ---------------------------------------------------------------------------
+# Usage tracker — local token/cost accumulation (display layer only)
+# ---------------------------------------------------------------------------
+
+
+class _UsageTracker:
+    """Tracks cumulative token usage across turns (CLI local, not in core)."""
+
+    def __init__(self):
+        self.total_input = 0
+        self.total_output = 0
+        self.total_cost = 0.0
+        self.turns = 0
+
+    def record(self, usage: Usage) -> None:
+        self.total_input += usage.input_tokens
+        self.total_output += usage.output_tokens
+        self.total_cost += usage.cost_usd
+        self.turns += 1
+
+    def reset(self) -> None:
+        self.total_input = 0
+        self.total_output = 0
+        self.total_cost = 0.0
+        self.turns = 0
+
+    def summary(self) -> str:
+        return (
+            f"Tokens: {self.total_input} in / {self.total_output} out, "
+            f"Cost: ${self.total_cost:.4f}, Turns: {self.turns}"
+        )
+
+    def status_line(self) -> str:
+        """Compact one-line status for the CLI bottom bar."""
+        return f"{GRAY}tokens: {self.total_input + self.total_output} | cost: ${self.total_cost:.4f}{RST}"
 
 
 def _term_width() -> int:
@@ -135,9 +174,23 @@ async def _main():
 
     print(f"{CYAN}{BOLD}MicroAgent v0.1.0{RST}  (model={config.llm.model})")
     print(f"Session: {session_id}")
-    print("Commands: /new /list /resume /compact  |  Ctrl-D to exit\n")
+    print("Commands: /new /list /resume /compact /model /history /skill /clear /cost  |  Ctrl-D to exit\n")
 
     messages: list[Message] = []
+    usage_tracker = _UsageTracker()
+    disabled_skills: set[str] = set()
+
+    # REPL state accessible to command handlers
+    repl_state = {
+        "agent": agent,
+        "config": config,
+        "store": store,
+        "session_id": session_id,
+        "messages": messages,
+        "usage_tracker": usage_tracker,
+        "disabled_skills": disabled_skills,
+    }
+
     while True:
         try:
             raw = input(f"{BOLD}>>>{RST} ").strip()
@@ -152,100 +205,17 @@ async def _main():
             cmd, *rest = raw[1:].split(maxsplit=1)
             arg = rest[0] if rest else ""
 
-            if cmd == "new":
-                await agent.close()
-                session_id = f"cli-{int(time.time())}"
-                messages = []
-                agent = Agent.from_config(
-                    config.llm,
-                    system_prompt=config.system_prompt,
-                    store=store,
-                    session_id=session_id,
-                    skills_path=config.skills_path,
-                )
-                print(f"{GREEN}✓{RST} New session: {session_id}")
-
-            elif cmd == "list":
-                sessions = await _list_sessions(store)
-                if sessions:
-                    print(f"{GRAY}Sessions:{RST}")
-                    for sid, count, preview in sessions[:10]:
-                        mark = f"{GREEN}*{RST}" if sid == session_id else " "
-                        print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
-                else:
-                    print(f"{GRAY}(no saved sessions){RST}")
-
-            elif cmd == "resume":
-                target = arg or await _pick_last_session(store)
-                if target:
-                    history = await store.load_history(target)
-                    if history:
-                        await agent.close()
-                        messages = list(history)
-                        session_id = target
-                        agent = Agent.from_config(
-                            config.llm,
-                            system_prompt=config.system_prompt,
-                            store=store,
-                            session_id=session_id,
-                            skills_path=config.skills_path,
-                        )
-                        print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
-                    else:
-                        print(f"{RED}✗{RST} Session not found: {target}")
-                else:
-                    print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
-
-            elif cmd == "compact":
-                if len(messages) < 5:
-                    print(f"{GRAY}(not enough messages to compact){RST}")
-                else:
-                    from ..session.compress import (
-                        CompactionState,
-                        compact_conversation,
-                        count_tokens,
-                    )
-
-                    before_count = len(messages)
-                    before_tokens = count_tokens(tuple(messages))
-                    state = getattr(agent.runner, "_compaction_state", CompactionState())
-                    compressed = await compact_conversation(
-                        tuple(messages),
-                        agent.runner.llm,
-                        context_window=before_tokens + 8000,
-                        state=state,
-                        force=True,
-                    )
-                    messages[:] = list(compressed)
-                    # Rebuild agent so runner state is consistent with compacted messages
-                    await agent.close()
-                    agent = Agent.from_config(
-                        config.llm,
-                        system_prompt=config.system_prompt,
-                        store=store,
-                        session_id=session_id,
-                        skills_path=config.skills_path,
-                    )
-                    agent.runner._compaction_state = state
-                    after_count = len(messages)
-                    after_tokens = count_tokens(tuple(messages))
-                    print(
-                        f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
-                        f"{before_tokens} → {after_tokens} tokens"
-                    )
-
-            elif cmd == "help":
-                print(f"{GRAY}/new{RST}       Start a new session")
-                print(f"{GRAY}/list{RST}      List saved sessions")
-                print(f"{GRAY}/resume{RST}    Resume last session")
-                print(f"{GRAY}/resume <id>{RST} Resume a specific session")
-                print(f"{GRAY}/compact{RST}    Manually compress current conversation")
-                print(f"{GRAY}/help{RST}      Show this help")
+            handler_entry = _COMMANDS.get(cmd)
+            if handler_entry:
+                handler, _desc = handler_entry
+                await handler(repl_state, arg)
+            else:
+                print(f"{RED}✗{RST} Unknown command: /{cmd}. Type /help for available commands.")
 
             continue
 
         messages.append(Message.user(raw))
-        await _run_streaming(agent, messages)
+        await _run_streaming(agent, messages, usage_tracker)
         print()
 
     await agent.close()
@@ -264,7 +234,7 @@ async def _pick_last_session(store) -> str | None:
     return sessions[0] if sessions else None
 
 
-async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
+async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _UsageTracker | None = None) -> None:
 
     async def _stream():
         text_started = False
@@ -282,7 +252,11 @@ async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
             return f"{GRAY}{body}{suffix}{RST}"
 
         async for event in agent.runner.run_turn(messages):
-            if isinstance(event, TextDelta):
+            if isinstance(event, Usage):
+                if usage_tracker is not None:
+                    usage_tracker.record(event)
+
+            elif isinstance(event, TextDelta):
                 if event.kind == "thinking":
                     if not thinking_started:
                         thinking_started = True
@@ -371,3 +345,212 @@ def _print_help():
     print()
     print("Config file: ~/.microagent/config.yaml")
     print("Env vars: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL")
+
+
+# ---------------------------------------------------------------------------
+# Slash command handlers — each takes (repl_state, arg) and is async
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_new(state: dict, arg: str) -> None:
+    agent = state["agent"]
+    await agent.close()
+    config = state["config"]
+    store = state["store"]
+    state["session_id"] = f"cli-{int(time.time())}"
+    state["messages"] = []
+    state["usage_tracker"].reset()
+    state["disabled_skills"].clear()
+    state["agent"] = Agent.from_config(
+        config.llm,
+        system_prompt=config.system_prompt,
+        store=store,
+        session_id=state["session_id"],
+        skills_path=config.skills_path,
+    )
+    print(f"{GREEN}✓{RST} New session: {state['session_id']}")
+
+
+async def _cmd_list(state: dict, arg: str) -> None:
+    sessions = await _list_sessions(state["store"])
+    if sessions:
+        print(f"{GRAY}Sessions:{RST}")
+        for sid, count, preview in sessions[:10]:
+            mark = f"{GREEN}*{RST}" if sid == state["session_id"] else " "
+            print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
+    else:
+        print(f"{GRAY}(no saved sessions){RST}")
+
+
+async def _cmd_resume(state: dict, arg: str) -> None:
+    target = arg or await _pick_last_session(state["store"])
+    if target:
+        history = await state["store"].load_history(target)
+        if history:
+            await state["agent"].close()
+            state["messages"] = list(history)
+            state["session_id"] = target
+            state["usage_tracker"].reset()
+            config = state["config"]
+            store = state["store"]
+            state["agent"] = Agent.from_config(
+                config.llm,
+                system_prompt=config.system_prompt,
+                store=store,
+                session_id=target,
+                skills_path=config.skills_path,
+            )
+            print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
+        else:
+            print(f"{RED}✗{RST} Session not found: {target}")
+    else:
+        print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
+
+
+async def _cmd_compact(state: dict, arg: str) -> None:
+    messages = state["messages"]
+    if len(messages) < 5:
+        print(f"{GRAY}(not enough messages to compact){RST}")
+        return
+
+    from ..session.compress import (
+        CompactionState,
+        compact_conversation,
+        count_tokens,
+    )
+
+    before_count = len(messages)
+    before_tokens = count_tokens(tuple(messages))
+    agent = state["agent"]
+    state_obj = getattr(agent.runner, "_compaction_state", CompactionState())
+    compressed = await compact_conversation(
+        tuple(messages),
+        agent.runner.llm,
+        context_window=before_tokens + 8000,
+        state=state_obj,
+        force=True,
+    )
+    messages[:] = list(compressed)
+    await agent.close()
+    config = state["config"]
+    store = state["store"]
+    state["agent"] = Agent.from_config(
+        config.llm,
+        system_prompt=config.system_prompt,
+        store=store,
+        session_id=state["session_id"],
+        skills_path=config.skills_path,
+    )
+    state["agent"].runner._compaction_state = state_obj
+    after_count = len(messages)
+    after_tokens = count_tokens(tuple(messages))
+    print(
+        f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
+        f"{before_tokens} → {after_tokens} tokens"
+    )
+
+
+async def _cmd_model(state: dict, arg: str) -> None:
+    config = state["config"]
+    if not arg:
+        print(f"Current model: {config.llm.model}")
+        return
+    config.llm = type(config.llm)(
+        base_url=config.llm.base_url,
+        api_key=config.llm.api_key,
+        model=arg,
+        reasoning_effort=config.llm.reasoning_effort,
+        service_tier=config.llm.service_tier,
+    )
+    print(f"{GREEN}✓{RST} Model switched to: {arg}")
+
+
+async def _cmd_history(state: dict, arg: str) -> None:
+    messages = state["messages"]
+    if not messages:
+        print(f"{GRAY}(no messages in this session){RST}")
+        return
+    for i, msg in enumerate(messages):
+        role = msg.role
+        preview = msg.content[:80].replace("\n", " ")
+        if len(msg.content) > 80:
+            preview += "..."
+        print(f"  {GRAY}[{i}]{RST} {role}: {preview}")
+
+
+async def _cmd_skill(state: dict, arg: str) -> None:
+    parts = arg.split(maxsplit=1) if arg else []
+    subcmd = parts[0] if parts else "list"
+    skill_name = parts[1] if len(parts) > 1 else ""
+
+    disabled = state["disabled_skills"]
+
+    if subcmd == "list":
+        agent = state["agent"]
+        loader = agent.runner.skill_loader
+        if loader is None:
+            print(f"{GRAY}(no skill loader configured){RST}")
+            return
+        try:
+            skills = await loader.load()
+        except Exception:
+            print(f"{GRAY}(failed to load skills){RST}")
+            return
+        if not skills:
+            print(f"{GRAY}(no skills found){RST}")
+            return
+        for s in skills:
+            status = f"{RED}disabled{RST}" if s.name in disabled else f"{GREEN}enabled{RST}"
+            desc = s.description[:60] if s.description else ""
+            print(f"  {status} {GRAY}{s.namespace}:{s.name}{RST} — {desc}")
+
+    elif subcmd == "unload":
+        if not skill_name:
+            print(f"{RED}✗{RST} Usage: /skill unload <name>")
+            return
+        disabled.add(skill_name)
+        print(f"{GREEN}✓{RST} Skill '{skill_name}' disabled (will be filtered from matches)")
+
+    elif subcmd == "load":
+        if not skill_name:
+            print(f"{RED}✗{RST} Usage: /skill load <name>")
+            return
+        if skill_name in disabled:
+            disabled.discard(skill_name)
+            print(f"{GREEN}✓{RST} Skill '{skill_name}' re-enabled")
+        else:
+            print(f"{GRAY}Skill '{skill_name}' is already enabled{RST}")
+
+    else:
+        print(f"{RED}✗{RST} Unknown subcommand: {subcmd}. Use: list, load, unload")
+
+
+async def _cmd_clear(state: dict, arg: str) -> None:
+    import os
+
+    os.system("clear" if os.name == "posix" else "cls")
+
+
+async def _cmd_cost(state: dict, arg: str) -> None:
+    tracker = state["usage_tracker"]
+    print(tracker.summary())
+
+
+async def _cmd_help(state: dict, arg: str) -> None:
+    for name, (_handler, desc) in sorted(_COMMANDS.items()):
+        print(f"  {GRAY}/{name}{RST}  {desc}")
+
+
+# Command registry: name → (handler, description)
+_COMMANDS: dict[str, tuple] = {
+    "new": (_cmd_new, "Start a new session"),
+    "list": (_cmd_list, "List saved sessions"),
+    "resume": (_cmd_resume, "Resume last or specific session"),
+    "compact": (_cmd_compact, "Manually compress current conversation"),
+    "model": (_cmd_model, "Show or switch model (/model <name>)"),
+    "history": (_cmd_history, "Show message history for current session"),
+    "skill": (_cmd_skill, "Manage skills (/skill list|load|unload)"),
+    "clear": (_cmd_clear, "Clear the screen"),
+    "cost": (_cmd_cost, "Show token usage and cost for this session"),
+    "help": (_cmd_help, "Show available commands"),
+}
