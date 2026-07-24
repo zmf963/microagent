@@ -6,8 +6,6 @@ Stateful: handles fence content split across multiple feed() calls.
 
 from __future__ import annotations
 
-import re
-
 _OPEN_TAG = "<context>"
 _CLOSE_TAG = "</context>"
 

@@ -49,3 +49,29 @@ _Avoid_: tool interceptor, guard, middleware
 **EventBus**:
 仅观测的 pub/sub 事件总线——注册 `on()`、发射 `emit()`，异常吞掉不阻断主流程。
 _Avoid_: PluginBus, hook registry, event dispatcher
+
+## Reliability
+
+**Overflow**:
+LLM 因上下文长度超限而 `stop_reason == "length"` 且尚未输出任何文本的场景。触发自动压缩重试。
+_Avoid_: truncation, context length error
+
+**Truncation**:
+`stop_reason == "length"` 但已有部分文本流给用户——无法安全重试，直接失败。
+_Avoid_: overflow, cut-off
+
+**Steer**:
+运行中用户通过注入通道追加的干预文本，附加到最近一次 tool_result，不打断 tool_call/tool_result 配对。纯文本响应期间到达的 steer 等待下一轮。
+_Avoid_: interrupt, inject, side-channel
+
+**Stable Layer**:
+System prompt 的冻结部分——构建后逐字节重放，跨 turn 不变，用于命中 provider 前缀缓存。
+_Avoid_: cached system, frozen prompt, system cache
+
+**Context Injection**:
+Skills 匹配内容、memory 检索结果、动态 ContextSource 贡献，包裹在 `<context>` fence 中追加到当前轮 user message 尾部。不碰 system prompt。
+_Avoid_: system prompt augmentation, dynamic system, inline context
+
+**Model Template**:
+按模型家族选择的 system prompt 基础模板。MicroAgent 针对 DeepSeek-V4、GLM-5.2、Kimi K3 三款模型定制，其余走 default。
+_Avoid_: provider prompt, model persona, system override

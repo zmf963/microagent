@@ -94,7 +94,7 @@ def _summarize_tool_result(tool_name: str, content: str) -> str:
         return f"[read_file] {n_lines} lines"
 
     if tool_name == "grep":
-        match_count = sum(1 for l in lines if l.strip() and ":" in l)
+        match_count = sum(1 for line in lines if line.strip() and ":" in line)
         return f"[grep] {match_count} matches"
 
     if tool_name == "glob":

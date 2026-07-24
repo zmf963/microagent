@@ -10,9 +10,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...core.tool import tool
-from ...core.types import ToolResult
-
 _FILE_REF_PATTERN = re.compile(r"@file:(.+?)(?::(\d+)(?:-(\d+))?)?(?=\s|$)")
 
 

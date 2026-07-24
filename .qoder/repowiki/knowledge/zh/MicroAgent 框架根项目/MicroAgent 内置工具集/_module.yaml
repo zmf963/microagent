@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: tools
+title: MicroAgent 内置工具集
+scope:
+    - src/microagent/tools/
+source_files: []
+depends_on: []
+related_to:
+    - path: session
+    - path: tests
+    - path: tests/unit_tests

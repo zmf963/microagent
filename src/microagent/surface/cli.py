@@ -21,7 +21,6 @@ from ..agent import Agent
 from ..config import Config
 from ..core.types import (
     Message,
-    SteerEvent,
     TextDelta,
     ToolCallDelta,
     ToolProgressDelta,
