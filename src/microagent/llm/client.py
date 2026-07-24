@@ -111,6 +111,7 @@ class LLMConfig:
         model: Model identifier
         reasoning_effort: For o-series models — 'low', 'medium', 'high'
         service_tier: OpenAI service tier — 'auto', 'default', 'flex'
+        auxiliary_model: Optional cheaper/faster model for compression
     """
 
     base_url: str
@@ -118,6 +119,7 @@ class LLMConfig:
     model: str
     reasoning_effort: str | None = None
     service_tier: str | None = None
+    auxiliary_model: str | None = None
 
     @classmethod
     def default(cls) -> LLMConfig:

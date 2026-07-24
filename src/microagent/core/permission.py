@@ -95,10 +95,22 @@ class PermissionEngine:
         return PermissionDecision(Decision.DENY, "no rule matched")
 
     def resolve(self, tool_name: str) -> Decision:
-        """Quick resolve for materialize: returns the highest decision for a tool."""
+        """Quick resolve for materialize: returns the most permissive decision for a tool.
+
+        If any ALLOW rule matches, returns ALLOW.
+        Otherwise returns the first matching rule's decision.
+        This is used for tool list materialization (which tools to show LLM),
+        not for actual permission evaluation (use evaluate() for that).
+        """
+        first_match = None
         for rule in self.rules:
             if fnmatch(tool_name, rule.tool_pattern):
-                return rule.decision
+                if first_match is None:
+                    first_match = rule.decision
+                if rule.decision is Decision.ALLOW:
+                    return Decision.ALLOW
+        if first_match is not None:
+            return first_match
         return Decision.DENY
 
     @staticmethod
@@ -187,6 +199,13 @@ class ScriptRule:
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
+    # Sensitive operations — ASK before executing
+    Rule("bash", {"command": "rm *"}, Decision.ASK, "rm command requires confirmation"),
+    Rule("bash", {"command": "mv *"}, Decision.ASK, "mv command requires confirmation"),
+    Rule("bash", {"command": "chmod *"}, Decision.ASK, "chmod command requires confirmation"),
+    Rule("bash", {"command": "chown *"}, Decision.ASK, "chown command requires confirmation"),
+    Rule("task", {}, Decision.ASK, "subagent spawn requires confirmation"),
+    # Default: allow all tools
     Rule("read_file", {}, Decision.ALLOW),
     Rule("grep", {}, Decision.ALLOW),
     Rule("glob", {}, Decision.ALLOW),

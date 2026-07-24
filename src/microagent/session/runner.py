@@ -77,6 +77,7 @@ class SessionRunner:
         self._extractor = None
         self._overflow_retried = False
         self._steer_pending: str | None = None
+        self.mode: str = "normal"  # "normal" | "plan" | "build"
 
         # Per-session process registry (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -126,6 +127,19 @@ class SessionRunner:
         calls (pure text response), the steer waits until the next turn.
         """
         self._steer_pending = text
+
+    # Tools blocked in plan mode (read-only mode)
+    _PLAN_BLOCKED_TOOLS = frozenset({
+        "write_file", "edit_file", "bash", "execute_code",
+        "browser_click", "browser_type",
+    })
+
+    def _get_available_tools(self) -> set[str]:
+        """Return set of tool names available in current mode."""
+        all_names = set(self.registry.names)
+        if self.mode == "plan":
+            return all_names - self._PLAN_BLOCKED_TOOLS
+        return all_names
 
     async def run_turn(
         self,
@@ -217,7 +231,12 @@ class SessionRunner:
 
             if self._cached_system is None or system != self._cached_system:
                 self._cached_system = system
-                self._cached_tools = self.registry.to_openai_tools() or None
+                all_tools = self.registry.to_openai_tools() or None
+                # Filter tools by mode (plan mode blocks write tools)
+                if all_tools and self.mode == "plan":
+                    available = self._get_available_tools()
+                    all_tools = [t for t in all_tools if t.get("function", {}).get("name", "") in available] or None
+                self._cached_tools = all_tools
             oai_tools = self._cached_tools
 
             content_parts: list[str] = []
