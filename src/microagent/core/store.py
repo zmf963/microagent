@@ -31,6 +31,7 @@ class Store(Protocol):
     async def load_history(self, session_id: str) -> list[Message]: ...
     async def checkpoint(self, session_id: str) -> None: ...
     async def list_sessions(self) -> list[str]: ...
+    async def session_summaries(self) -> list[dict[str, Any]]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +143,36 @@ class SQLiteStore:
         ).fetchall()
         return [r[0] for r in rows]
 
+    async def session_summaries(self) -> list[dict[str, Any]]:
+        """Return count + last-message-preview per session in one query.
+
+        Avoids the O(N) per-session load_history calls in /list.
+        Returns list of dicts: {session_id, count, preview}.
+        """
+        rows = self._conn.execute("""
+            SELECT
+                session_id,
+                COUNT(*) AS count,
+                (SELECT data FROM messages m2
+                 WHERE m2.session_id = m.session_id
+                 ORDER BY m2.seq DESC LIMIT 1) AS last_data
+            FROM messages m
+            GROUP BY session_id
+            ORDER BY session_id
+        """).fetchall()
+        summaries = []
+        for r in rows:
+            session_id, count, last_data = r
+            preview = ""
+            if last_data:
+                try:
+                    msg = _deserialize_message(last_data)
+                    preview = msg.content[:50].replace("\n", " ")
+                except Exception:
+                    pass
+            summaries.append({"session_id": session_id, "count": count, "preview": preview})
+        return summaries
+
     def close(self) -> None:
         self._conn.close()
 
@@ -167,3 +198,13 @@ class InMemoryStore:
 
     async def list_sessions(self) -> list[str]:
         return list(self._data.keys())
+
+    async def session_summaries(self) -> list[dict[str, Any]]:
+        summaries = []
+        for sid, msgs in self._data.items():
+            preview = ""
+            if msgs:
+                preview = msgs[-1].content[:50].replace("\n", " ")
+            summaries.append({"session_id": sid, "count": len(msgs), "preview": preview})
+        summaries.sort(key=lambda s: s["session_id"])
+        return summaries

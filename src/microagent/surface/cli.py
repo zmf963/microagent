@@ -206,18 +206,9 @@ async def _main():
 
 
 async def _list_sessions(store) -> list[tuple[str, int, str]]:
-    """List sessions with message count and preview."""
-    sessions = await store.list_sessions()
-    result = []
-    for sid in sessions:
-        history = await store.load_history(sid)
-        count = len(history)
-        preview = ""
-        if history:
-            last = history[-1]
-            preview = last.content[:50].replace("\n", " ")
-        result.append((sid, count, preview))
-    return sorted(result, key=lambda x: x[0])
+    """List sessions with message count and preview — single query via session_summaries."""
+    summaries = await store.session_summaries()
+    return [(s["session_id"], s["count"], s["preview"]) for s in summaries]
 
 
 async def _pick_last_session(store) -> str | None:

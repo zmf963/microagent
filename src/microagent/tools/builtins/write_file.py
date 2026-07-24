@@ -17,10 +17,10 @@ async def write_file(
     content: Annotated[str, Field(description="The content to write")],
 ) -> ToolResult:
     import asyncio
-    p = Path(path)
+    p = Path(path).expanduser().resolve()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(p.write_text, content)
-        return ToolResult.ok(f"wrote {len(content)} bytes to {path}")
+        return ToolResult.ok(f"wrote {len(content)} bytes to {p}")
     except Exception as e:
         return ToolResult.error(f"failed to write: {e!r}")

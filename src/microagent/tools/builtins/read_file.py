@@ -17,7 +17,7 @@ async def read_file(
     offset: Annotated[int, Field(description="Line number to start from (1-indexed)", ge=1)] = 1,
     limit: Annotated[int, Field(description="Maximum number of lines to read", ge=1, le=2000)] = 500,
 ) -> ToolResult:
-    p = Path(path)
+    p = Path(path).expanduser().resolve()
 
     if not p.exists():
         return ToolResult.error(f"file not found: {path}")

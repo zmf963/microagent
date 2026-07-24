@@ -18,7 +18,7 @@ async def edit_file(
     new_string: Annotated[str, Field(description="The replacement text")],
     replace_all: Annotated[bool, Field(description="Replace all occurrences if true, else only first")] = False,
 ) -> ToolResult:
-    p = Path(path)
+    p = Path(path).expanduser().resolve()
 
     if not p.exists():
         return ToolResult.error(f"file not found: {path}")
