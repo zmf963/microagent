@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .core.store import Store
@@ -16,6 +17,7 @@ from .core.types import Message, TurnComplete, TurnFailed
 from .llm.client import LLMConfig, OpenAIChatClient
 from .session.budget import Budget
 from .session.runner import SessionRunner
+from .skill.loader import ClaudeSkillLoader
 
 
 @dataclass
@@ -37,12 +39,22 @@ class Agent:
         store: Store | None = None,
         session_id: str = "default",
         enable_cron: bool = False,
+        skills_path: str | None = None,
     ) -> Agent:
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
         if tools:
             all_tools.extend(tools)
         registry = ToolRegistry(all_tools)
+
+        # Build skill loader from colon-separated paths
+        skill_loader = None
+        if skills_path:
+            search_paths = tuple(
+                Path(p) for p in skills_path.split(":") if p.strip()
+            )
+            if search_paths:
+                skill_loader = ClaudeSkillLoader(search_paths=search_paths)
 
         llm = OpenAIChatClient(llm_config)
         budget = Budget.root(max_iterations=max_iterations)
@@ -53,6 +65,7 @@ class Agent:
             system_prompt=system_prompt,
             store=store,
             session_id=session_id,
+            skill_loader=skill_loader,
         )
         agent = cls(runner=runner, registry=registry)
 

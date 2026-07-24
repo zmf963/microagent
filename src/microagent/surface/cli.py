@@ -123,6 +123,7 @@ async def _main():
         system_prompt=config.system_prompt,
         store=store,
         session_id=session_id,
+        skills_path=config.skills_path,
     )
 
     if positional:
@@ -160,6 +161,7 @@ async def _main():
                     system_prompt=config.system_prompt,
                     store=store,
                     session_id=session_id,
+                    skills_path=config.skills_path,
                 )
                 print(f"{GREEN}✓{RST} New session: {session_id}")
 
@@ -186,6 +188,7 @@ async def _main():
                             system_prompt=config.system_prompt,
                             store=store,
                             session_id=session_id,
+                            skills_path=config.skills_path,
                         )
                         print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
                     else:
@@ -221,6 +224,7 @@ async def _main():
                         system_prompt=config.system_prompt,
                         store=store,
                         session_id=session_id,
+                        skills_path=config.skills_path,
                     )
                     agent.runner._compaction_state = state
                     after_count = len(messages)

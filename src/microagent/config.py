@@ -4,7 +4,7 @@ Priority: CLI args > environment variables > config file > defaults.
 
 Config file: ~/.microagent/config.yaml
 Environment: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL,
-             MICROAGENT_SYSTEM_PROMPT
+             MICROAGENT_SYSTEM_PROMPT, MICROAGENT_SKILLS_PATH
 CLI args:    --base-url, --api-key, --model, --system-prompt
 """
 
@@ -23,6 +23,7 @@ class Config:
 
     llm: LLMConfig
     system_prompt: str = "You are a helpful assistant."
+    skills_path: str | None = None  # colon-separated list of skill directories
 
     @classmethod
     def from_file(
@@ -32,6 +33,7 @@ class Config:
         cli_api_key: str | None = None,
         cli_model: str | None = None,
         cli_system_prompt: str | None = None,
+        cli_skills_path: str | None = None,
     ) -> Config:
         """Load config from file, env, and CLI args (priority order)."""
         # 1. Load from config file
@@ -56,10 +58,16 @@ class Config:
             or file_data.get("system_prompt")
             or "You are a helpful assistant."
         )
+        skills_path = (
+            cli_skills_path
+            or os.environ.get("MICROAGENT_SKILLS_PATH")
+            or file_data.get("skills_path")
+        )
 
         return cls(
             llm=LLMConfig(base_url=base_url, api_key=api_key, model=model),
             system_prompt=system_prompt,
+            skills_path=skills_path,
         )
 
     @staticmethod
@@ -88,4 +96,5 @@ class Config:
             "api_key": model_section.get("api_key"),
             "model": model_section.get("model"),
             "system_prompt": data.get("system_prompt"),
+            "skills_path": data.get("skills_path"),
         }

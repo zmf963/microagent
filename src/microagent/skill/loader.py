@@ -117,7 +117,10 @@ def _parse_skill_md(path: Path, namespace: str = "claude") -> Skill | None:
 
 
 class ClaudeSkillLoader:
-    """Loads skills from ~/.claude/skills/<name>/SKILL.md directories.
+    """Loads skills from SKILL.md files found recursively under search paths.
+
+    Supports both flat (``<dir>/<name>/SKILL.md``) and nested
+    (``<dir>/<category>/<name>/SKILL.md``) layouts via ``rglob``.
 
     Match strategy:
     1. Exact keyword match on triggers (score 1.0)
@@ -132,7 +135,7 @@ class ClaudeSkillLoader:
         for base in self._paths:
             if not base.exists():
                 continue
-            for skill_md in sorted(base.glob("*/SKILL.md")):
+            for skill_md in sorted(base.rglob("SKILL.md")):
                 s = _parse_skill_md(skill_md)
                 if s is not None:
                     skills.append(s)
