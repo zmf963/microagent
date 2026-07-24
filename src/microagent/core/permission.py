@@ -209,4 +209,6 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("context7", {}, Decision.ALLOW),
     Rule("session_search", {}, Decision.ALLOW),
     Rule("process", {}, Decision.ALLOW),
+    Rule("git", {}, Decision.ALLOW),
+    Rule("file_tree", {}, Decision.ALLOW),
 )

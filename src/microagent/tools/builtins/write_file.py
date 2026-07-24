@@ -17,12 +17,19 @@ from ...core.types import ToolResult
 async def write_file(
     path: Annotated[str, Field(description="Path to the file to write")],
     content: Annotated[str, Field(description="The content to write")],
+    backup: Annotated[bool, Field(description="If True, create a .bak copy of existing file before overwriting")] = False,
 ) -> ToolResult:
     import asyncio
 
     p = Path(path).expanduser().resolve()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create backup if requested and file exists
+        if backup and p.exists():
+            bak = p.with_suffix(p.suffix + ".bak")
+            await asyncio.to_thread(bak.write_text, p.read_text())
+
         await asyncio.to_thread(p.write_text, content)
         return ToolResult.ok(f"wrote {len(content)} bytes to {p}")
     except Exception as e:

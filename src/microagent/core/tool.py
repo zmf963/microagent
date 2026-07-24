@@ -292,6 +292,8 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import context7 as _c7  # noqa: F401
     from ..tools.builtins import edit_file as _ef  # noqa: F401
     from ..tools.builtins import execute_code as _ec  # noqa: F401
+    from ..tools.builtins import file_tree as _ft  # noqa: F401
+    from ..tools.builtins import git as _git  # noqa: F401
     from ..tools.builtins import glob as _glob  # noqa: F401
     from ..tools.builtins import grep as _grep  # noqa: F401
     from ..tools.builtins import process as _pr  # noqa: F401

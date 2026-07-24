@@ -198,6 +198,8 @@ class TestRegistryAllBuiltins:
             "exit",
             "task",
             "skill_manage",
+            "git",
+            "file_tree",
         }
         actual = set(registry.names)
         assert actual == expected, f"missing: {expected - actual}, extra: {actual - expected}"
