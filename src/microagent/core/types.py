@@ -178,6 +178,13 @@ class TurnFailed:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class SteerEvent:
+    """Emitted when a steer text is injected into the running turn."""
+
+    text: str
+
+
 Event = (
     TextDelta
     | ToolCallDelta
@@ -185,4 +192,5 @@ Event = (
     | ToolResultDelta
     | TurnComplete
     | TurnFailed
+    | SteerEvent
 )

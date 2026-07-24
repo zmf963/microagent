@@ -102,6 +102,13 @@ class Agent:
                 return f"[error: {event.reason}]"
         return "[error: turn ended without completion]"
 
+    def steer(self, text: str) -> None:
+        """Inject a steer text into the running turn.
+
+        Delegates to SessionRunner.steer().
+        """
+        self.runner.steer(text)
+
     async def close(self) -> None:
         """Clean up all resources (cron, runner, LLM client)."""
         if self.cron is not None:

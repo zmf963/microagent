@@ -23,6 +23,7 @@ from ..core.tool import ToolRegistry
 from ..core.types import (
     Event,
     Message,
+    SteerEvent,
     TextDelta,
     ToolCall,
     ToolCallDelta,
@@ -75,6 +76,7 @@ class SessionRunner:
         self._cached_tools: list[dict] | None = None
         self._extractor = None
         self._overflow_retried = False
+        self._steer_pending: str | None = None
 
         # Per-session process registry (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -115,6 +117,15 @@ class SessionRunner:
 
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
+
+    def steer(self, text: str) -> None:
+        """Inject a steer text into the running turn.
+
+        The text will be appended to the most recent tool_result on the
+        next iteration boundary. If the current iteration has no tool
+        calls (pure text response), the steer waits until the next turn.
+        """
+        self._steer_pending = text
 
     async def run_turn(
         self,
@@ -325,6 +336,21 @@ class SessionRunner:
                     content=result.content[:200],
                     is_error=result.is_error,
                 )
+
+            # Inject steer text into the last tool_result if pending
+            if self._steer_pending is not None and messages:
+                steer_text = self._steer_pending
+                self._steer_pending = None
+                yield SteerEvent(text=steer_text)
+                # Find last tool message and append steer text
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].role == "tool":
+                        messages[i] = Message(
+                            role="tool",
+                            content=messages[i].content + f"\n\n[steer] {steer_text}",
+                            tool_call_id=messages[i].tool_call_id,
+                        )
+                        break
 
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")
 
