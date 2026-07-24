@@ -80,6 +80,7 @@ class SessionRunner:
         self._steer_pending: str | None = None
         self.mode: str = "normal"  # "normal" | "plan" | "build"
         self._output_store = None  # lazy init
+        self._active_subagents: list[SessionRunner] = []
 
         # Per-session process registry (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -131,7 +132,7 @@ class SessionRunner:
         """
         self._steer_pending = text
         # Cascade to active subagents
-        for child in getattr(self, "_active_subagents", []):
+        for child in self._active_subagents:
             child.steer(text)
 
     # Tools blocked in plan mode (read-only mode)

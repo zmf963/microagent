@@ -130,8 +130,6 @@ class SubagentManager:
         )
 
         # Register child for steer propagation
-        if not hasattr(parent_runner, "_active_subagents"):
-            parent_runner._active_subagents = []
         parent_runner._active_subagents.append(child_runner)
 
         # Run the subagent turn

@@ -15,6 +15,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from dataclasses import dataclass, field
 
 from ..agent import Agent
 from ..config import Config
@@ -74,6 +75,19 @@ class _UsageTracker:
     def status_line(self) -> str:
         """Compact one-line status for the CLI bottom bar."""
         return f"{GRAY}tokens: {self.total_input + self.total_output} | cost: ${self.total_cost:.4f}{RST}"
+
+
+@dataclass
+class ReplState:
+    """Mutable state shared across CLI command handlers."""
+
+    agent: Agent
+    config: Config
+    store: object
+    session_id: str
+    messages: list[Message] = field(default_factory=list)
+    usage_tracker: _UsageTracker = field(default_factory=_UsageTracker)
+    disabled_skills: set[str] = field(default_factory=set)
 
 
 def _term_width() -> int:
@@ -180,16 +194,15 @@ async def _main():
     usage_tracker = _UsageTracker()
     disabled_skills: set[str] = set()
 
-    # REPL state accessible to command handlers
-    repl_state = {
-        "agent": agent,
-        "config": config,
-        "store": store,
-        "session_id": session_id,
-        "messages": messages,
-        "usage_tracker": usage_tracker,
-        "disabled_skills": disabled_skills,
-    }
+    repl_state = ReplState(
+        agent=agent,
+        config=config,
+        store=store,
+        session_id=session_id,
+        messages=messages,
+        usage_tracker=usage_tracker,
+        disabled_skills=disabled_skills,
+    )
 
     while True:
         try:
@@ -354,47 +367,47 @@ def _print_help():
 
 
 async def _cmd_new(state: dict, arg: str) -> None:
-    agent = state["agent"]
+    agent = state.agent
     await agent.close()
-    config = state["config"]
-    store = state["store"]
-    state["session_id"] = f"cli-{int(time.time())}"
-    state["messages"] = []
-    state["usage_tracker"].reset()
-    state["disabled_skills"].clear()
-    state["agent"] = Agent.from_config(
+    config = state.config
+    store = state.store
+    state.session_id = f"cli-{int(time.time())}"
+    state.messages = []
+    state.usage_tracker.reset()
+    state.disabled_skills.clear()
+    state.agent = Agent.from_config(
         config.llm,
         system_prompt=config.system_prompt,
         store=store,
-        session_id=state["session_id"],
+        session_id=state.session_id,
         skills_path=config.skills_path,
     )
     print(f"{GREEN}✓{RST} New session: {state['session_id']}")
 
 
 async def _cmd_list(state: dict, arg: str) -> None:
-    sessions = await _list_sessions(state["store"])
+    sessions = await _list_sessions(state.store)
     if sessions:
         print(f"{GRAY}Sessions:{RST}")
         for sid, count, preview in sessions[:10]:
-            mark = f"{GREEN}*{RST}" if sid == state["session_id"] else " "
+            mark = f"{GREEN}*{RST}" if sid == state.session_id else " "
             print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
     else:
         print(f"{GRAY}(no saved sessions){RST}")
 
 
 async def _cmd_resume(state: dict, arg: str) -> None:
-    target = arg or await _pick_last_session(state["store"])
+    target = arg or await _pick_last_session(state.store)
     if target:
-        history = await state["store"].load_history(target)
+        history = await state.store.load_history(target)
         if history:
-            await state["agent"].close()
-            state["messages"] = list(history)
-            state["session_id"] = target
-            state["usage_tracker"].reset()
-            config = state["config"]
-            store = state["store"]
-            state["agent"] = Agent.from_config(
+            await state.agent.close()
+            state.messages = list(history)
+            state.session_id = target
+            state.usage_tracker.reset()
+            config = state.config
+            store = state.store
+            state.agent = Agent.from_config(
                 config.llm,
                 system_prompt=config.system_prompt,
                 store=store,
@@ -409,7 +422,7 @@ async def _cmd_resume(state: dict, arg: str) -> None:
 
 
 async def _cmd_compact(state: dict, arg: str) -> None:
-    messages = state["messages"]
+    messages = state.messages
     if len(messages) < 5:
         print(f"{GRAY}(not enough messages to compact){RST}")
         return
@@ -422,7 +435,7 @@ async def _cmd_compact(state: dict, arg: str) -> None:
 
     before_count = len(messages)
     before_tokens = count_tokens(tuple(messages))
-    agent = state["agent"]
+    agent = state.agent
     state_obj = getattr(agent.runner, "_compaction_state", CompactionState())
     compressed = await compact_conversation(
         tuple(messages),
@@ -433,16 +446,16 @@ async def _cmd_compact(state: dict, arg: str) -> None:
     )
     messages[:] = list(compressed)
     await agent.close()
-    config = state["config"]
-    store = state["store"]
-    state["agent"] = Agent.from_config(
+    config = state.config
+    store = state.store
+    state.agent = Agent.from_config(
         config.llm,
         system_prompt=config.system_prompt,
         store=store,
-        session_id=state["session_id"],
+        session_id=state.session_id,
         skills_path=config.skills_path,
     )
-    state["agent"].runner._compaction_state = state_obj
+    state.agent.runner._compaction_state = state_obj
     after_count = len(messages)
     after_tokens = count_tokens(tuple(messages))
     print(
@@ -452,7 +465,7 @@ async def _cmd_compact(state: dict, arg: str) -> None:
 
 
 async def _cmd_model(state: dict, arg: str) -> None:
-    config = state["config"]
+    config = state.config
     if not arg:
         print(f"Current model: {config.llm.model}")
         return
@@ -467,12 +480,12 @@ async def _cmd_model(state: dict, arg: str) -> None:
         auxiliary_model=config.llm.auxiliary_model,
     )
     # Update the running agent's LLM client
-    state["agent"].runner.llm = OpenAIChatClient(config.llm)
+    state.agent.runner.llm = OpenAIChatClient(config.llm)
     print(f"{GREEN}✓{RST} Model switched to: {arg}")
 
 
 async def _cmd_history(state: dict, arg: str) -> None:
-    messages = state["messages"]
+    messages = state.messages
     if not messages:
         print(f"{GRAY}(no messages in this session){RST}")
         return
@@ -489,10 +502,10 @@ async def _cmd_skill(state: dict, arg: str) -> None:
     subcmd = parts[0] if parts else "list"
     skill_name = parts[1] if len(parts) > 1 else ""
 
-    disabled = state["disabled_skills"]
+    disabled = state.disabled_skills
 
     if subcmd == "list":
-        agent = state["agent"]
+        agent = state.agent
         loader = agent.runner.skill_loader
         if loader is None:
             print(f"{GRAY}(no skill loader configured){RST}")
@@ -538,7 +551,7 @@ async def _cmd_clear(state: dict, arg: str) -> None:
 
 
 async def _cmd_cost(state: dict, arg: str) -> None:
-    tracker = state["usage_tracker"]
+    tracker = state.usage_tracker
     print(tracker.summary())
 
 
@@ -548,23 +561,23 @@ async def _cmd_help(state: dict, arg: str) -> None:
 
 
 async def _cmd_plan(state: dict, arg: str) -> None:
-    state["agent"].runner.mode = "plan"
+    state.agent.runner.mode = "plan"
     print(f"{GREEN}✓{RST} Switched to plan mode (read-only tools)")
 
 
 async def _cmd_build(state: dict, arg: str) -> None:
-    state["agent"].runner.mode = "build"
+    state.agent.runner.mode = "build"
     print(f"{GREEN}✓{RST} Switched to build mode (all tools enabled)")
 
 
 async def _cmd_switch(state: dict, arg: str) -> None:
-    current = state["agent"].runner.mode
+    current = state.agent.runner.mode
     if current == "normal":
-        state["agent"].runner.mode = "plan"
+        state.agent.runner.mode = "plan"
     elif current == "plan":
-        state["agent"].runner.mode = "build"
+        state.agent.runner.mode = "build"
     else:
-        state["agent"].runner.mode = "normal"
+        state.agent.runner.mode = "normal"
     print(f"{GREEN}✓{RST} Switched: {current} → {state['agent'].runner.mode}")
 
 
