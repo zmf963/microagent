@@ -89,7 +89,7 @@ ignore = [
     "B904",   # raise ... from err in except — stylistic
     "B905",   # zip() without strict — stylistic
 ]
-exclude = ["tests/integration/", "tests/", "src/microagent/skill/loader.py"]
+exclude = ["tests/integration/", "tests/unit/", "tests/", "src/microagent/skill/loader.py"]
 
 [tool.ruff.format]
 quote-style = "double"

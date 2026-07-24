@@ -1,7 +1,7 @@
 .PHONY: test lint fix build clean cov
 
 PYTEST    := .venv/bin/python -m pytest
-RUFF      := ruff
+RUFF      := .venv/bin/ruff
 COVERAGE  := .venv/bin/python -m coverage
 
 # ─── Default ───────────────────────────────────────────────
