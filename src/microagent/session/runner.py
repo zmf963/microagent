@@ -185,9 +185,7 @@ class SessionRunner:
                 if self.event_bus:
                     await self.event_bus.emit(
                         "turn_complete", self.session_id, assistant_msg.content
-                    )
-                if self.store is not None:
-                    await self.store.append(self.session_id, messages[-1])
+                )
                 if self._extractor is not None:
                     try:
                         history = tuple(

@@ -177,7 +177,6 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("glob", {}, Decision.ALLOW),
     Rule("write_file", {}, Decision.ALLOW),
     Rule("edit_file", {}, Decision.ALLOW),
-    Rule("bash", {"command": "ls *"}, Decision.ALLOW),
     Rule("bash", {}, Decision.ALLOW),
     Rule("web_fetch", {}, Decision.ALLOW),
     Rule("todo", {}, Decision.ALLOW),

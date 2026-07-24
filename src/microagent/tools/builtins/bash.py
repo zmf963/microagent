@@ -16,6 +16,8 @@ async def bash(
     command: Annotated[str, Field(description="The shell command to execute")],
     timeout: Annotated[int, Field(description="Timeout in seconds", ge=1, le=600)] = 120,
 ) -> ToolResult:
+    MAX_OUTPUT = 100_000  # prevent OOM from runaway output
+
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -38,6 +40,8 @@ async def bash(
             )
 
         output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        if len(output) > MAX_OUTPUT:
+            output = output[:MAX_OUTPUT] + f"\n[truncated: {len(output) - MAX_OUTPUT} bytes beyond {MAX_OUTPUT} limit]"
         exit_code = proc.returncode
 
         if exit_code != 0:
