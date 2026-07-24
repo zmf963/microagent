@@ -328,6 +328,7 @@ async def compact_conversation(
     state: CompactionState | None = None,
     force: bool = False,
     budget: Budget | None = None,
+    strict_role_alternation: bool = False,
 ) -> tuple[Message, ...]:
     """Run the 4-layer compression pipeline.
 
@@ -415,7 +416,7 @@ async def compact_conversation(
                     state.activate_cooldown()
                 return _fallback(current)
 
-        return current
+        return _ensure_role_alternation(current, strict=strict_role_alternation)
     finally:
         state._is_compaction_call = False
 
@@ -483,6 +484,37 @@ def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:
     )
     # Keep last 5 messages for continuity
     return (placeholder,) + messages[-5:]
+
+
+def _ensure_role_alternation(
+    messages: tuple[Message, ...],
+    *,
+    strict: bool = False,
+) -> tuple[Message, ...]:
+    """Ensure no adjacent same-role messages (user/assistant).
+
+    When strict=False, return messages unchanged.
+    When strict=True, insert empty messages between adjacent same-role pairs.
+    Tool messages are skipped (they follow tool_call pairing rules).
+    """
+    if not strict:
+        return messages
+
+    result: list[Message] = []
+    prev_role: str | None = None
+    for msg in messages:
+        if msg.role == "tool":
+            result.append(msg)
+            continue
+        if prev_role is not None and msg.role == prev_role:
+            # Insert empty message of the opposite role
+            if msg.role == "user":
+                result.append(Message.assistant(""))
+            else:
+                result.append(Message.user(""))
+        result.append(msg)
+        prev_role = msg.role
+    return tuple(result)
 
 
 # ---------------------------------------------------------------------------
