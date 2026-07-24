@@ -9,6 +9,8 @@ Requires: pip install playwright && playwright install chromium
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Annotated
 
 from pydantic import Field
@@ -17,10 +19,11 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
-# Module-level browser state
+# Module-level browser state — guarded by _lock for concurrent safety
 _page: object = None
 _browser: object = None
 _playwright: object = None
+_lock = threading.Lock()
 
 
 async def _get_page() -> object | None:
@@ -33,14 +36,17 @@ async def _ensure_browser():
     global _playwright, _browser
     if _browser is not None:
         return
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        raise ImportError(
-            "playwright not installed. Run: pip install playwright && playwright install chromium"
-        )
-    _playwright = await async_playwright().start()
-    _browser = await _playwright.chromium.launch(headless=True)
+    with _lock:
+        if _browser is not None:
+            return
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise ImportError(
+                "playwright not installed. Run: pip install playwright && playwright install chromium"
+            )
+        _playwright = await async_playwright().start()
+        _browser = await _playwright.chromium.launch(headless=True)
 
 
 @tool("browser_navigate", description="Open a URL in the browser. Must be called first.")

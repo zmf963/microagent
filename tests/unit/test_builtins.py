@@ -40,12 +40,12 @@ class TestWriteFile:
 class TestEditFile:
     async def test_replace_first(self, tmp_path, registry):
         path = str(tmp_path / "edit.txt")
-        (tmp_path / "edit.txt").write_text("foo bar foo bar")
+        (tmp_path / "edit.txt").write_text("foo bar baz bar")
         call = ToolCall(id="c1", name="edit_file",
-                        arguments={"path": path, "old_string": "foo", "new_string": "baz"})
+                        arguments={"path": path, "old_string": "foo", "new_string": "qux"})
         result = await registry.execute(call)
         assert not result.is_error
-        assert (tmp_path / "edit.txt").read_text() == "baz bar foo bar"
+        assert (tmp_path / "edit.txt").read_text() == "qux bar baz bar"
 
     async def test_replace_all(self, tmp_path, registry):
         path = str(tmp_path / "edit2.txt")
@@ -55,6 +55,16 @@ class TestEditFile:
         result = await registry.execute(call)
         assert not result.is_error
         assert (tmp_path / "edit2.txt").read_text() == "baz bar baz"
+
+    async def test_replace_ambiguous(self, tmp_path, registry):
+        """replace_all=False with multiple matches should error."""
+        path = str(tmp_path / "edit_ambig.txt")
+        (tmp_path / "edit_ambig.txt").write_text("foo bar foo bar")
+        call = ToolCall(id="c1", name="edit_file",
+                        arguments={"path": path, "old_string": "foo", "new_string": "baz"})
+        result = await registry.execute(call)
+        assert result.is_error
+        assert "replace_all" in result.content
 
     async def test_not_found(self, tmp_path, registry):
         path = str(tmp_path / "nofile.txt")

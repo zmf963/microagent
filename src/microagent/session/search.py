@@ -55,10 +55,7 @@ def ensure_fts5(store: SQLiteStore) -> None:
 # Search
 # ---------------------------------------------------------------------------
 
-# Simple tokenizer for CJK-aware query decomposition
-# FTS5 default tokenizer is space/punctuation-based, which doesn't
-# split CJK characters. We split CJK into individual characters
-# and Latin into words for the FTS5 query.
+# CJK character ranges
 _CJK_RE = re.compile(r'[\u4e00-\u9fff\u3040-\u30ff]+')
 _LATIN_WORD_RE = re.compile(r'[a-zA-Z0-9_]+')
 
@@ -66,23 +63,27 @@ _LATIN_WORD_RE = re.compile(r'[a-zA-Z0-9_]+')
 def _build_fts_query(query: str) -> str:
     """Build an FTS5 query string with CJK-aware tokenization.
 
-    Chinese/Japanese characters are split into individual terms for n-gram matching.
-    Latin words are kept as-is.
+    Latin words are quoted for phrase matching.
+    CJK text is split into bigrams (e.g. "代码审查" → "代码 码审 审查")
+    for better precision than single-character OR.
     """
-    # Split query into mixed segments
     parts = []
     pos = 0
     for m in _CJK_RE.finditer(query):
         # Add Latin text before this CJK segment
         latin = query[pos:m.start()].strip()
         if latin:
-            # Quote Latin words for FTS5 phrase matching
             words = _LATIN_WORD_RE.findall(latin)
             parts.extend(f'"{w}"' for w in words)
 
-        # Split CJK into individual characters
-        cjk_chars = ' '.join(m.group())
-        parts.append(cjk_chars)
+        # Split CJK into bigrams
+        cjk = m.group()
+        bigrams = [cjk[i:i+2] for i in range(len(cjk) - 1)]
+        if bigrams:
+            parts.extend(bigrams)
+        else:
+            # Single CJK character — keep as-is
+            parts.append(cjk)
         pos = m.end()
 
     # Remaining Latin text

@@ -19,7 +19,7 @@ import unicodedata
 from ..agent import Agent
 from ..config import Config
 from ..core.types import (
-    Message, TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed,
+    Message, TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta, TurnComplete, TurnFailed,
 )
 
 # ANSI
@@ -176,8 +176,13 @@ async def _main():
                         context_window=before_tokens + 8000,
                         state=state, force=True,
                     )
-                    agent.runner._compaction_state = state
                     messages[:] = list(compressed)
+                    # Rebuild agent so runner state is consistent with compacted messages
+                    agent = Agent.from_config(
+                        config.llm, system_prompt=config.system_prompt,
+                        store=store, session_id=session_id,
+                    )
+                    agent.runner._compaction_state = state
                     after_count = len(messages)
                     after_tokens = count_tokens(tuple(messages))
                     print(f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
@@ -274,6 +279,11 @@ async def _run_streaming(agent: Agent, messages: list[Message]) -> None:
                 mark = f"{RED}✗{RST}" if event.is_error else f"{GREEN}✓{RST}"
                 print(_box_line(f"╰─ {mark} {GRAY}{summary}{RST} ", "╯"))
                 pending_tool_call = None
+
+            elif isinstance(event, ToolProgressDelta):
+                # Live streaming tool output
+                for line in event.text.splitlines():
+                    print(f" {GRAY}┊{RST} {line}", flush=True)
 
             elif isinstance(event, TurnComplete):
                 if pending_tool_call:

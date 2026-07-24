@@ -7,26 +7,29 @@ base class inheritance required.
 Schema inference for ``@tool`` decorated functions uses Pydantic v2:
 parameter type annotations (via ``Annotated[T, Field(...)]``) are
 compiled into an OpenAI-compatible JSON Schema.
+
+Streaming tools: functions that return ``AsyncIterator[str]`` get
+automatic streaming support — each yielded string is emitted as a
+``ToolProgressDelta``, giving users real-time progress.
 """
 
 from __future__ import annotations
 
 import inspect
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, runtime_checkable, get_type_hints
+from typing import Any, Callable, Protocol, runtime_checkable, get_type_hints, Union
 
 from pydantic import Field, create_model
 from pydantic.fields import FieldInfo
 
-from .types import ToolCall, ToolResult
+from .types import ToolCall, ToolResult, ToolProgressDelta
 
 
 # ---------------------------------------------------------------------------
-# TurnContext forward reference (minimal in M0a — full version in M0b)
+# TurnContext forward reference
 # ---------------------------------------------------------------------------
 
-# M0a: tools don't need context. M0b will replace this with the full
-# TurnContext dataclass (session_id, history, budget, config, ...).
 TurnContext = Any  # forward reference placeholder
 
 
@@ -46,13 +49,23 @@ class Tool(Protocol):
     ) -> ToolResult: ...
 
 
+# Sentinel to signal streaming completion
+_STREAM_END = object()
+
+
 # ---------------------------------------------------------------------------
 # FunctionTool — wraps a plain async function into a Tool
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class FunctionTool:
-    """Adapter that wraps an ``async def`` function into a Tool."""
+    """Adapter that wraps an ``async def`` function into a Tool.
+
+    Supports streaming: if the wrapped function returns an
+    ``AsyncIterator[str]`` (i.e. is an async generator), the
+    tool yields ``ToolProgressDelta`` events for each chunk and
+    returns a final ``ToolResult``.
+    """
     name: str
     fn: Callable[..., Any]
     parameters: dict[str, Any]
@@ -64,8 +77,43 @@ class FunctionTool:
         result = await self.fn(**call.arguments)
         if isinstance(result, ToolResult):
             return result
-        # Auto-wrap raw strings
         return ToolResult.ok(str(result))
+
+    async def execute_stream(
+        self, call: ToolCall, ctx: TurnContext | None = None
+    ) -> AsyncIterator[ToolProgressDelta | ToolResult]:
+        """Streaming execution: yields progress deltas, finishes with ToolResult.
+
+        Falls back to non-streaming execute() if the function doesn't
+        return an async generator.
+        """
+        result_or_iter = self.fn(**call.arguments)
+        if inspect.isasyncgen(result_or_iter):
+            # Async generator — stream each chunk
+            collected: list[str] = []
+            try:
+                async for chunk in result_or_iter:
+                    if isinstance(chunk, ToolProgressDelta):
+                        yield chunk
+                        collected.append(chunk.text)
+                    else:
+                        text = str(chunk)
+                        collected.append(text)
+                        yield ToolProgressDelta(
+                            id=call.id, name=self.name, text=text,
+                        )
+            except Exception as e:
+                yield ToolResult.error(f"{self.name} failed: {e!r}")
+                return
+            yield ToolResult.ok("".join(collected) or "(no output)")
+            return
+
+        # Non-streaming — resolve and wrap
+        result = await result_or_iter
+        if isinstance(result, ToolResult):
+            yield result
+        else:
+            yield ToolResult.ok(str(result))
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +187,17 @@ def tool(
         ) -> ToolResult:
             ...
 
+    Async generators are auto-detected and get streaming support::
+
+        @tool("terminal", description="Run a shell command")
+        async def terminal(command: str) -> AsyncIterator[str]:
+            proc = await asyncio.create_subprocess_shell(...)
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                yield line.decode()
+
     The returned ``FunctionTool`` is also stored in the module-level
     ``_registry`` for ``_default_builtins()`` discovery.
     """
@@ -199,26 +258,50 @@ class ToolRegistry:
             return ToolResult.error(f"unknown tool: {call.name}")
         return await tool.execute(call, ctx)
 
+    async def execute_stream(
+        self, call: ToolCall, ctx: TurnContext | None = None
+    ) -> AsyncIterator[ToolProgressDelta | ToolResult]:
+        """Streaming execution: yields progress deltas, finishes with ToolResult.
+
+        Falls back to non-streaming if the tool doesn't support it.
+        """
+        tool = self._tools.get(call.name)
+        if tool is None:
+            yield ToolResult.error(f"unknown tool: {call.name}")
+            return
+
+        if hasattr(tool, 'execute_stream'):
+            async for event in tool.execute_stream(call, ctx):  # type: ignore[union-attr]
+                yield event
+        else:
+            result = await tool.execute(call, ctx)
+            yield result
+
 
 def _default_builtins() -> list[Tool]:
-    """Collect all tools registered via @tool in builtins/."""
-    # Import builtins modules to trigger @tool registration
-    from ..tools.builtins import read_file as _rf  # noqa: F401
-    from ..tools.builtins import bash as _bash  # noqa: F401
-    from ..tools.builtins import write_file as _wf  # noqa: F401
-    from ..tools.builtins import edit_file as _ef  # noqa: F401
-    from ..tools.builtins import grep as _grep  # noqa: F401
-    from ..tools.builtins import glob as _glob  # noqa: F401
-    from ..tools.builtins import web_fetch as _wfetch  # noqa: F401
-    from ..tools.builtins import todo_plan_exit as _tpe  # noqa: F401
-    from ..tools.builtins import task as _task  # noqa: F401
-    from ..tools.builtins import skill_manage as _sm  # noqa: F401
-    from ..tools.builtins import web_search as _ws  # noqa: F401
-    from ..tools.builtins import execute_code as _ec  # noqa: F401
-    from ..tools.builtins import vision_analyze as _va  # noqa: F401
-    from ..tools.builtins import browser as _br  # noqa: F401
-    from ..tools.builtins import context7 as _c7  # noqa: F401
-    from ..tools.builtins import session_search as _ss  # noqa: F401
-    from ..tools.builtins import process as _pr  # noqa: F401
+    """Collect all tools registered via @tool in builtins/.
+
+    Each import triggers @tool decorator side-effects that populate
+    the module-level _registry. The aliases (_rf, _bash, ...) suppress
+    the "imported but unused" lint warning while making the side-effect
+    intent explicit.
+    """
+    from ..tools.builtins import read_file as _rf  # side-effect: registers @tool
+    from ..tools.builtins import bash as _bash  # side-effect: registers @tool
+    from ..tools.builtins import write_file as _wf  # side-effect: registers @tool
+    from ..tools.builtins import edit_file as _ef  # side-effect: registers @tool
+    from ..tools.builtins import grep as _grep  # side-effect: registers @tool
+    from ..tools.builtins import glob as _glob  # side-effect: registers @tool
+    from ..tools.builtins import web_fetch as _wfetch  # side-effect: registers @tool
+    from ..tools.builtins import todo_plan_exit as _tpe  # side-effect: registers @tool
+    from ..tools.builtins import task as _task  # side-effect: registers @tool
+    from ..tools.builtins import skill_manage as _sm  # side-effect: registers @tool
+    from ..tools.builtins import web_search as _ws  # side-effect: registers @tool
+    from ..tools.builtins import execute_code as _ec  # side-effect: registers @tool
+    from ..tools.builtins import vision_analyze as _va  # side-effect: registers @tool
+    from ..tools.builtins import browser as _br  # side-effect: registers @tool
+    from ..tools.builtins import context7 as _c7  # side-effect: registers @tool
+    from ..tools.builtins import session_search as _ss  # side-effect: registers @tool
+    from ..tools.builtins import process as _pr  # side-effect: registers @tool
 
     return list(_registry.values())

@@ -140,6 +140,19 @@ class ToolResultDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolProgressDelta:
+    """Incremental output from a running tool — streamed in real time.
+
+    Tools that support streaming (terminal, browser, etc.) yield
+    these deltas while executing, so the user sees live progress
+    instead of waiting for the full result.
+    """
+    id: str
+    name: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class TurnComplete:
     """The turn finished with a text response."""
     content: str
@@ -151,4 +164,4 @@ class TurnFailed:
     reason: str
 
 
-Event = Union[TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed]
+Event = Union[TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta, TurnComplete, TurnFailed]

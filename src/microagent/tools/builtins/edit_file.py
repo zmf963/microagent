@@ -33,8 +33,13 @@ async def edit_file(
     if replace_all:
         new_text = text.replace(old_string, new_string)
     else:
+        if count > 1:
+            return ToolResult.error(
+                f"old_string matches {count} times in {path}. "
+                f"Use replace_all=true to replace all, or make old_string more specific."
+            )
         new_text = text.replace(old_string, new_string, 1)
 
     await asyncio.to_thread(p.write_text, new_text)
-    replaced = count if replace_all else 1
-    return ToolResult.ok(f"replaced {replaced} occurrence(s) in {path}")
+    actual = count if replace_all else 1
+    return ToolResult.ok(f"replaced {actual} occurrence(s) in {path}")

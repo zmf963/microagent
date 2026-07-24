@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 from typing import Annotated
 
 from pydantic import Field
@@ -10,6 +11,11 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 from ...session.search import search_sessions
 from ...core.store import SQLiteStore
+
+# ContextVar for passing store to session_search tool (thread-safe + async-safe)
+_current_store: contextvars.ContextVar = contextvars.ContextVar(
+    "session_search_current_store", default=None
+)
 
 
 @tool("session_search", description="Search past conversation history for relevant messages.")
@@ -20,8 +26,7 @@ async def session_search(
     if not query.strip():
         return ToolResult.error("query is required")
 
-    # session_search needs access to the store — use a context variable
-    store = _current_store
+    store = _current_store.get()
     if store is None:
         return ToolResult.error("session store not available")
 
@@ -39,6 +44,3 @@ async def session_search(
         text = msg.content[:200]
         lines.append(f"{i}. [{role}] {text}")
     return ToolResult.ok("\n".join(lines))
-
-
-_current_store: SQLiteStore | None = None

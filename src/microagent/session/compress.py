@@ -1,4 +1,4 @@
-"""4-layer context compression pyramid for MicroAgent.
+"""5-layer context compression pyramid for MicroAgent.
 
 Inspired by Claude Code's 5-layer pyramid + Hermes structured summaries.
 
@@ -16,12 +16,16 @@ Layer 3 — Structured LLM Summary (one API call):
 
 Layer 4 — Circuit Breaker:
     After 3 consecutive failures, stop compacting (300s cooldown).
+
+Layer 5 — Full Dump:
+    Append raw content of critical files verbatim (last-resort safety net).
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..core.types import Message
 
@@ -364,11 +368,13 @@ async def compact_conversation(
 
 
 def _extract_summary_text(compressed: tuple[Message, ...]) -> str:
-    """Extract the summary text from compressed messages for iterative storage."""
-    for msg in compressed:
-        if msg.role == "user" and ("摘要" in msg.content or "summary" in msg.content.lower()):
-            return msg.content
-    return compressed[0].content if compressed else ""
+    """Extract the summary text from compressed messages for iterative storage.
+
+    Relies on _llm_summarize always returning a single-user-message tuple.
+    """
+    if compressed and compressed[0].role == "user":
+        return compressed[0].content
+    return ""
 
 
 async def _llm_summarize(
@@ -421,3 +427,48 @@ def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:
     )
     # Keep last 5 messages for continuity
     return (placeholder,) + messages[-5:]
+
+
+# ---------------------------------------------------------------------------
+# Layer 5: Full Dump — append critical raw file content verbatim
+# ---------------------------------------------------------------------------
+
+LAYER5_MAX_FILES = 3
+LAYER5_MAX_CHARS = 8000  # per file
+
+
+def layer5_full_dump(
+    messages: tuple[Message, ...],
+) -> tuple[Message, ...]:
+    """Layer 5 — append raw content of critical files as a fallback dump.
+
+    When L1-L4 compression still leaves insufficient context, this layer
+    reads the most recently referenced files and appends their raw content.
+    This mirrors Claude Code's L5 "full dump" — a high-token-cost safety
+    net that preserves file context when all else fails.
+    """
+    from .attachments import _extract_file_paths
+
+    files = _extract_file_paths(messages)
+    if not files:
+        return messages
+
+    parts: list[str] = []
+    count = 0
+    for fpath in list(files)[:LAYER5_MAX_FILES]:
+        try:
+            content = Path(fpath).expanduser().read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if len(content) > LAYER5_MAX_CHARS:
+            content = content[:LAYER5_MAX_CHARS] + "\n...[truncated]..."
+        parts.append(f"=== {fpath} ===\n{content}")
+        count += 1
+
+    if not parts:
+        return messages
+
+    dump_msg = Message.user(
+        f"[L5 Full Dump — {count} critical file(s)]\n\n" + "\n\n".join(parts)
+    )
+    return messages + (dump_msg,)

@@ -204,7 +204,15 @@ class OpenAIChatClient:
         if self.config.service_tier:
             kwargs["service_tier"] = self.config.service_tier
 
-        stream = await client.chat.completions.create(**kwargs)
+        try:
+            stream = await client.chat.completions.create(**kwargs)
+        except Exception as e:
+            # Auth / rate-limit error — try credential rotation
+            if self._on_auth_error():
+                client = self._get_client()
+                stream = await client.chat.completions.create(**kwargs)
+            else:
+                raise
 
         # Accumulate tool_call fragments by index
         tool_acc: dict[int, dict[str, Any]] = {}

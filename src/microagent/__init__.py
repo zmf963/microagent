@@ -2,7 +2,7 @@
 
 from .core.types import (
     Message, ToolCall, ToolResult, Usage,
-    TextDelta, ToolCallDelta, ToolResultDelta, TurnComplete, TurnFailed, Event,
+    TextDelta, ToolCallDelta, ToolProgressDelta, ToolResultDelta, TurnComplete, TurnFailed, Event,
 )
 from .core.tool import Tool, ToolRegistry, FunctionTool, tool
 from .core.permission import PermissionEngine, PermissionDecision, Rule, Decision, ScriptRule, DEFAULT_RULES
@@ -12,6 +12,7 @@ from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, Stre
 from .config import Config
 from .plugin.types import PreLLMHook, ToolHook, ContextSource
 from .mcp.client import connect_mcp_stdio
+from .mcp.catalog import MCPServerSpec, BUILTIN_MCP_SERVERS, get_server as get_mcp_server, list_servers as list_mcp_servers
 from .terminal.backend import TerminalResult, TerminalBackend, LocalTerminal, DockerTerminal
 from .subagent.manager import SubagentSpec, SubagentManager, DEFAULT_SUBAGENTS
 from .skill.loader import Skill, LoadedSkill, SkillLoader, ClaudeSkillLoader, CompositeSkillLoader
@@ -29,7 +30,7 @@ __all__ = [
     "Agent",
     # Core types
     "Message", "ToolCall", "ToolResult", "Usage",
-    "TextDelta", "ToolCallDelta", "ToolResultDelta", "TurnComplete", "TurnFailed", "Event",
+    "TextDelta", "ToolCallDelta", "ToolProgressDelta", "ToolResultDelta", "TurnComplete", "TurnFailed", "Event",
     # Tools
     "Tool", "ToolRegistry", "FunctionTool", "tool",
     # Permission
@@ -46,6 +47,7 @@ __all__ = [
     "PreLLMHook", "ToolHook", "ContextSource",
     # MCP
     "connect_mcp_stdio",
+    "MCPServerSpec", "BUILTIN_MCP_SERVERS", "get_mcp_server", "list_mcp_servers",
     # Terminal
     "TerminalResult", "TerminalBackend", "LocalTerminal", "DockerTerminal",
     # Subagent

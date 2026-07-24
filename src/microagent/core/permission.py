@@ -96,10 +96,14 @@ class PermissionEngine:
 
     @staticmethod
     def _args_match(args: dict, constraint: dict) -> bool:
-        """Each key in constraint is fnmatch-matched against args' same-key string value."""
+        """Each key in constraint is fnmatch-matched against args' same-key value.
+
+        Non-string values are converted to str before matching, so numeric
+        and list-type arguments can be constrained too."""
         for k, pat in constraint.items():
             val = args.get(k, "")
-            if not isinstance(val, str) or not fnmatch(val, str(pat)):
+            val_str = str(val) if not isinstance(val, str) else val
+            if not fnmatch(val_str, str(pat)):
                 return False
         return True
 

@@ -7,6 +7,7 @@ parent — intermediate tool calls are invisible (context firewall).
 
 from __future__ import annotations
 
+import contextvars
 from typing import Annotated
 
 from pydantic import Field
@@ -18,6 +19,11 @@ from ...subagent.manager import SubagentManager
 
 # Singleton — built at import time with default subagent specs
 _manager = SubagentManager()
+
+# ContextVar for passing parent runner to task tool (thread-safe + async-safe)
+_current_runner: contextvars.ContextVar = contextvars.ContextVar(
+    "task_current_runner", default=None
+)
 
 
 @tool("task", description="Spawn a subagent to handle a task. Returns only the final result.")
@@ -31,12 +37,12 @@ async def task(
         prompt = f"Context:\n{context}\n\nTask:\n{goal}"
 
     try:
-        # We need access to the parent runner. In M3a, we use a
-        # thread-local or context-var approach. For now, task tool
-        # is registered but requires the runner to be injected.
+        runner = _current_runner.get()
+        if runner is None:
+            return ToolResult.error("task tool: runner not available (not in a session)")
         result = await _manager.spawn(
             subagent_type, prompt,
-            _current_runner,  # set by SessionRunner before tool execution
+            runner,
         )
         return ToolResult.ok(result)
     except KeyError:
@@ -45,8 +51,3 @@ async def task(
         return ToolResult.error(f"subagent failed: {e!r}")
 
 
-# ---------------------------------------------------------------------------
-# Context variable to pass parent runner to task tool
-# ---------------------------------------------------------------------------
-
-_current_runner: object = None

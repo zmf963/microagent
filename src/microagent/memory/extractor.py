@@ -9,6 +9,7 @@ SQLiteMemoryProvider on completion.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 
@@ -19,6 +20,7 @@ except ImportError:
 
 from .provider import Memory, MemoryProvider
 
+logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """Extract key facts and user preferences from this conversation.
 
@@ -44,7 +46,8 @@ class MemoryExtractor:
     The extraction runs as a fire-and-forget background task:
     - sync_turn() schedules extraction but does not block
     - Results are written directly to the MemoryProvider
-    - Failures are silently logged
+    - Failures are logged at debug level
+    - Pending tasks are tracked so they survive GC
     """
 
     def __init__(
@@ -58,12 +61,18 @@ class MemoryExtractor:
         self._base_url = base_url
         self._api_key = api_key
         self._model = model
+        self._pending: set[asyncio.Task] = set()
 
     async def extract_async(
         self, history: tuple[dict[str, str], ...]
     ) -> None:
-        """Run extraction in the background (fire-and-forget)."""
-        asyncio.create_task(self._extract(history))
+        """Run extraction in the background (fire-and-forget).
+
+        Task reference is tracked to prevent GC of in-flight extractions.
+        """
+        task = asyncio.create_task(self._extract(history))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
     async def _extract(
         self, history: tuple[dict[str, str], ...]
@@ -88,8 +97,8 @@ class MemoryExtractor:
             memories = await self._parse_llm_response(text)
             if memories:
                 await self._provider.batch_write(memories)
-        except Exception:
-            pass  # fire-and-forget: failures are silent
+        except Exception as e:
+            logger.debug("Memory extraction failed: %s", e)
 
     @staticmethod
     def _build_prompt(history: tuple[dict[str, str], ...]) -> str:
