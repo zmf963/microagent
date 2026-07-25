@@ -85,14 +85,16 @@ class SessionRunner:
         self._output_store = None  # lazy init
         self._active_subagents: list[SessionRunner] = []
 
-        # Per-session process registry (isolation between concurrent agents)
+        # Per-session state (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
+        from ..tools.builtins import lsp as _lsp_module
         from ..tools.builtins import process as _proc_module
         from ..tools.builtins import todo_plan_exit as _tpe_module
 
         self._proc_registry = _proc_module.ProcRegistry()
         self._session_state = _tpe_module.SessionState()
         self._browser_state = _br_module.BrowserState()
+        self._lsp_state = _lsp_module.LSPSessionState()
 
         if store is not None:
             from ..tools.builtins import session_search as _ss
@@ -115,7 +117,7 @@ class SessionRunner:
             )
 
     async def close(self) -> None:
-        """Clean up resources (memory extractor, browser page, etc.)."""
+        """Clean up resources (memory extractor, browser page, LSP servers)."""
         # Close browser page if one was opened for this session
         if self._browser_state.page is not None:
             try:
@@ -126,6 +128,14 @@ class SessionRunner:
 
         if self._extractor is not None:
             await self._extractor.close()
+
+        # Shut down LSP servers
+        for client in self._lsp_state.clients.values():
+            try:
+                await client.shutdown()
+            except Exception:
+                pass
+        self._lsp_state.clients.clear()
 
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
@@ -547,6 +557,7 @@ class SessionRunner:
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
                 from ..tools.builtins import browser as _br_module
+                from ..tools.builtins import lsp as _lsp_module
                 from ..tools.builtins import process as _proc_module
                 from ..tools.builtins import task as _task_module
                 from ..tools.builtins import todo_plan_exit as _tpe_module
@@ -554,6 +565,7 @@ class SessionRunner:
                 _proc_module._current_registry.set(self._proc_registry)
                 _tpe_module._current_state.set(self._session_state)
                 _br_module._current_state.set(self._browser_state)
+                _lsp_module._current_state.set(self._lsp_state)
                 _task_module._current_runner.set(self)
 
                 modified = call
