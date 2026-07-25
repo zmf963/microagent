@@ -32,6 +32,7 @@ _LSP_COMMANDS: dict[str, tuple[str, ...]] = {
     "typescript": ("typescript-language-server", "--stdio"),
     "rust": ("rust-analyzer",),
     "go": ("gopls", "serve"),
+    "cpp": ("clangd", "--background-index=0"),
 }
 
 
@@ -45,6 +46,13 @@ def _detect_lang(filepath: str) -> str:
         ".jsx": "typescript",
         ".rs": "rust",
         ".go": "go",
+        ".c": "cpp",
+        ".h": "cpp",
+        ".cc": "cpp",
+        ".cpp": "cpp",
+        ".cxx": "cpp",
+        ".hpp": "cpp",
+        ".hxx": "cpp",
     }.get(ext, "")
 
 
@@ -60,6 +68,7 @@ def _find_lsp_command(lang: str) -> tuple[str, ...] | None:
     fallbacks = {
         "python": (("jedi-language-server",),),
         "typescript": (("vtsls", "--stdio"),),
+        "cpp": (("ccls",),),
     }
     for fb in fallbacks.get(lang, ()):
         if shutil.which(fb[0]):
@@ -376,7 +385,7 @@ async def _get_client(filepath: str) -> LSPClient | None:
         # Walk up to find project root (has .git, pyproject.toml, etc.)
         root = p.parent
         for parent in [p.parent] + list(p.parent.parents):
-            markers = [".git", "pyproject.toml", "Cargo.toml", "go.mod", "package.json"]
+            markers = [".git", "pyproject.toml", "Cargo.toml", "go.mod", "package.json", "CMakeLists.txt", "compile_commands.json", "Makefile"]
             if any((parent / m).exists() for m in markers):
                 root = parent
                 break
@@ -435,7 +444,7 @@ async def lsp(
         if not lang:
             return ToolResult.error(
                 f"Unsupported file type: {filepath}. "
-                f"LSP supports .py, .ts/.tsx/.js, .rs, .go"
+                f"LSP supports .py, .ts/.tsx/.js, .rs, .go, .c/.cpp/.h/.hpp"
             )
         available = _LSP_COMMANDS.get(lang, ())
         exe = available[0] if available else "N/A"
