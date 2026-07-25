@@ -1,8 +1,9 @@
 """vision_analyze builtin tool — image analysis via vision-capable LLMs.
 
-Supports local files (auto base64-encoded), http/https URLs, and
-data: URLs. Delegates to the same LLM endpoint — the model must
-support vision (e.g. gpt-4o, claude-sonnet-4).
+Returns the image as a base64 data URL embedded in the tool result,
+so the LLM can see it on the next turn if it supports vision (e.g.
+gpt-4o, claude-sonnet-4).  Non-vision models will receive the data
+URL as text and may not process it correctly.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ async def _encode_image(image_url: str) -> str | None:
 
 @tool(
     "vision_analyze",
-    description="Analyze an image. Supports local files, URLs, and data: URLs. Requires a vision-capable model.",
+    description="Load an image for analysis. Returns a data URL the vision model can see.",
 )
 async def vision_analyze(
     image_url: Annotated[str, Field(description="Image path, URL, or data: URL")],
@@ -54,12 +55,10 @@ async def vision_analyze(
     if data_url is None:
         return ToolResult.error(f"image not found: {image_url}")
 
-    # The actual vision call happens in SessionRunner when the tool result
-    # is sent back to the LLM. The tool itself just passes the data URL
-    # as context. The LLM sees the image in the next turn.
+    # Return the image data URL as the tool result content so the
+    # LLM can see it on the next turn.  This works with vision-
+    # capable models (gpt-4o, claude-sonnet-4, etc.) that understand
+    # inline data: URLs in conversation context.
     return ToolResult.ok(
-        f"[Image encoded: {len(data_url)} bytes]\n"
-        f"Question: {question}\n\n"
-        f"The image will be shown to the vision model in the next response. "
-        f"If you need to analyze this image, please ask the assistant."
+        f"[vision_analyze] {question}\n\n{data_url}"
     )

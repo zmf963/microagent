@@ -29,16 +29,24 @@ def _try_acquire_lock(lock_file: Path, return_fd: bool = False):
 
     Returns True if acquired (or fd if return_fd=True), False/None if locked.
     Uses fcntl.flock(LOCK_EX | LOCK_NB) for non-blocking acquire.
+
+    When return_fd=True the caller MUST close the returned fd to release
+    the lock.  When return_fd=False the fd is closed immediately (which
+    releases the lock) — this is a check-only mode.
     """
     lock_file.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
     try:
-        fd = open(lock_file, "w")  # noqa: SIM115
+        fd = open(lock_file, "w")
         fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         if return_fd:
             return fd
+        # check-only: close fd to release the lock immediately
         fd.close()
         return True
     except OSError:
+        if fd is not None:
+            fd.close()
         if return_fd:
             return None
         return False

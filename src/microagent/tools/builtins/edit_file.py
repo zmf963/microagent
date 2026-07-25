@@ -25,9 +25,7 @@ async def edit_file(
     if not p.exists():
         return ToolResult.error(f"file not found: {path}")
 
-    import asyncio
-
-    text = await asyncio.to_thread(p.read_text)
+    text = p.read_text()
     count = text.count(old_string)
 
     if count == 0:
@@ -43,6 +41,6 @@ async def edit_file(
             )
         new_text = text.replace(old_string, new_string, 1)
 
-    await asyncio.to_thread(p.write_text, new_text)
+    p.write_text(new_text)
     actual = count if replace_all else 1
     return ToolResult.ok(f"replaced {actual} occurrence(s) in {path}")

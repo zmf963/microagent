@@ -149,11 +149,13 @@ async def browser_click(
         return ToolResult.error("ref is required")
 
     try:
-        # Try CSS selector first, then text match
+        # Try text= match first (more specific, less prone to accidental
+        # clicks on generic CSS selectors like "button").  Fall back to
+        # CSS selector only when text= fails.
         try:
-            await state.page.click(ref, timeout=5000)
-        except Exception:
             await state.page.click(f"text={ref}", timeout=5000)
+        except Exception:
+            await state.page.click(ref, timeout=5000)
         await state.page.wait_for_load_state("networkidle", timeout=10000)
         title = await state.page.title()
         return ToolResult.ok(f"Clicked '{ref}'. Current page: {title}")

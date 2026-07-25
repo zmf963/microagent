@@ -46,7 +46,12 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
 
 
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate USD cost from token counts and model pricing."""
+    """Estimate USD cost from token counts and model pricing.
+
+    Falls back to a conservative $0.50 / 1M tokens for unknown models
+    rather than returning 0.0 (which would make Budget cost tracking
+    silently ineffective).
+    """
     prices = _MODEL_PRICING.get(model)
     if prices is None:
         for prefix, p in _MODEL_PRICING.items():
@@ -54,7 +59,8 @@ def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
                 prices = p
                 break
     if prices is None:
-        return 0.0
+        # Conservative fallback — prevents cost-unaware Budget runaway
+        prices = (0.50, 0.50)
     input_price, output_price = prices
     return (input_tokens / 1_000_000) * input_price + (output_tokens / 1_000_000) * output_price
 

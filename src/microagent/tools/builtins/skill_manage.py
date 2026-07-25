@@ -70,13 +70,19 @@ async def skill_manage(
         skill_path = skills_dir / name / "SKILL.md"
         if not skill_path.exists():
             return ToolResult.error(f"Skill '{name}' not found")
-        import asyncio
 
-        text = await asyncio.to_thread(skill_path.read_text)
-        if old_string not in text:
+        text = skill_path.read_text()
+        count = text.count(old_string)
+        if count == 0:
             return ToolResult.error(f"old_string not found in skill '{name}'")
+        if count > 1 and new_string:
+            # Multiple matches without replace_all — require unique match
+            return ToolResult.error(
+                f"old_string matches {count} times in skill '{name}'. "
+                f"Make old_string more specific to target exactly one occurrence."
+            )
         new_text = text.replace(old_string, new_string)
-        await asyncio.to_thread(skill_path.write_text, new_text)
+        skill_path.write_text(new_text)
         return ToolResult.ok(f"Skill '{name}' patched")
 
     elif action == "list":
@@ -98,6 +104,11 @@ async def skill_manage(
         skill_dir = skills_dir / name
         if not skill_dir.exists():
             return ToolResult.error(f"Skill '{name}' not found")
+        if not _is_agent_created(name):
+            return ToolResult.error(
+                f"Skill '{name}' was not created by an agent. "
+                f"Only agent-created skills can be deleted via skill_manage."
+            )
         shutil.rmtree(skill_dir)
         return ToolResult.ok(f"Skill '{name}' deleted")
 

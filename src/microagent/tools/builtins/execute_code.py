@@ -1,7 +1,9 @@
-"""execute_code builtin tool — run Python code in a subprocess sandbox.
+"""execute_code builtin tool — run Python code in a subprocess.
 
-Code runs in a fresh subprocess with a timeout. Only stdlib is available
-by default. The subprocess has no access to the agent's memory or tools.
+Code runs in a fresh subprocess with a configurable timeout. The
+subprocess has full access to the Python stdlib and the filesystem;
+it is NOT a sandbox.  Use with caution — the code runs with the
+same privileges as the agent process.
 """
 
 from __future__ import annotations
