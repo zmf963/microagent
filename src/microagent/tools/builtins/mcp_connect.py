@@ -2,10 +2,12 @@
 
 Uses the built-in MCP catalog to resolve server names into concrete
 commands, then connects via stdio and registers the server's tools.
+Active connections are tracked per-session and cleaned up on close.
 """
 
 from __future__ import annotations
 
+import contextvars
 from typing import Annotated
 
 from pydantic import Field
@@ -13,6 +15,19 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 from ...mcp.catalog import BUILTIN_MCP_SERVERS, get_server
+
+# Per-session MCP manager storage (kept alive to prevent GC)
+_current_managers: contextvars.ContextVar[dict[str, object] | None] = (
+    contextvars.ContextVar("mcp_connect_managers", default=None)
+)
+
+
+def _get_managers() -> dict[str, object]:
+    mgr = _current_managers.get()
+    if mgr is None:
+        mgr = {}
+        _current_managers.set(mgr)
+    return mgr
 
 
 @tool(
@@ -28,11 +43,7 @@ async def mcp_connect(
         ),
     ],
 ) -> ToolResult:
-    """Connect to an MCP server and register its tools.
-
-    Uses the built-in catalog to resolve server names.  Raw commands
-    can be passed as 'raw:<space-separated argv>'.
-    """
+    """Connect to an MCP server and register its tools."""
     import shlex
 
     if name.startswith("raw:"):
@@ -48,7 +59,6 @@ async def mcp_connect(
             )
         command = spec.command
 
-    # We need the registry to register tools — accessed via ContextVar
     from ...mcp.client import connect_mcp_stdio
 
     from . import task as _task_mod
@@ -56,17 +66,21 @@ async def mcp_connect(
     runner = _task_mod._current_runner.get()
     if runner is None:
         return ToolResult.error(
-            "mcp_connect: no active session runner. "
-            "MCP connections can only be established during a session."
+            "mcp_connect: no active session runner."
         )
 
     try:
+        before_count = len(runner.registry.names)
         manager = await connect_mcp_stdio(command, runner.registry)
-        tool_count = len(runner.registry.names) - len(
-            [t for t in runner.registry.to_openai_tools() if t["function"]["name"].startswith("mcp_")]
-        )
+        after_count = len(runner.registry.names)
+
+        # Keep manager alive for session lifetime
+        mgr_id = name if not name.startswith("raw:") else f"raw_{abs(hash(command))}"
+        _get_managers()[mgr_id] = manager
+
         return ToolResult.ok(
-            f"Connected to MCP server. Registered tools: {[n for n in runner.registry.names]}"
+            f"Connected to MCP server '{mgr_id}'. "
+            f"Registered {after_count - before_count} new tool(s)."
         )
     except ImportError:
         return ToolResult.error(
