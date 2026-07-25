@@ -235,7 +235,7 @@ class LSPClient:
         return str(contents)
 
     async def symbols(self, filepath: str) -> list[dict]:
-        """List document symbols."""
+        """List document symbols, filtering anonymous/auto-generated ones."""
         uri = await self.ensure_open(filepath)
         result = await self._request("textDocument/documentSymbol", {
             "textDocument": {"uri": uri},
@@ -245,19 +245,24 @@ class LSPClient:
         symbols = []
         for s in result:
             name = s.get("name", "")
+            if _is_anonymous_symbol(name):
+                continue
             kind = _symbol_kind_name(s.get("kind", 0))
             line = (s.get("range", {}).get("start", {})
                      .get("line", 0) + 1) if "range" in s else (
                 s.get("selectionRange", {}).get("start", {}).get("line", 0) + 1
             )
-            symbols.append({"name": name, "kind": kind, "line": line})
-            # Flatten children (nested symbols)
+            symbols.append({"name": name, "kind": kind, "line": line, "depth": 0})
+            # Flatten children with indentation marker
             for child in s.get("children", []):
                 name = child.get("name", "")
+                if _is_anonymous_symbol(name):
+                    continue
                 kind = _symbol_kind_name(child.get("kind", 0))
                 cline = (child.get("range", {}).get("start", {})
                           .get("line", 0) + 1) if "range" in child else 0
-                symbols.append({"name": name, "kind": kind, "line": cline})
+                if cline:
+                    symbols.append({"name": name, "kind": kind, "line": cline, "depth": 1})
         return symbols
 
     async def shutdown(self) -> None:
@@ -369,6 +374,11 @@ def _symbol_kind_name(kind: int) -> str:
     return _SYMBOL_KINDS.get(kind, f"symbol({kind})")
 
 
+def _is_anonymous_symbol(name: str) -> bool:
+    """Filter anonymous struct/enum names from clangd output."""
+    return name.startswith("(anonymous")
+
+
 async def _get_client(filepath: str) -> LSPClient | None:
     """Get or create an LSP client for the file's language."""
     lang = _detect_lang(filepath)
@@ -460,7 +470,8 @@ async def lsp(
                 return ToolResult.ok("(no symbols found)")
             out = [f"Symbols in {filepath}:"]
             for s in syms:
-                out.append(f"  {s['line']:5d} [{s['kind']}] {s['name']}")
+                indent = "    " if s.get("depth") else ""
+                out.append(f"  {s['line']:5d} [{s['kind']}] {indent}{s['name']}")
             return ToolResult.ok("\n".join(out))
 
         elif action == "definition":
