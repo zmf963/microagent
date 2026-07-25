@@ -160,7 +160,8 @@ class SessionRunner:
     # modifications, not by tool filtering.
     _PLAN_BLOCKED_TOOLS = frozenset({
         "write_file", "edit_file", "execute_code", "process",
-        "browser_click", "browser_type",
+        "browser_click", "browser_type", "browser_navigate",
+        "browser_back", "browser_scroll", "browser_press",
     })
 
     _PLAN_SYSTEM_PROMPT = (

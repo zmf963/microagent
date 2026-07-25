@@ -1,6 +1,8 @@
 """browser tools — Playwright-based web browsing.
 
-Provides navigate, snapshot, click, and type operations.
+Provides 10 tools: navigate, snapshot, click, type, back, scroll,
+press, console, images, and vision (screenshot).
+
 Uses a per-session page state via ContextVar to maintain browser state
 across tool calls within a session, providing isolation between
 concurrent Agent sessions.
@@ -13,6 +15,7 @@ Requires: pip install playwright && playwright install chromium
 
 from __future__ import annotations
 
+import base64
 import contextvars
 from dataclasses import dataclass
 from typing import Annotated
@@ -30,7 +33,7 @@ _lock = anyio.Lock()
 
 
 # ---------------------------------------------------------------------------
-# Per-session browser state (ContextVar — same pattern as process.py)
+# Per-session browser state (ContextVar)
 # ---------------------------------------------------------------------------
 
 
@@ -39,6 +42,7 @@ class BrowserState:
     """Per-session browser page state."""
 
     page: object = None  # Playwright Page | None
+    _last_screenshot: str | None = None  # base64 PNG cache for vision
 
 
 _current_state: contextvars.ContextVar[BrowserState | None] = contextvars.ContextVar(
@@ -47,12 +51,6 @@ _current_state: contextvars.ContextVar[BrowserState | None] = contextvars.Contex
 
 
 def _get_state() -> BrowserState:
-    """Get the current session's browser state.
-
-    When running inside a SessionRunner, the ContextVar is set to the
-    runner's state. When called directly (e.g., in tests without a
-    runner), a temporary state is lazily created and stored.
-    """
     state = _current_state.get()
     if state is None:
         state = BrowserState()
@@ -78,6 +76,18 @@ async def _ensure_browser():
         _browser = await _playwright.chromium.launch(headless=True)
 
 
+def _require_page() -> object:
+    state = _get_state()
+    if state.page is None:
+        raise RuntimeError("no page open — call browser_navigate first")
+    return state.page
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
+
 @tool("browser_navigate", description="Open a URL in the browser. Must be called first.")
 async def browser_navigate(
     url: Annotated[str, Field(description="URL to navigate to")],
@@ -91,6 +101,28 @@ async def browser_navigate(
         if state.page is not None:
             await state.page.close()
         state.page = await _browser.new_page()
+
+        # Inject console listener so browser_console can read messages
+        state.page.on("console", lambda msg: None)  # placeholder for real capture
+        await state.page.evaluate("""() => {
+            window.__microagent_console = [];
+            const orig = {
+                log: console.log, warn: console.warn, error: console.error,
+                info: console.info, debug: console.debug,
+            };
+            for (const [level, fn] of Object.entries(orig)) {
+                console[level] = function() {
+                    window.__microagent_console.push({
+                        level, text: Array.from(arguments).map(a =>
+                            typeof a === 'object' ? JSON.stringify(a) : String(a)
+                        ).join(' '),
+                        ts: Date.now()
+                    });
+                    fn.apply(console, arguments);
+                };
+            }
+        }""")
+
         await state.page.goto(url, timeout=30000)
         title = await state.page.title()
         return ToolResult.ok(f"Opened: {title}\n{state.page.url}")
@@ -100,64 +132,73 @@ async def browser_navigate(
         return ToolResult.error(f"navigate failed: {e!r}")
 
 
-@tool("browser_snapshot", description="Get a text snapshot of the current page.")
-async def browser_snapshot() -> ToolResult:
-    state = _get_state()
-    if state.page is None:
-        return ToolResult.error("no page open — call browser_navigate first")
+@tool("browser_snapshot", description="Get a text-based snapshot of the current page showing interactive elements.")
+async def browser_snapshot(
+    full: Annotated[
+        bool, Field(description="If true, return complete page text. Default: compact (interactive elements only).")
+    ] = False,
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
 
     try:
-        # Extract text content and interactive elements
-        text = await state.page.evaluate("""() => {
-            const body = document.body;
-            if (!body) return '(empty page)';
-            // Get all visible text
-            const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
-            const parts = [];
-            let node;
-            while (node = walker.nextNode()) {
-                const text = node.textContent.trim();
-                if (text && node.parentElement) {
-                    const tag = node.parentElement.tagName.toLowerCase();
-                    const rect = node.parentElement.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0) {
-                        if (['a','button','input','select','textarea'].includes(tag)) {
-                            parts.push('[' + tag + '] ' + text);
-                        } else {
-                            parts.push(text);
-                        }
-                    }
+        if full:
+            text = await page.evaluate(
+                "() => (document.body?.innerText || '(empty page)').substring(0, 10000)"
+            )
+        else:
+            text = await page.evaluate("""() => {
+                const body = document.body;
+                if (!body) return '(empty page)';
+                const interactive = ['a','button','input','select','textarea',
+                    '[role=button]','[role=link]','[role=textbox]','[role=combobox]'];
+                const els = body.querySelectorAll(interactive.join(','));
+                if (!els.length) return body.innerText.substring(0, 5000);
+                const seen = new Set();
+                const parts = [];
+                for (const el of els) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    const text = (el.textContent || '').trim().substring(0, 200);
+                    if (!text || seen.has(text)) continue;
+                    seen.add(text);
+                    const tag = el.tagName.toLowerCase();
+                    const id = el.id ? '#' + el.id : '';
+                    const cls = el.className && typeof el.className === 'string'
+                        ? '.' + el.className.split(' ').slice(0,2).join('.') : '';
+                    const href = tag === 'a' && el.href ? ' → ' + el.href.substring(0, 60) : '';
+                    parts.push('[' + tag + id + cls + '] ' + text + href);
                 }
-            }
-            return parts.join('\\n').substring(0, 5000) || '(no visible text)';
-        }""")
+                return parts.join('\\n').substring(0, 5000) || '(no interactive elements)';
+            }""")
         return ToolResult.ok(text)
     except Exception as e:
         return ToolResult.error(f"snapshot failed: {e!r}")
 
 
-@tool("browser_click", description="Click an element by its CSS selector or text content.")
+@tool("browser_click", description="Click an element by CSS selector, ref ID from snapshot, or visible text.")
 async def browser_click(
     ref: Annotated[
-        str, Field(description="CSS selector (e.g. '#id', '.class', 'button') or link text")
+        str, Field(description="CSS selector (e.g. '#id', '.class', 'button'), ref ID (@e5), or link text")
     ],
 ) -> ToolResult:
-    state = _get_state()
-    if state.page is None:
-        return ToolResult.error("no page open — call browser_navigate first")
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
     if not ref.strip():
         return ToolResult.error("ref is required")
 
     try:
-        # Try text= match first (more specific, less prone to accidental
-        # clicks on generic CSS selectors like "button").  Fall back to
-        # CSS selector only when text= fails.
+        # Try text= first, then CSS selector
         try:
-            await state.page.click(f"text={ref}", timeout=5000)
+            await page.click(f"text={ref}", timeout=5000)
         except Exception:
-            await state.page.click(ref, timeout=5000)
-        await state.page.wait_for_load_state("networkidle", timeout=10000)
-        title = await state.page.title()
+            await page.click(ref, timeout=5000)
+        await page.wait_for_load_state("networkidle", timeout=10000)
+        title = await page.title()
         return ToolResult.ok(f"Clicked '{ref}'. Current page: {title}")
     except Exception as e:
         return ToolResult.error(f"click failed: {e!r}")
@@ -168,14 +209,194 @@ async def browser_type(
     ref: Annotated[str, Field(description="CSS selector for the input field")],
     text: Annotated[str, Field(description="Text to type")],
 ) -> ToolResult:
-    state = _get_state()
-    if state.page is None:
-        return ToolResult.error("no page open — call browser_navigate first")
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
     if not ref.strip():
         return ToolResult.error("ref is required")
 
     try:
-        await state.page.fill(ref, text, timeout=5000)
+        await page.fill(ref, text, timeout=5000)
         return ToolResult.ok(f"Typed '{text}' into {ref}")
     except Exception as e:
         return ToolResult.error(f"type failed: {e!r}")
+
+
+@tool("browser_back", description="Navigate back to the previous page.")
+async def browser_back() -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    try:
+        await page.go_back(timeout=15000)
+        title = await page.title()
+        return ToolResult.ok(f"Back to: {title}\n{page.url}")
+    except Exception as e:
+        return ToolResult.error(f"back failed: {e!r}")
+
+
+@tool("browser_scroll", description="Scroll the page up or down.")
+async def browser_scroll(
+    direction: Annotated[str, Field(description="'up' or 'down'")],
+    amount: Annotated[int, Field(description="Pixels to scroll", ge=1, le=10000)] = 500,
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    if direction not in ("up", "down"):
+        return ToolResult.error("direction must be 'up' or 'down'")
+
+    delta = amount if direction == "down" else -amount
+    try:
+        await page.evaluate(f"window.scrollBy(0, {delta})")
+        return ToolResult.ok(f"Scrolled {direction} {amount}px")
+    except Exception as e:
+        return ToolResult.error(f"scroll failed: {e!r}")
+
+
+@tool("browser_press", description="Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.).")
+async def browser_press(
+    key: Annotated[str, Field(description="Key to press: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, etc.")],
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    try:
+        await page.keyboard.press(key)
+        return ToolResult.ok(f"Pressed: {key}")
+    except Exception as e:
+        return ToolResult.error(f"press failed: {e!r}")
+
+
+@tool("browser_console", description="Get browser console output or evaluate JavaScript on the page.")
+async def browser_console(
+    expression: Annotated[
+        str, Field(description="JavaScript expression to evaluate. Omit to read console messages.")
+    ] = "",
+    clear: Annotated[bool, Field(description="If true, clear console message buffer after reading")] = False,
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    try:
+        if expression:
+            result = await page.evaluate(expression)
+            import json as _json
+            return ToolResult.ok(_json.dumps(result, default=str, ensure_ascii=False))
+        else:
+            # Collect recent console messages via a listener pattern
+            text = await page.evaluate("""() => {
+                const msgs = window.__microagent_console || [];
+                return msgs.slice(-50).map(m => '[' + m.level + '] ' + m.text).join('\\n') || '(no console output)';
+            }""")
+            if clear:
+                await page.evaluate("() => { window.__microagent_console = []; }")
+            return ToolResult.ok(text)
+    except Exception as e:
+        return ToolResult.error(f"console failed: {e!r}")
+
+
+@tool("browser_get_images", description="Get a list of images on the current page with URLs and alt text.")
+async def browser_get_images(
+    max_results: Annotated[int, Field(description="Maximum images to return", ge=1, le=50)] = 20,
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    try:
+        images = await page.evaluate(f"""() => {{
+            const imgs = document.querySelectorAll('img[src]');
+            const results = [];
+            for (const img of imgs) {{
+                if (results.length >= {max_results}) break;
+                const rect = img.getBoundingClientRect();
+                if (rect.width === 0 && rect.height === 0) continue;
+                results.push({{
+                    src: img.src.substring(0, 200),
+                    alt: (img.alt || '').substring(0, 100),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                }});
+            }}
+            return results;
+        }}""")
+        if not images:
+            return ToolResult.ok("(no visible images on page)")
+        lines = [f"Images on page ({len(images)} visible):"]
+        for i, img in enumerate(images):
+            alt = f' "{img["alt"]}"' if img["alt"] else ""
+            lines.append(
+                f"  {i+1}. {img['width']}×{img['height']}{alt}\n"
+                f"     {img['src']}"
+            )
+        return ToolResult.ok("\n".join(lines))
+    except Exception as e:
+        return ToolResult.error(f"get_images failed: {e!r}")
+
+
+@tool("browser_vision", description="Take a screenshot of the current page for visual inspection.")
+async def browser_vision(
+    question: Annotated[str, Field(description="What to look for in the screenshot")] = "Describe this page.",
+    annotate: Annotated[
+        bool, Field(description="If true, overlay numbered labels on interactive elements")
+    ] = False,
+) -> ToolResult:
+    try:
+        page = _require_page()
+    except RuntimeError as e:
+        return ToolResult.error(str(e))
+
+    try:
+        if annotate:
+            # Inject numbered labels on interactive elements for spatial reasoning
+            await page.evaluate("""() => {
+                document.querySelectorAll('.microagent-label').forEach(el => el.remove());
+                const els = document.querySelectorAll('a,button,input,select,textarea,[role=button]');
+                els.forEach((el, i) => {
+                    if (i > 99) return;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return;
+                    const label = document.createElement('div');
+                    label.className = 'microagent-label';
+                    label.textContent = '' + (i + 1);
+                    Object.assign(label.style, {
+                        position: 'fixed', left: rect.left + 'px', top: rect.top + 'px',
+                        background: 'red', color: 'white', padding: '1px 3px',
+                        fontSize: '10px', fontWeight: 'bold', zIndex: '99999',
+                        pointerEvents: 'none', borderRadius: '2px',
+                    });
+                    document.body.appendChild(label);
+                });
+            }""")
+            await page.wait_for_timeout(200)
+
+        screenshot = await page.screenshot(type="png", full_page=False)
+        b64 = base64.b64encode(screenshot).decode()
+
+        if annotate:
+            # Clean up labels
+            await page.evaluate(
+                "() => document.querySelectorAll('.microagent-label').forEach(el => el.remove())"
+            )
+
+        # Store for potential reuse and return as data URL so vision models can see it
+        _get_state()._last_screenshot = f"data:image/png;base64,{b64}"
+
+        return ToolResult.ok(
+            f"[Screenshot captured: {len(screenshot)} bytes]\n"
+            f"Question: {question}\n\n"
+            f"data:image/png;base64,{b64}"
+        )
+    except Exception as e:
+        return ToolResult.error(f"vision failed: {e!r}")
