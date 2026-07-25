@@ -199,6 +199,9 @@ class TestRegistryAllBuiltins:
             "task",
             "skill_manage",
             "skills_list",
+            "question",
+            "lsp",
+            "mcp_connect",
             "git",
             "file_tree",
         }

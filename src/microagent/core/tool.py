@@ -296,7 +296,10 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import git as _git  # noqa: F401
     from ..tools.builtins import glob as _glob  # noqa: F401
     from ..tools.builtins import grep as _grep  # noqa: F401
+    from ..tools.builtins import lsp as _lsp  # noqa: F401
+    from ..tools.builtins import mcp_connect as _mc  # noqa: F401
     from ..tools.builtins import process as _pr  # noqa: F401
+    from ..tools.builtins import question as _q  # noqa: F401
     from ..tools.builtins import read_file as _rf  # noqa: F401
     from ..tools.builtins import session_search as _ss  # noqa: F401
     from ..tools.builtins import skill_manage as _sm  # noqa: F401
@@ -336,6 +339,9 @@ TOOLSETS: dict[str, frozenset[str]] = {
         "skill_manage",
         "skills_list",
         "process",
+        "question",
+        "lsp",
+        "mcp_connect",
     }),
     "scene": frozenset({
         "browser_navigate",

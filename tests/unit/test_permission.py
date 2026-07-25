@@ -96,6 +96,9 @@ class TestPermissionEngine:
             "exit",
             "task",
             "skill_manage",
+            "question",
+            "lsp",
+            "mcp_connect",
         ]
         for name in builtins:
             assert engine.resolve(name) is Decision.ALLOW, f"{name} not allowed"
