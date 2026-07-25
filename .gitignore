@@ -28,3 +28,4 @@ coverage.xml
 
 # Analysis docs (local only)
 docs/
+.qoder/.qoder/
