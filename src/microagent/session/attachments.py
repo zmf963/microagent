@@ -34,34 +34,67 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
     """
     paths: dict[str, int] = {}
 
-    # Pattern: matches file paths with or without extensions
-    # Examples: /etc/hosts, src/main.py, ./config.yaml, Makefile, Dockerfile
-    path_pattern = re.compile(
-        r'["\']?((?:/|[A-Za-z]:\\|~/|\./)?[^\s"\')\],]{1,200}(?:\.\w{1,10})?)["\']?'
-    )
-
+    # Match file paths from tool call arguments (structured, reliable).
+    # Fall back to content scanning only for assistant/user messages that
+    # explicitly mention file paths.
     for i, msg in enumerate(messages):
-        # Check tool call arguments (assistant messages with tool_calls)
+        # Structured tool calls — the primary source
         if msg.tool_calls:
             for tc in msg.tool_calls:
                 if tc.name in ("read_file", "write_file", "edit_file", "grep", "glob", "bash"):
                     for arg_val in tc.arguments.values():
                         if isinstance(arg_val, str):
-                            for m in path_pattern.finditer(arg_val):
-                                p = m.group(1)
-                                if _is_readable_file(p):
-                                    paths[p] = i
+                            for candidate in _parse_paths_from_string(arg_val):
+                                paths[candidate] = i
 
-        # Check message content for file paths
+        # Content-based fallback — scan message text for explicit path mentions
         if msg.content:
-            for m in path_pattern.finditer(msg.content):
-                p = m.group(1)
-                if _is_readable_file(p):
-                    paths[p] = max(paths.get(p, 0), i)
+            for candidate in _parse_paths_from_string(msg.content):
+                paths[candidate] = max(paths.get(candidate, 0), i)
 
     # Sort by recency (last seen first), take top MAX_FILES
     sorted_paths = sorted(paths.items(), key=lambda x: -x[1])
     return dict(sorted_paths[:MAX_FILES])
+
+
+def _parse_paths_from_string(text: str) -> list[str]:
+    """Extract plausible file paths from a string.
+
+    Uses a character-class approach: a path is a contiguous run of
+    non-whitespace, non-punctuation characters that starts with ``/``,
+    ``./``, ``~/``, a drive letter, or an alpha-numeric identifier
+    containing a dot (extension).  Returns deduplicated list.
+    """
+    if not text:
+        return []
+
+    import re
+
+    # Anchored paths: /foo/bar, ./foo/bar, ~/foo/bar, C:\foo\bar,
+    # and unqualified relative paths: src/main.py, lib/util.go
+    anchored = re.compile(
+        r'(?:/|\.\.?/|~/|[A-Za-z]:[/\\]|[A-Za-z0-9_][\w./+-]*/)'
+        r'[\w./+-]{0,200}'
+        r'(?:\.\w{1,15})?'  # optional extension
+    )
+    # Bare filenames with extensions: foo.py, my_file.txt
+    filename = re.compile(
+        r'\b[\w.-]{1,200}\.\w{1,15}\b'
+    )
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    for pattern in (anchored, filename):
+        for m in pattern.finditer(text):
+            p = m.group(0).rstrip("./\\")
+            if not p or p in seen:
+                continue
+            if _is_readable_file(p):
+                seen.add(p)
+                result.append(p)
+
+    return result
 
 
 def _is_readable_file(path: str) -> bool:

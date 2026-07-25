@@ -48,8 +48,14 @@ class CredentialPool:
 
     def mark_failed(self) -> None:
         """Mark current credential as failed, rotate to next.
-        If all credentials have failed, reset and start over."""
+
+        After rotating through all credentials, resets the failure
+        counter and reuses the first one (best-effort).
+        """
         self._failed += 1
         if self._failed >= len(self.credentials):
-            self._failed = 0  # reset — all keys exhausted, reuse first
+            # All credentials exhausted — reset and try the first again
+            self._failed = 0
+            self._index = 0
+            return
         self.next()

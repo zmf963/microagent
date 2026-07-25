@@ -65,6 +65,22 @@ TRUNCATION_PLACEHOLDER = "[Tool result truncated: {n} chars — re-run the tool 
 # ---------------------------------------------------------------------------
 
 
+def _is_grep_match_line(line: str) -> bool:
+    """Check if a line looks like a grep -n match result.
+
+    Standard grep -n format: ``path:line_number:text`` or ``line_number:text``.
+    Returns True when the line contains at least one colon in the first
+    80 characters (covers typical paths + line numbers) — not every
+    colon-bearing string.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    # grep output: colon appears early (path:42:text or 42:text)
+    first_colon = stripped.find(":")
+    return 0 < first_colon < 80
+
+
 def _summarize_tool_result(tool_name: str, content: str) -> str:
     """Generate a 1-line informative summary for a re-obtainable tool result.
 
@@ -94,7 +110,12 @@ def _summarize_tool_result(tool_name: str, content: str) -> str:
         return f"[read_file] {n_lines} lines"
 
     if tool_name == "grep":
-        match_count = sum(1 for line in lines if line.strip() and ":" in line)
+        # grep -n output format: "file:line:content" or "line:content"
+        # Count lines that match the standard grep-with-line-numbers format
+        match_count = sum(
+            1 for line in lines
+            if line.strip() and _is_grep_match_line(line)
+        )
         return f"[grep] {match_count} matches"
 
     if tool_name == "glob":
@@ -193,6 +214,10 @@ def snip_tool_results(
     - Preserves the first `protect_first_n` messages (head protection)
     - Preserves the most recent `keep_recent` messages (tail protection)
     - Removes oldest tool_result messages outside protected zones first
+    - **Tool-call integrity**: when a tool_result is removed, the matching
+      tool_call id is stripped from the preceding assistant message. If that
+      empties the assistant's tool_calls, a placeholder result is kept so the
+      OpenAI API doesn't reject an orphaned tool_call (no matching tool msg).
     """
     total_tokens = count_tokens(messages)
     if total_tokens <= max_tokens:
@@ -215,15 +240,60 @@ def snip_tool_results(
             i += 1
             continue
         if result[i].role == "tool":
+            orphaned_id = result[i].tool_call_id
             total_tokens -= msg_tokens[i]
             result.pop(i)
             msg_tokens.pop(i)
             # Adjust protected indices
             protected = {p - 1 if p > i else p for p in protected}
+
+            # Strip the matching tool_call from the preceding assistant message.
+            # If tool_calls becomes empty, insert a stub tool_result so the
+            # remaining tool_call messages on *other* ids still have valid pairs.
+            if orphaned_id:
+                _fix_orphaned_tool_call(result, orphaned_id, protected)
         else:
             i += 1
 
     return tuple(result)
+
+
+def _fix_orphaned_tool_call(
+    messages: list[Message],
+    orphaned_id: str,
+    protected: set[int],
+) -> None:
+    """Remove a tool_call id from its assistant message; keep API invariants.
+
+    After snipping a tool_result, the matching tool_call in the assistant
+    message is an orphan — the OpenAI API rejects tool_calls with no
+    corresponding role=tool message.  We strip the id from the assistant's
+    tool_calls tuple.  If that empties the tuple entirely, we cannot leave a
+    bare assistant message with empty tool_calls either (some backends reject
+    it); we replace it with a text-only assistant message carrying a note.
+    """
+    for i, msg in enumerate(messages):
+        if not msg.tool_calls:
+            continue
+        if not any(tc.id == orphaned_id for tc in msg.tool_calls):
+            continue
+        new_calls = tuple(tc for tc in msg.tool_calls if tc.id != orphaned_id)
+        if new_calls:
+            messages[i] = Message(
+                role=msg.role,
+                content=msg.content,
+                tool_calls=new_calls,
+                tool_call_id=msg.tool_call_id,
+                usage=msg.usage,
+                is_error=msg.is_error,
+            )
+        else:
+            # All tool_calls stripped — replace with a text note so the
+            # assistant turn is still well-formed (no empty tool_calls list).
+            messages[i] = Message.assistant(
+                msg.content or "(earlier tool results were compacted away)"
+            )
+        break
 
 
 # ---------------------------------------------------------------------------

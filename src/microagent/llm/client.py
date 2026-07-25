@@ -273,7 +273,14 @@ class OpenAIChatClient:
         return status_code is not None and status_code >= 500
 
     def _on_auth_error(self) -> bool:
-        """Handle auth/rate-limit error. Returns True if retry possible."""
+        """Handle auth/rate-limit error. Returns True if retry possible.
+
+        Note: ``self.config`` is a mutable instance attribute on
+        ``OpenAIChatClient`` (set in ``__init__``), NOT the frozen
+        ``LLMConfig`` field.  Reassignment is safe — the ``frozen=True``
+        on ``LLMConfig`` only forbids mutating fields *inside* a config
+        instance, not rebinding the ``self.config`` attribute itself.
+        """
         if self.pool is None:
             return False
         self.pool.mark_failed()
