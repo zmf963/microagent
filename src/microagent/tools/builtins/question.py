@@ -39,8 +39,11 @@ async def question(
         )
 
     try:
+        import asyncio
+
         print(f"\n❓ {text}")
-        answer = input("> ").strip()
+        # input() is blocking — run off the event loop thread
+        answer = (await asyncio.to_thread(input, "> ")).strip()
         if not answer:
             return ToolResult.error("User provided no answer.")
         return ToolResult.ok(answer)
