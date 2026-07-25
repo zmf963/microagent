@@ -92,7 +92,7 @@ class TestPermissionEngine:
             "execute_code",
             "vision_analyze",
             "todo",
-            "plan",
+            "task_plan",
             "exit",
             "task",
             "skill_manage",

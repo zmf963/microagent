@@ -300,6 +300,7 @@ def _default_builtins() -> list[Tool]:
     from ..tools.builtins import read_file as _rf  # noqa: F401
     from ..tools.builtins import session_search as _ss  # noqa: F401
     from ..tools.builtins import skill_manage as _sm  # noqa: F401
+    from ..tools.builtins import skills_list as _sl  # noqa: F401
     from ..tools.builtins import task as _task  # noqa: F401
     from ..tools.builtins import todo_plan_exit as _tpe  # noqa: F401
     from ..tools.builtins import vision_analyze as _va  # noqa: F401
@@ -330,9 +331,10 @@ TOOLSETS: dict[str, frozenset[str]] = {
         "context7",
         "session_search",
         "todo",
-        "plan",
+        "task_plan",
         "exit",
         "skill_manage",
+        "skills_list",
         "process",
     }),
     "scene": frozenset({

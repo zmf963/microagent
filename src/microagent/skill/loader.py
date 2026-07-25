@@ -16,6 +16,53 @@ from typing import Protocol, runtime_checkable
 import yaml
 
 # ---------------------------------------------------------------------------
+# CJK-aware fuzzy matching
+# ---------------------------------------------------------------------------
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]+")
+
+
+def _cjk_aware_ratio(query: str, target: str) -> float:
+    """Compute a similarity score between query and target text.
+
+    For CJK text, uses bigram overlap (Jaccard) instead of
+    SequenceMatcher which performs poorly on character-based scripts.
+    For Latin text, falls back to difflib.SequenceMatcher.
+    """
+    cjk_query = _CJK_RE.findall(query)
+    cjk_target = _CJK_RE.findall(target)
+
+    if cjk_query and cjk_target:
+        # CJK present in both — use bigram Jaccard
+        q_bigrams = _bigrams("".join(cjk_query))
+        t_bigrams = _bigrams("".join(cjk_target))
+        if not q_bigrams:
+            return 0.0
+        intersection = q_bigrams & t_bigrams
+        union = q_bigrams | t_bigrams
+        cjk_score = len(intersection) / len(union) if union else 0.0
+
+        # Blend with Latin SequenceMatcher for the remaining text
+        latin_query = _CJK_RE.sub("", query).strip()
+        latin_target = _CJK_RE.sub("", target).strip()
+        if latin_query and latin_target:
+            latin_score = difflib.SequenceMatcher(None, latin_query, latin_target).ratio()
+            # Weight by text composition
+            cjk_chars = sum(1 for c in query if "\u4e00" <= c <= "\u9fff" or "\u3040" <= c <= "\u30ff")
+            cjk_ratio = cjk_chars / max(len(query), 1)
+            return cjk_score * cjk_ratio + latin_score * (1 - cjk_ratio)
+        return cjk_score
+
+    # No CJK in query or target — use standard SequenceMatcher
+    return difflib.SequenceMatcher(None, query, target).ratio()
+
+
+def _bigrams(text: str) -> set[str]:
+    """Extract character bigrams from text."""
+    return {text[i : i + 2] for i in range(len(text) - 1)} if len(text) >= 2 else {text}
+
+
+# ---------------------------------------------------------------------------
 # Skill + LoadedSkill data model
 # ---------------------------------------------------------------------------
 
@@ -152,8 +199,9 @@ class ClaudeSkillLoader:
                     matches.append(LoadedSkill(s, f"keyword:{kw}", 1.0))
                     break
             else:
-                # Fuzzy match on description
-                ratio = difflib.SequenceMatcher(None, text, s.description.lower()).ratio()
+                # CJK-aware fuzzy match — bigram overlap for CJK,
+                # SequenceMatcher for Latin text.
+                ratio = _cjk_aware_ratio(text, s.description.lower())
                 if ratio > 0.4:
                     matches.append(LoadedSkill(s, f"fuzzy:{ratio:.2f}", ratio))
         return tuple(matches)

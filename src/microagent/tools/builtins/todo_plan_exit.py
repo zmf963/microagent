@@ -103,7 +103,7 @@ async def todo(
 # ---------------------------------------------------------------------------
 
 
-@tool("plan", description="Create or view a multi-step plan (does not execute).")
+@tool("task_plan", description="Create or view a multi-step action plan (does not execute).")
 async def plan(
     action: Annotated[str, Field(description="Action: show | set | clear")],
     steps: Annotated[str, Field(description="Newline-separated steps (for set action)")] = "",

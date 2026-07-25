@@ -97,6 +97,11 @@ class SessionRunner:
 
             _ss._current_store.set(store)
 
+        if self.skill_loader is not None:
+            from ..tools.builtins import skills_list as _sl_mod
+
+            _sl_mod._set_loader(self.skill_loader)
+
         if self.memory is not None:
             from ..memory.extractor import MemoryExtractor
 
@@ -136,11 +141,33 @@ class SessionRunner:
         for child in self._active_subagents:
             child.steer(text)
 
-    # Tools blocked in plan mode (read-only mode)
+    # Tools blocked in plan mode (read-only mode).
+    # bash is NOT in this set — plan mode allows read-only shell commands
+    # (ls, cat, grep, find, git, etc.). Destructive commands are blocked
+    # by the plan-mode system prompt instructing the LLM not to execute
+    # modifications, not by tool filtering.
     _PLAN_BLOCKED_TOOLS = frozenset({
-        "write_file", "edit_file", "bash", "execute_code", "process",
+        "write_file", "edit_file", "execute_code", "process",
         "browser_click", "browser_type",
     })
+
+    _PLAN_SYSTEM_PROMPT = (
+        "You are in **plan mode** — your job is to analyze and understand, "
+        "NOT to make changes.\n\n"
+        "Rules:\n"
+        "1. Read files, search code, and explore the codebase to understand\n"
+        "   the problem fully.\n"
+        "2. You MAY use read-only bash commands (ls, cat, grep, find, git log,\n"
+        "   git diff, git status, wc, head, tail, etc.). Never modify files,\n"
+        "   run destructive commands (rm, mv, git commit, git push, chmod),\n"
+        "   or install packages.\n"
+        "3. Produce a clear analysis — findings, root causes, affected files,\n"
+        "   and a recommended plan of action.\n"
+        "4. Do NOT use write_file, edit_file, execute_code, or process. Use the\n"
+        "   plan tool to document your multi-step action plan.\n"
+        "5. When you're done analyzing, tell the user to switch to build mode\n"
+        "   (/build) to execute your plan."
+    )
 
     def _process_tool_output(self, tool_call_id: str, result) -> Any:
         """Apply ToolOutputStore size management to tool results."""
@@ -238,6 +265,10 @@ class SessionRunner:
 
             if system == "You are a helpful assistant." or not system:
                 system = get_model_template(self.llm.config.model)
+
+            # Override with plan-mode prompt when appropriate
+            if self.mode == "plan":
+                system = self._PLAN_SYSTEM_PROMPT
 
             # Build context injection block for user message
             context_parts: list[str] = []

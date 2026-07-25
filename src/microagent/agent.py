@@ -47,14 +47,19 @@ class Agent:
             all_tools.extend(tools)
         registry = ToolRegistry(all_tools)
 
-        # Build skill loader from colon-separated paths
-        skill_loader = None
+        # Build skill loader from built-in + user paths
+        # Built-in skills ship under src/microagent/skills/ — always loaded.
+        # User paths are colon-separated extras.
+        _builtin_skills = Path(__file__).resolve().parent / "skills"
+        search_paths: list[Path] = [_builtin_skills] if _builtin_skills.is_dir() else []
+
         if skills_path:
-            search_paths = tuple(
-                Path(p) for p in skills_path.split(":") if p.strip()
-            )
-            if search_paths:
-                skill_loader = ClaudeSkillLoader(search_paths=search_paths)
+            for p in skills_path.split(":"):
+                p = p.strip()
+                if p:
+                    search_paths.append(Path(p))
+
+        skill_loader = ClaudeSkillLoader(search_paths=tuple(search_paths)) if search_paths else None
 
         llm = OpenAIChatClient(llm_config)
         budget = Budget.root(max_iterations=max_iterations)

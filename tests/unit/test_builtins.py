@@ -157,12 +157,12 @@ class TestTodoPlanExit:
 
     async def test_plan_set_show(self, registry):
         call = ToolCall(
-            id="c1", name="plan", arguments={"action": "set", "steps": "step 1\nstep 2\nstep 3"}
+            id="c1", name="task_plan", arguments={"action": "set", "steps": "step 1\nstep 2\nstep 3"}
         )
         result = await registry.execute(call)
         assert "3 steps" in result.content
 
-        call2 = ToolCall(id="c2", name="plan", arguments={"action": "show"})
+        call2 = ToolCall(id="c2", name="task_plan", arguments={"action": "show"})
         result2 = await registry.execute(call2)
         assert "step 1" in result2.content
         assert "step 3" in result2.content
@@ -194,10 +194,11 @@ class TestRegistryAllBuiltins:
             "session_search",
             "process",
             "todo",
-            "plan",
+            "task_plan",
             "exit",
             "task",
             "skill_manage",
+            "skills_list",
             "git",
             "file_tree",
         }

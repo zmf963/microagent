@@ -116,7 +116,7 @@ class TestPlanBuildMode:
         assert runner.mode == "plan"
 
     def test_plan_mode_filters_write_tools(self):
-        """In plan mode, write tools should be blocked."""
+        """In plan mode, write tools should be blocked (bash is allowed for read-only)."""
         from microagent.session.runner import SessionRunner
         from microagent.core.tool import ToolRegistry, _default_builtins
         from tests.unit.fake_llm import FakeLLMClient
@@ -125,9 +125,11 @@ class TestPlanBuildMode:
             registry=ToolRegistry(_default_builtins()),
         )
         runner.mode = "plan"
-        # Check that plan mode filters write_file
-        write_tools = [t for t in runner._get_available_tools() if t in ("write_file", "edit_file", "bash")]
+        # Check that plan mode filters write_file, edit_file, execute_code
+        write_tools = [t for t in runner._get_available_tools() if t in ("write_file", "edit_file", "execute_code")]
         assert len(write_tools) == 0  # write tools filtered in plan mode
+        # bash is allowed in plan mode (for read-only commands)
+        assert "bash" in runner._get_available_tools()
 
 
 class TestSensitiveConfirm:

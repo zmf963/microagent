@@ -43,6 +43,30 @@ def _is_agent_created(name: str) -> bool:
         return False
 
 
+def _touch_curator_usage(name: str) -> None:
+    """Update curator usage tracking for a skill (last_activity timestamp)."""
+    import time
+
+    usage_file = _get_skills_dir() / ".usage.json"
+    now = time.time()
+    data = {}
+    if usage_file.exists():
+        try:
+            data = json.loads(usage_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    entry = data.get(name, {})
+    entry["last_activity"] = now
+    entry["use_count"] = entry.get("use_count", 0) + 1
+    if "state" not in entry:
+        entry["state"] = "active"
+    data[name] = entry
+    try:
+        usage_file.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass
+
+
 @tool("skill_manage", description="Create, patch, list, or delete Skills at runtime.")
 async def skill_manage(
     action: Annotated[str, Field(description="Action: create | patch | list | delete")],
@@ -62,6 +86,8 @@ async def skill_manage(
 
         await asyncio.to_thread(skill_path.write_text, content)
         _record_provenance(name, created_by="agent")
+        # Touch the curator usage file so the new skill is tracked
+        _touch_curator_usage(name)
         return ToolResult.ok(f"Skill '{name}' created at {skill_path}")
 
     elif action == "patch":
