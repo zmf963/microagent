@@ -365,7 +365,7 @@ def _print_help():
 # ---------------------------------------------------------------------------
 
 
-async def _cmd_new(state: dict, arg: str) -> None:
+async def _cmd_new(state: ReplState, arg: str) -> None:
     agent = state.agent
     await agent.close()
     config = state.config
@@ -381,10 +381,10 @@ async def _cmd_new(state: dict, arg: str) -> None:
         session_id=state.session_id,
         skills_path=config.skills_path,
     )
-    print(f"{GREEN}✓{RST} New session: {state['session_id']}")
+    print(f"{GREEN}✓{RST} New session: {state.session_id}")
 
 
-async def _cmd_list(state: dict, arg: str) -> None:
+async def _cmd_list(state: ReplState, arg: str) -> None:
     sessions = await _list_sessions(state.store)
     if sessions:
         print(f"{GRAY}Sessions:{RST}")
@@ -395,7 +395,7 @@ async def _cmd_list(state: dict, arg: str) -> None:
         print(f"{GRAY}(no saved sessions){RST}")
 
 
-async def _cmd_resume(state: dict, arg: str) -> None:
+async def _cmd_resume(state: ReplState, arg: str) -> None:
     target = arg or await _pick_last_session(state.store)
     if target:
         history = await state.store.load_history(target)
@@ -420,7 +420,7 @@ async def _cmd_resume(state: dict, arg: str) -> None:
         print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
 
 
-async def _cmd_compact(state: dict, arg: str) -> None:
+async def _cmd_compact(state: ReplState, arg: str) -> None:
     messages = state.messages
     if len(messages) < 5:
         print(f"{GRAY}(not enough messages to compact){RST}")
@@ -463,14 +463,14 @@ async def _cmd_compact(state: dict, arg: str) -> None:
     )
 
 
-async def _cmd_model(state: dict, arg: str) -> None:
+async def _cmd_model(state: ReplState, arg: str) -> None:
     config = state.config
     if not arg:
         print(f"Current model: {config.llm.model}")
         return
-    from ..llm.client import OpenAIChatClient
+    from ..llm.client import LLMConfig, OpenAIChatClient
 
-    config.llm = type(config.llm)(
+    new_llm_config = LLMConfig(
         base_url=config.llm.base_url,
         api_key=config.llm.api_key,
         model=arg,
@@ -478,12 +478,15 @@ async def _cmd_model(state: dict, arg: str) -> None:
         service_tier=config.llm.service_tier,
         auxiliary_model=config.llm.auxiliary_model,
     )
-    # Update the running agent's LLM client
-    state.agent.runner.llm = OpenAIChatClient(config.llm)
+    # Close old LLM client before replacing
+    old_llm = state.agent.runner.llm
+    if hasattr(old_llm, "close"):
+        await old_llm.close()
+    state.agent.runner.llm = OpenAIChatClient(new_llm_config)
     print(f"{GREEN}✓{RST} Model switched to: {arg}")
 
 
-async def _cmd_history(state: dict, arg: str) -> None:
+async def _cmd_history(state: ReplState, arg: str) -> None:
     messages = state.messages
     if not messages:
         print(f"{GRAY}(no messages in this session){RST}")
@@ -496,7 +499,7 @@ async def _cmd_history(state: dict, arg: str) -> None:
         print(f"  {GRAY}[{i}]{RST} {role}: {preview}")
 
 
-async def _cmd_skill(state: dict, arg: str) -> None:
+async def _cmd_skill(state: ReplState, arg: str) -> None:
     parts = arg.split(maxsplit=1) if arg else []
     subcmd = parts[0] if parts else "list"
     skill_name = parts[1] if len(parts) > 1 else ""
@@ -543,33 +546,33 @@ async def _cmd_skill(state: dict, arg: str) -> None:
         print(f"{RED}✗{RST} Unknown subcommand: {subcmd}. Use: list, load, unload")
 
 
-async def _cmd_clear(state: dict, arg: str) -> None:
+async def _cmd_clear(state: ReplState, arg: str) -> None:
     import os
 
     os.system("clear" if os.name == "posix" else "cls")
 
 
-async def _cmd_cost(state: dict, arg: str) -> None:
+async def _cmd_cost(state: ReplState, arg: str) -> None:
     tracker = state.usage_tracker
     print(tracker.summary())
 
 
-async def _cmd_help(state: dict, arg: str) -> None:
+async def _cmd_help(state: ReplState, arg: str) -> None:
     for name, (_handler, desc) in sorted(_COMMANDS.items()):
         print(f"  {GRAY}/{name}{RST}  {desc}")
 
 
-async def _cmd_plan(state: dict, arg: str) -> None:
+async def _cmd_plan(state: ReplState, arg: str) -> None:
     state.agent.runner.mode = "plan"
     print(f"{GREEN}✓{RST} Switched to plan mode (read-only tools)")
 
 
-async def _cmd_build(state: dict, arg: str) -> None:
+async def _cmd_build(state: ReplState, arg: str) -> None:
     state.agent.runner.mode = "build"
     print(f"{GREEN}✓{RST} Switched to build mode (all tools enabled)")
 
 
-async def _cmd_switch(state: dict, arg: str) -> None:
+async def _cmd_switch(state: ReplState, arg: str) -> None:
     current = state.agent.runner.mode
     if current == "normal":
         state.agent.runner.mode = "plan"
@@ -577,7 +580,7 @@ async def _cmd_switch(state: dict, arg: str) -> None:
         state.agent.runner.mode = "build"
     else:
         state.agent.runner.mode = "normal"
-    print(f"{GREEN}✓{RST} Switched: {current} → {state['agent'].runner.mode}")
+    print(f"{GREEN}✓{RST} Switched: {current} → {state.agent.runner.mode}")
 
 
 # Command registry: name → (handler, description)
