@@ -75,6 +75,8 @@ class SessionRunner:
 
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
+        self._cached_skill_catalog: str = ""  # stable part of system prompt
+        self._loaded_skills: set[str] = set()  # skills persistent across turns
         self._cached_mode: str = "build"
         self._extractor = None
         self._overflow_retried = False
@@ -270,19 +272,58 @@ class SessionRunner:
             if self.mode == "plan":
                 system = self._PLAN_SYSTEM_PROMPT
 
+            # Build skill catalog for system prompt (stable, cached).
+            # This lets the LLM know what skills are available so it can
+            # request them via skills_list or skill_manage.
+            skill_catalog = ""
+            if self.skill_loader is not None:
+                if not self._cached_skill_catalog:
+                    try:
+                        all_skills = await self.skill_loader.load()
+                        if all_skills:
+                            catalog_lines = ["## Available Skills\n"]
+                            for s in all_skills:
+                                desc = s.description[:80] if s.description else "(no description)"
+                                catalog_lines.append(
+                                    f"- **{s.name}** ({s.namespace}): {desc}"
+                                )
+                            self._cached_skill_catalog = "\n".join(catalog_lines)
+                    except Exception:
+                        pass
+                skill_catalog = self._cached_skill_catalog
+
+            # Append skill catalog to system prompt (frozen layer — cached)
+            if skill_catalog:
+                system = system + "\n\n" + skill_catalog
+
             # Build context injection block for user message
             context_parts: list[str] = []
 
+            # Skill matching: keywords + CJK-aware fuzzy.
+            # Once matched, skills stay loaded for the session (persistent).
             if self.skill_loader is not None and messages:
                 last_user = next((m for m in reversed(messages) if m.role == "user"), None)
                 if last_user:
                     try:
                         matched = await self.skill_loader.match(last_user.content)
-                        if matched:
-                            skill_texts = [m.skill.body for m in matched[:3]]
-                            context_parts.append(
-                                "## Relevant Skills\n\n" + "\n---\n".join(skill_texts)
-                            )
+                        for m in matched:
+                            key = f"{m.skill.namespace}:{m.skill.name}"
+                            if key not in self._loaded_skills:
+                                self._loaded_skills.add(key)
+
+                        # Inject all loaded skill bodies as context
+                        if self._loaded_skills:
+                            all_skills = {s.name: s for s in (await self.skill_loader.load())}
+                            loaded_bodies = []
+                            for key in list(self._loaded_skills):
+                                ns, name = key.split(":", 1)
+                                s = all_skills.get(name)
+                                if s is not None:
+                                    loaded_bodies.append(s.body)
+                            if loaded_bodies:
+                                context_parts.append(
+                                    "## Loaded Skills\n\n" + "\n---\n".join(loaded_bodies)
+                                )
                     except Exception:
                         pass
 
