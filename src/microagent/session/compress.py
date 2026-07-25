@@ -224,11 +224,6 @@ def snip_tool_results(
         return messages
 
     result = list(messages)
-    # Head protection: first protect_first_n messages
-    head_protected = set(range(min(protect_first_n, len(result))))
-    # Tail protection: last keep_recent messages
-    tail_protected = set(range(max(0, len(result) - keep_recent), len(result)))
-    protected = head_protected | tail_protected
 
     # Pre-compute per-message token counts to avoid O(n²) re-scanning
     msg_tokens = [estimate_tokens(m.content or "") for m in result]
@@ -236,6 +231,12 @@ def snip_tool_results(
     # Remove oldest tool_result messages outside protected zone
     i = 0
     while i < len(result) and total_tokens > max_tokens:
+        # Recompute protected ranges each iteration — head/tail sizes
+        # shift as messages are removed.
+        head_protected = set(range(min(protect_first_n, len(result))))
+        tail_protected = set(range(max(0, len(result) - keep_recent), len(result)))
+        protected = head_protected | tail_protected
+
         if i in protected:
             i += 1
             continue
@@ -244,14 +245,10 @@ def snip_tool_results(
             total_tokens -= msg_tokens[i]
             result.pop(i)
             msg_tokens.pop(i)
-            # Adjust protected indices
-            protected = {p - 1 if p > i else p for p in protected}
 
             # Strip the matching tool_call from the preceding assistant message.
-            # If tool_calls becomes empty, insert a stub tool_result so the
-            # remaining tool_call messages on *other* ids still have valid pairs.
             if orphaned_id:
-                _fix_orphaned_tool_call(result, orphaned_id, protected)
+                _fix_orphaned_tool_call(result, orphaned_id)
         else:
             i += 1
 
@@ -261,7 +258,6 @@ def snip_tool_results(
 def _fix_orphaned_tool_call(
     messages: list[Message],
     orphaned_id: str,
-    protected: set[int],
 ) -> None:
     """Remove a tool_call id from its assistant message; keep API invariants.
 
