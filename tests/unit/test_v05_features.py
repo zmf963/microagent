@@ -99,12 +99,12 @@ class TestFileReference:
 
 class TestPlanBuildMode:
     def test_runner_has_mode_field(self):
-        """SessionRunner has a mode field defaulting to 'normal'."""
+        """SessionRunner has a mode field defaulting to 'build'."""
         from microagent.session.runner import SessionRunner
         from microagent.core.tool import ToolRegistry
         from tests.unit.fake_llm import FakeLLMClient
         runner = SessionRunner(llm=FakeLLMClient([]), registry=ToolRegistry([]))
-        assert runner.mode == "normal"
+        assert runner.mode == "build"
 
     def test_runner_mode_can_be_set(self):
         """SessionRunner mode can be changed."""

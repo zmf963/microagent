@@ -572,17 +572,6 @@ async def _cmd_build(state: ReplState, arg: str) -> None:
     print(f"{GREEN}✓{RST} Switched to build mode (all tools enabled)")
 
 
-async def _cmd_switch(state: ReplState, arg: str) -> None:
-    current = state.agent.runner.mode
-    if current == "normal":
-        state.agent.runner.mode = "plan"
-    elif current == "plan":
-        state.agent.runner.mode = "build"
-    else:
-        state.agent.runner.mode = "normal"
-    print(f"{GREEN}✓{RST} Switched: {current} → {state.agent.runner.mode}")
-
-
 # Command registry: name → (handler, description)
 _COMMANDS: dict[str, tuple] = {
     "new": (_cmd_new, "Start a new session"),
@@ -596,6 +585,5 @@ _COMMANDS: dict[str, tuple] = {
     "cost": (_cmd_cost, "Show token usage and cost for this session"),
     "plan": (_cmd_plan, "Switch to plan mode (read-only tools)"),
     "build": (_cmd_build, "Switch to build mode (all tools)"),
-    "switch": (_cmd_switch, "Cycle through normal/plan/build modes"),
     "help": (_cmd_help, "Show available commands"),
 }

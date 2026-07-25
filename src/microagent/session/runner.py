@@ -75,11 +75,11 @@ class SessionRunner:
 
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
-        self._cached_mode: str = "normal"
+        self._cached_mode: str = "build"
         self._extractor = None
         self._overflow_retried = False
         self._steer_pending: str | None = None
-        self.mode: str = "normal"  # "normal" | "plan" | "build"
+        self.mode: str = "build"  # "build" | "plan"
         self._output_store = None  # lazy init
         self._active_subagents: list[SessionRunner] = []
 

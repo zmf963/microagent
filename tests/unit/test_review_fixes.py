@@ -107,11 +107,10 @@ class TestASKRules:
 
 class TestPlanBuildCommands:
     def test_commands_registered(self):
-        """plan/build/switch are in command registry."""
+        """plan/build are in command registry."""
         from microagent.surface.cli import _COMMANDS
         assert "plan" in _COMMANDS
         assert "build" in _COMMANDS
-        assert "switch" in _COMMANDS
 
     async def test_plan_mode_blocks_process(self):
         """Plan mode should also block process tool."""
