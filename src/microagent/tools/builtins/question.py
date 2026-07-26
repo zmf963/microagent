@@ -21,14 +21,23 @@ from ...core.types import ToolResult
 )
 async def question(
     text: Annotated[str, Field(description="The question to ask the user")],
+    timeout: Annotated[
+        int,
+        Field(
+            description="Max seconds to wait for user input (0 = no timeout)",
+            ge=0,
+            le=3600,
+        ),
+    ] = 300,
 ) -> ToolResult:
     """Ask the user a clarifying question.
 
     In interactive CLI/TUI mode, this blocks and waits for user input.
     In non-interactive/programmatic mode, returns an error indicating
     the question could not be answered.
+
+    Has a configurable timeout (default 5 min) to prevent indefinite hangs.
     """
-    # Try to read from stdin if available (interactive mode)
     import sys
 
     if not sys.stdin.isatty():
@@ -42,10 +51,16 @@ async def question(
         import asyncio
 
         print(f"\n❓ {text}")
-        # input() is blocking — run off the event loop thread
-        answer = (await asyncio.to_thread(input, "> ")).strip()
+        # input() is blocking — run off the event loop thread with timeout
+        answer_future = asyncio.to_thread(input, "> ")
+        if timeout > 0:
+            answer = (await asyncio.wait_for(answer_future, timeout=timeout)).strip()
+        else:
+            answer = (await answer_future).strip()
         if not answer:
             return ToolResult.error("User provided no answer.")
         return ToolResult.ok(answer)
+    except asyncio.TimeoutError:
+        return ToolResult.error(f"Question timed out after {timeout}s with no response.")
     except (EOFError, KeyboardInterrupt):
         return ToolResult.error("User cancelled the question.")

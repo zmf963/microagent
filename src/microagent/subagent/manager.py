@@ -99,10 +99,9 @@ class SubagentManager:
         # Build filtered tool registry — intersection with parent's available tools
         child_registry = self._filter_registry(spec, parent_runner.registry, parent_runner)
 
-        # Check if parent is already cancelled
-        if parent_runner.budget._cancel_event is not None:
-            if parent_runner.budget._cancel_event.is_set():
-                return f"[subagent {spec_name} cancelled: parent budget exhausted]"
+        # Check if parent is already cancelled (best-effort early exit)
+        if parent_runner.budget.is_cancelled():
+            return f"[subagent {spec_name} cancelled: parent budget exhausted]"
 
         # Spawn child budget from parent — shares cancel_event,
         # reports consumption up the parent chain
@@ -130,7 +129,8 @@ class SubagentManager:
         )
 
         # Register child for steer propagation
-        parent_runner._active_subagents.append(child_runner)
+        async with parent_runner._subagents_lock:
+            parent_runner._active_subagents.append(child_runner)
 
         # Run the subagent turn
         messages: list[Message] = [Message.user(prompt)]
@@ -143,8 +143,9 @@ class SubagentManager:
                 if isinstance(event, TurnFailed):
                     return f"[subagent {spec_name} failed: {event.reason}]"
         finally:
-            if child_runner in parent_runner._active_subagents:
-                parent_runner._active_subagents.remove(child_runner)
+            async with parent_runner._subagents_lock:
+                if child_runner in parent_runner._active_subagents:
+                    parent_runner._active_subagents.remove(child_runner)
             await child_runner.close()
             # Close forked LLM client (has its own AsyncOpenAI connection pool)
             if forked_llm and hasattr(llm, "close"):

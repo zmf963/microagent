@@ -92,6 +92,7 @@ class LocalTerminal:
             if proc is not None:
                 try:
                     proc.kill()
+                    await proc.wait()
                 except Exception:
                     pass
             return TerminalResult.ok(
@@ -160,6 +161,7 @@ class DockerTerminal:
             if proc is not None:
                 try:
                     proc.kill()
+                    await proc.wait()
                 except Exception:
                     pass
             return TerminalResult.ok(

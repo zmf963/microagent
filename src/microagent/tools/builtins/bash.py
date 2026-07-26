@@ -24,22 +24,33 @@ async def bash(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        # Read stdout incrementally so we can capture partial output on timeout.
+        # Using communicate() would lose buffered data when wait_for cancels.
+        chunks: list[bytes] = []
+        total = 0
+
+        async def _read_all() -> None:
+            nonlocal total
+            while True:
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
+                    break
+                if total < MAX_OUTPUT:
+                    chunks.append(chunk)
+                    total += len(chunk)
+
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            await asyncio.wait_for(_read_all(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             await proc.wait()
-            partial = ""
-            if proc.stdout:
-                try:
-                    partial = (await proc.stdout.read()).decode("utf-8", errors="replace")
-                except Exception:
-                    pass
+            partial = b"".join(chunks).decode("utf-8", errors="replace")
             return ToolResult.error(
                 f"command timed out after {timeout}s\npartial output:\n{partial}"
             )
 
-        output = stdout.decode("utf-8", errors="replace") if stdout else ""
+        await proc.wait()
+        output = b"".join(chunks).decode("utf-8", errors="replace")
         if len(output) > MAX_OUTPUT:
             output = (
                 output[:MAX_OUTPUT]

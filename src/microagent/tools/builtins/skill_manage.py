@@ -80,6 +80,13 @@ async def skill_manage(
     if action == "create":
         if not name or not content:
             return ToolResult.error("name and content are required for create")
+
+        MAX_SKILL_SIZE = 1_000_000  # 1 MB
+        if len(content) > MAX_SKILL_SIZE:
+            return ToolResult.error(
+                f"skill content too large: {len(content)} bytes exceeds {MAX_SKILL_SIZE} limit"
+            )
+
         skill_path = skills_dir / name / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         import asyncio

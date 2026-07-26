@@ -9,10 +9,13 @@ Design (from design doc §2.3 + Appendix C.2):
 - WAL mode for crash recovery.
 - Messages are JSON-serialised for storage.
 - In-memory list is the primary read path; SQLite is for durability.
+- All SQLite I/O runs in a thread via asyncio.to_thread() to avoid
+  blocking the event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -93,7 +96,19 @@ def _deserialize_message(data: str) -> Message:
 
 
 class SQLiteStore:
-    """SQLite WAL-mode store for session persistence."""
+    """SQLite WAL-mode store for session persistence.
+
+    All I/O runs via asyncio.to_thread() to avoid blocking the event loop.
+    Uses check_same_thread=False because the connection is accessed from
+    worker threads, but all access is serialized by an asyncio.Lock.
+
+    Design note: the lock serializes ALL operations (reads + writes),
+    which means concurrent reads block each other. SQLite WAL mode
+    supports concurrent reads with a single writer, so a read-write lock
+    could improve throughput. However, for single-agent workloads the
+    contention window is negligible, so a simple mutex is kept for
+    correctness and simplicity.
+    """
 
     def __init__(self, path: Path | str):
         self._path = Path(path)
@@ -101,11 +116,13 @@ class SQLiteStore:
         self._conn = sqlite3.connect(
             str(self._path),
             isolation_level=None,  # autocommit
+            check_same_thread=False,
         )
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._init_schema()
+        self._lock = asyncio.Lock()
 
     def _init_schema(self) -> None:
         self._conn.execute("""
@@ -120,32 +137,48 @@ class SQLiteStore:
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id, seq)")
 
     async def append(self, session_id: str, msg: Message) -> None:
-        # Get next seq for this session
-        row = self._conn.execute(
-            "SELECT MAX(seq) FROM messages WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        seq = (row[0] or 0) + 1
-        self._conn.execute(
-            "INSERT INTO messages (session_id, seq, data) VALUES (?, ?, ?)",
-            (session_id, seq, _serialize_message(msg)),
-        )
+        serialized = _serialize_message(msg)
+
+        def _append():
+            row = self._conn.execute(
+                "SELECT MAX(seq) FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            seq = (row[0] or 0) + 1
+            self._conn.execute(
+                "INSERT INTO messages (session_id, seq, data) VALUES (?, ?, ?)",
+                (session_id, seq, serialized),
+            )
+
+        async with self._lock:
+            await asyncio.to_thread(_append)
 
     async def load_history(self, session_id: str) -> list[Message]:
-        rows = self._conn.execute(
-            "SELECT data FROM messages WHERE session_id = ? ORDER BY seq",
-            (session_id,),
-        ).fetchall()
-        return [_deserialize_message(r[0]) for r in rows]
+        def _load():
+            rows = self._conn.execute(
+                "SELECT data FROM messages WHERE session_id = ? ORDER BY seq",
+                (session_id,),
+            ).fetchall()
+            return [_deserialize_message(r[0]) for r in rows]
+
+        async with self._lock:
+            return await asyncio.to_thread(_load)
 
     async def checkpoint(self, session_id: str) -> None:
-        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        async with self._lock:
+            await asyncio.to_thread(
+                lambda: self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            )
 
     async def list_sessions(self) -> list[str]:
-        rows = self._conn.execute(
-            "SELECT session_id FROM messages GROUP BY session_id ORDER BY MAX(id) DESC"
-        ).fetchall()
-        return [r[0] for r in rows]
+        def _list():
+            rows = self._conn.execute(
+                "SELECT session_id FROM messages GROUP BY session_id ORDER BY MAX(id) DESC"
+            ).fetchall()
+            return [r[0] for r in rows]
+
+        async with self._lock:
+            return await asyncio.to_thread(_list)
 
     async def session_summaries(self) -> list[dict[str, Any]]:
         """Return count + last-message-preview per session in one query.
@@ -153,29 +186,33 @@ class SQLiteStore:
         Avoids the O(N) per-session load_history calls in /list.
         Returns list of dicts: {session_id, count, preview}.
         """
-        rows = self._conn.execute("""
-            SELECT
-                session_id,
-                COUNT(*) AS count,
-                (SELECT data FROM messages m2
-                 WHERE m2.session_id = m.session_id
-                 ORDER BY m2.seq DESC LIMIT 1) AS last_data
-            FROM messages m
-            GROUP BY session_id
-            ORDER BY MAX(m.id) DESC
-        """).fetchall()
-        summaries = []
-        for r in rows:
-            session_id, count, last_data = r
-            preview = ""
-            if last_data:
-                try:
-                    msg = _deserialize_message(last_data)
-                    preview = msg.content[:50].replace("\n", " ")
-                except Exception:
-                    pass
-            summaries.append({"session_id": session_id, "count": count, "preview": preview})
-        return summaries
+        def _summaries():
+            rows = self._conn.execute("""
+                SELECT
+                    session_id,
+                    COUNT(*) AS count,
+                    (SELECT data FROM messages m2
+                     WHERE m2.session_id = m.session_id
+                     ORDER BY m2.seq DESC LIMIT 1) AS last_data
+                FROM messages m
+                GROUP BY session_id
+                ORDER BY MAX(m.id) DESC
+            """).fetchall()
+            summaries = []
+            for r in rows:
+                session_id, count, last_data = r
+                preview = ""
+                if last_data:
+                    try:
+                        msg = _deserialize_message(last_data)
+                        preview = msg.content[:50].replace("\n", " ")
+                    except Exception:
+                        pass
+                summaries.append({"session_id": session_id, "count": count, "preview": preview})
+            return summaries
+
+        async with self._lock:
+            return await asyncio.to_thread(_summaries)
 
     def close(self) -> None:
         self._conn.close()

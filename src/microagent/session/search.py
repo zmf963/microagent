@@ -65,12 +65,16 @@ def _build_fts_query(query: str) -> str:
     Latin words are quoted for phrase matching.
     CJK text is split into bigrams (e.g. "代码审查" → "代码 码审 审查")
     for better precision than single-character OR.
+    FTS5 special characters are stripped to prevent syntax errors.
     """
+    # Strip FTS5 special characters that could cause syntax errors
+    safe_query = query.translate(str.maketrans("", "", '*"()^'))
+
     parts = []
     pos = 0
-    for m in _CJK_RE.finditer(query):
+    for m in _CJK_RE.finditer(safe_query):
         # Add Latin text before this CJK segment
-        latin = query[pos : m.start()].strip()
+        latin = safe_query[pos : m.start()].strip()
         if latin:
             words = _LATIN_WORD_RE.findall(latin)
             parts.extend(f'"{w}"' for w in words)
@@ -86,12 +90,12 @@ def _build_fts_query(query: str) -> str:
         pos = m.end()
 
     # Remaining Latin text
-    remaining = query[pos:].strip()
+    remaining = safe_query[pos:].strip()
     if remaining:
         words = _LATIN_WORD_RE.findall(remaining)
         parts.extend(f'"{w}"' for w in words)
 
-    return " OR ".join(parts) if parts else f'"{query}"'
+    return " OR ".join(parts) if parts else f'"{safe_query}"'
 
 
 async def search_sessions(

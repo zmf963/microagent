@@ -44,7 +44,7 @@ class TestSteer:
             events.append(event)
             # After tool result, inject steer before next LLM call
             if isinstance(event, ToolResultDelta):
-                runner.steer("STOP — do something else")
+                await runner.steer("STOP — do something else")
 
         # Check that steer was injected — the second LLM call's messages
         # should contain the steer text in a tool_result
@@ -75,17 +75,17 @@ class TestSteer:
             if isinstance(event, SteerEvent):
                 steer_events.append(event)
             if isinstance(event, ToolResultDelta):
-                runner.steer("change direction")
+                await runner.steer("change direction")
 
         assert len(steer_events) >= 1
         assert "change direction" in steer_events[0].text
 
-    def test_steer_sets_pending_flag(self):
+    async def test_steer_sets_pending_flag(self):
         """Agent.steer() sets _steer_pending on the runner."""
         llm = FakeLLMClient([text_response("hi")])
         runner = SessionRunner(llm=llm, registry=ToolRegistry([]))
         assert runner._steer_pending is None
-        runner.steer("new instruction")
+        await runner.steer("new instruction")
         assert runner._steer_pending == "new instruction"
 
     def test_steer_event_is_frozen_dataclass(self):
@@ -112,7 +112,7 @@ class TestSteer:
             events.append(event)
 
         # Steer after turn completes — should just set pending, no crash
-        runner.steer("next instruction")
+        await runner.steer("next instruction")
         assert runner._steer_pending == "next instruction"
 
         # The pending steer would be consumed on the next tool_result

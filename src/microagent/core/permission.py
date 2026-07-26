@@ -232,7 +232,7 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("browser_back", {}, Decision.ALLOW),
     Rule("browser_scroll", {}, Decision.ALLOW),
     Rule("browser_press", {}, Decision.ALLOW),
-    Rule("browser_console", {}, Decision.ALLOW),
+    Rule("browser_console", {}, Decision.ASK, "JavaScript evaluation requires confirmation"),
     Rule("browser_get_images", {}, Decision.ALLOW),
     Rule("browser_vision", {}, Decision.ALLOW),
     Rule("context7", {}, Decision.ALLOW),

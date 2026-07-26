@@ -32,7 +32,10 @@ def _try_acquire_lock(lock_file: Path, return_fd: bool = False):
 
     When return_fd=True the caller MUST close the returned fd to release
     the lock.  When return_fd=False the fd is closed immediately (which
-    releases the lock) — this is a check-only mode.
+    releases the lock) — this is a check-only mode. Note: in check-only
+    mode, if flock succeeds but fd.close() raises, the lock is released
+    (fd closed by GC) but the exception propagates — this is intentional
+    since a failed close indicates a deeper I/O problem.
     """
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     fd = None
@@ -53,12 +56,20 @@ def _try_acquire_lock(lock_file: Path, return_fd: bool = False):
 
 
 def _release_lock(fd) -> None:
-    """Release the file lock."""
+    """Release the file lock and close the fd.
+
+    Releases the lock first, then closes the fd. If closing fails,
+    the fd is still unlocked but may leak — we log a warning.
+    """
     try:
         fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        fd.close()
     except Exception:
         pass
+    finally:
+        try:
+            fd.close()
+        except Exception:
+            logger.warning("Failed to close cron lock file descriptor")
 
 
 # ---------------------------------------------------------------------------

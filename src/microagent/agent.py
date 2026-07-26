@@ -7,7 +7,10 @@ simple ``run(session_id, prompt)`` / ``arun(session_id, prompt)`` API.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Any
 
@@ -110,9 +113,23 @@ class Agent:
     def steer(self, text: str) -> None:
         """Inject a steer text into the running turn.
 
-        Delegates to SessionRunner.steer().
+        Delegates to SessionRunner.steer(). Schedules the async call
+        on the running event loop — safe to call from a sync context.
+        Errors in the async task are logged rather than silently lost.
         """
-        self.runner.steer(text)
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self.runner.steer(text))
+            task.add_done_callback(
+                lambda t: logger.warning(
+                    "steer task failed", exc_info=t.exception()
+                ) if t.exception() else None
+            )
+        except RuntimeError:
+            # No running loop — create one temporarily
+            asyncio.run(self.runner.steer(text))
 
     async def close(self) -> None:
         """Clean up all resources (cron, runner, LLM client)."""

@@ -338,6 +338,11 @@ class LSPClient:
                     if content_length <= 0:
                         buf = buf[header_end + 4:]
                         continue
+                    # Prevent OOM from malicious/buggy LSP servers
+                    if content_length > 10_000_000:  # 10 MB limit
+                        raise ValueError(
+                            f"LSP Content-Length {content_length} exceeds 10 MB limit"
+                        )
                     body_start = header_end + 4
                     if len(buf) < body_start + content_length:
                         break  # incomplete body

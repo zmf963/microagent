@@ -19,6 +19,13 @@ async def write_file(
     content: Annotated[str, Field(description="The content to write")],
     backup: Annotated[bool, Field(description="If True, create a .bak copy of existing file before overwriting")] = False,
 ) -> ToolResult:
+    MAX_FILE_SIZE = 10_000_000  # 10 MB
+
+    if len(content) > MAX_FILE_SIZE:
+        return ToolResult.error(
+            f"content too large: {len(content)} bytes exceeds {MAX_FILE_SIZE} limit"
+        )
+
     p = Path(path).expanduser().resolve()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

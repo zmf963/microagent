@@ -13,6 +13,7 @@ yield ToolProgressDelta events for real-time display.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -77,6 +78,8 @@ class SessionRunner:
         self._cached_tools: list[dict] | None = None
         self._cached_skill_catalog: str = ""  # stable part of system prompt
         self._loaded_skills: set[str] = set()  # skills persistent across turns
+        self._loaded_skills_order: list[str] = []  # LRU ordering for eviction
+        self._max_loaded_skills: int = 10  # cap to prevent unbounded growth
         self._cached_mode: str = "build"
         self._extractor = None
         self._overflow_retried = False
@@ -84,6 +87,7 @@ class SessionRunner:
         self.mode: str = "build"  # "build" | "plan"
         self._output_store = None  # lazy init
         self._active_subagents: list[SessionRunner] = []
+        self._subagents_lock = asyncio.Lock()
 
         # Per-session state (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -140,18 +144,25 @@ class SessionRunner:
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
 
-    def steer(self, text: str) -> None:
+    async def steer(self, text: str) -> None:
         """Inject a steer text into the running turn.
 
         The text will be appended to the most recent tool_result on the
         next iteration boundary. If the current iteration has no tool
         calls (pure text response), the steer waits until the next turn.
         Also propagates to active subagents (interrupt cascade).
+
+        IMPORTANT: This method acquires _subagents_lock internally.
+        Do NOT call steer() from code that already holds _subagents_lock
+        — asyncio.Lock is not reentrant and this would deadlock.
         """
         self._steer_pending = text
-        # Cascade to active subagents
-        for child in self._active_subagents:
-            child.steer(text)
+        # Cascade to active subagents concurrently (snapshot under lock
+        # to avoid holding it during potentially slow cascade).
+        async with self._subagents_lock:
+            children = list(self._active_subagents)
+        if children:
+            await asyncio.gather(*(child.steer(text) for child in children))
 
     # Tools blocked in plan mode (read-only mode).
     # bash is NOT in this set — plan mode allows read-only shell commands
@@ -218,7 +229,7 @@ class SessionRunner:
 
         while not self.budget.exhausted:
             try:
-                self.budget.consume(iterations=1)
+                await self.budget.consume(iterations=1)
             except BudgetExceeded as e:
                 yield TurnFailed(f"budget exhausted: {e}")
                 return
@@ -320,7 +331,17 @@ class SessionRunner:
                         for m in matched:
                             key = f"{m.skill.namespace}:{m.skill.name}"
                             if key not in self._loaded_skills:
+                                # Evict oldest if at capacity (LRU)
+                                while len(self._loaded_skills) >= self._max_loaded_skills and self._loaded_skills_order:
+                                    oldest = self._loaded_skills_order.pop(0)
+                                    self._loaded_skills.discard(oldest)
                                 self._loaded_skills.add(key)
+                                self._loaded_skills_order.append(key)
+                            else:
+                                # Refresh LRU position (move to end)
+                                if key in self._loaded_skills_order:
+                                    self._loaded_skills_order.remove(key)
+                                self._loaded_skills_order.append(key)
 
                         # Inject all loaded skill bodies as context
                         if self._loaded_skills:
@@ -410,7 +431,7 @@ class SessionRunner:
                                 self._overflow_retried = True
                                 if usage:
                                     try:
-                                        self.budget.consume(
+                                        await self.budget.consume(
                                             tokens=usage.input_tokens + usage.output_tokens,
                                             cost_usd=usage.cost_usd,
                                         )
@@ -457,7 +478,7 @@ class SessionRunner:
                                 await self.store.append(self.session_id, assistant_msg)
                             if usage:
                                 try:
-                                    self.budget.consume(
+                                    await self.budget.consume(
                                         tokens=usage.input_tokens + usage.output_tokens,
                                         cost_usd=usage.cost_usd,
                                     )
@@ -484,7 +505,7 @@ class SessionRunner:
 
             if usage:
                 try:
-                    self.budget.consume(
+                    await self.budget.consume(
                         tokens=usage.input_tokens + usage.output_tokens,
                         cost_usd=usage.cost_usd,
                     )

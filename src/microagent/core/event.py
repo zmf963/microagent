@@ -1,16 +1,19 @@
 """EventBus — lightweight pub/sub for observing agent events.
 
 Observers only: handlers cannot modify payloads. Exceptions are
-swallowed to prevent observer failures from breaking the main loop.
+logged but swallowed to prevent observer failures from breaking the main loop.
 Supports both sync and async callbacks transparently.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,4 +36,6 @@ class EventBus:
                 if asyncio.iscoroutine(result):
                     await result
             except Exception:
-                pass  # observer errors must not propagate
+                logger.warning(
+                    "EventBus observer failed for event %s", event, exc_info=True
+                )

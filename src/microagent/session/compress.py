@@ -493,7 +493,7 @@ async def compact_conversation(
                 prev = state.previous_summary
                 current, usage = await _llm_summarize(messages, llm, previous_summary=prev)
                 if budget is not None and usage:
-                    budget.consume(
+                    await budget.consume(
                         tokens=usage.input_tokens + usage.output_tokens,
                         cost_usd=usage.cost_usd,
                     )
@@ -535,7 +535,7 @@ async def compact_conversation(
                 prev = state.previous_summary
                 current, usage = await _llm_summarize(current, llm, previous_summary=prev)
                 if budget is not None and usage:
-                    budget.consume(
+                    await budget.consume(
                         tokens=usage.input_tokens + usage.output_tokens,
                         cost_usd=usage.cost_usd,
                     )

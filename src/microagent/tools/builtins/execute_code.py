@@ -8,6 +8,8 @@ same privileges as the agent process.
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from typing import Annotated
 
 from pydantic import Field
@@ -29,9 +31,6 @@ async def execute_code(
     if not code.strip():
         return ToolResult.error("code is required")
 
-    import asyncio
-    import sys
-
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -45,6 +44,7 @@ async def execute_code(
         except TimeoutError:
             try:
                 proc.kill()
+                await proc.wait()
             except Exception:
                 pass
             return ToolResult.error(f"execution timed out after {timeout}s")

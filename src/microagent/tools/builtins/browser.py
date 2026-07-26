@@ -257,7 +257,7 @@ async def browser_scroll(
 
     delta = amount if direction == "down" else -amount
     try:
-        await page.evaluate(f"window.scrollBy(0, {delta})")
+        await page.evaluate("([delta]) => window.scrollBy(0, delta)", [delta])
         return ToolResult.ok(f"Scrolled {direction} {amount}px")
     except Exception as e:
         return ToolResult.error(f"scroll failed: {e!r}")
@@ -309,6 +309,11 @@ async def browser_console(
 
     try:
         if expression:
+            # Limit expression size to prevent browser OOM
+            if len(expression) > 10_000:
+                return ToolResult.error(
+                    f"expression too long: {len(expression)} chars exceeds 10000 limit"
+                )
             result = await page.evaluate(expression)
             import json as _json
             return ToolResult.ok(_json.dumps(result, default=str, ensure_ascii=False))
@@ -335,11 +340,11 @@ async def browser_get_images(
         return ToolResult.error(str(e))
 
     try:
-        images = await page.evaluate(f"""() => {{
+        images = await page.evaluate("""([maxResults]) => {
             const imgs = document.querySelectorAll('img[src]');
             const results = [];
-            for (const img of imgs) {{
-                if (results.length >= {max_results}) break;
+            for (const img of imgs) {
+                if (results.length >= maxResults) break;
                 const rect = img.getBoundingClientRect();
                 if (rect.width === 0 && rect.height === 0) continue;
                 results.push({{
@@ -350,7 +355,7 @@ async def browser_get_images(
                 }});
             }}
             return results;
-        }}""")
+        }""", [max_results])
         if not images:
             return ToolResult.ok("(no visible images on page)")
         lines = [f"Images on page ({len(images)} visible):"]

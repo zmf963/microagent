@@ -20,6 +20,13 @@ async def edit_file(
         bool, Field(description="Replace all occurrences if true, else only first")
     ] = False,
 ) -> ToolResult:
+    MAX_REPLACEMENT_SIZE = 5_000_000  # 5 MB
+
+    if len(new_string) > MAX_REPLACEMENT_SIZE:
+        return ToolResult.error(
+            f"new_string too large: {len(new_string)} bytes exceeds {MAX_REPLACEMENT_SIZE} limit"
+        )
+
     p = Path(path).expanduser().resolve()
 
     if not p.exists():

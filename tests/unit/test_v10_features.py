@@ -125,7 +125,7 @@ class TestInterruptPropagation:
             budget=Budget.root(max_iterations=20),
         )
         # Steer should set pending on parent
-        parent_runner.steer("new direction")
+        await parent_runner.steer("new direction")
         assert parent_runner._steer_pending == "new direction"
 
 

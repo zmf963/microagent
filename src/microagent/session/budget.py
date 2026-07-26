@@ -6,9 +6,8 @@ descendants tracking, and a shared cancel_event for root exhaustion.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-import anyio
+import asyncio
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -27,17 +26,20 @@ class Budget:
     _parent: Budget | None = None
 
     # Shared cancel signal: all descendants of the same root share one event
-    _cancel_event: anyio.Event | None = None
+    _cancel_event: asyncio.Event | None = None
 
     # Descendant accumulated usage (excludes own _used_*)
     _descendants_cost: float = 0.0
     _descendants_tokens: int = 0
     _descendants_iter: int = 0
 
+    # Lock for concurrent consume() calls across subagent tree
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
     @classmethod
     def root(cls, **limits) -> Budget:
         """Create a root budget with a shared cancel_event."""
-        return cls(_cancel_event=anyio.Event(), **limits)
+        return cls(_cancel_event=asyncio.Event(), **limits)
 
     def spawn(
         self,
@@ -76,6 +78,10 @@ class Budget:
             or self._used_cost >= self.max_cost_usd
         )
 
+    def is_cancelled(self) -> bool:
+        """Check if this budget tree has been cancelled at the root level."""
+        return self._cancel_event is not None and self._cancel_event.is_set()
+
     @property
     def remaining(self) -> int:
         """Remaining iterations (self only, not counting descendants)."""
@@ -96,44 +102,54 @@ class Budget:
         """Remaining cost accounting for descendants."""
         return max(0.0, self.max_cost_usd - self._used_cost - self._descendants_cost)
 
-    def consume(
+    async def consume(
         self,
         *,
         iterations: int = 0,
         tokens: int = 0,
         cost_usd: float = 0.0,
     ) -> None:
-        """Consume budget. Reports to parent chain. Sets cancel_event on exhaustion."""
-        if self._cancel_event is not None and self._cancel_event.is_set():
-            raise BudgetExceeded("budget cancelled by root")
+        """Consume budget. Reports to parent chain. Sets cancel_event on exhaustion.
 
-        self._used_iter += iterations
-        self._used_tokens += tokens
-        self._used_cost += cost_usd
+        Thread-safe: uses asyncio.Lock to serialize concurrent updates from
+        subagents that share the same ancestor chain.
+        """
+        async with self._lock:
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                raise BudgetExceeded("budget cancelled by root")
 
-        # Report to ancestor chain
-        node = self._parent
-        while node is not None:
-            node._descendants_iter += iterations
-            node._descendants_tokens += tokens
-            node._descendants_cost += cost_usd
-            node = node._parent
+            self._used_iter += iterations
+            self._used_tokens += tokens
+            self._used_cost += cost_usd
 
-        if self.exhausted or self._tree_exhausted():
-            if self._cancel_event is not None:
-                self._cancel_event.set()  # notify entire tree
-            raise BudgetExceeded(
-                "budget exhausted: "
-                f"self_cost={self._used_cost:.4f}/{self.max_cost_usd}, "
-                f"tree_cost={self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
-            )
+            # Report to ancestor chain
+            node = self._parent
+            while node is not None:
+                node._descendants_iter += iterations
+                node._descendants_tokens += tokens
+                node._descendants_cost += cost_usd
+                node = node._parent
+
+            if self.exhausted or self._tree_exhausted():
+                if self._cancel_event is not None:
+                    self._cancel_event.set()  # notify entire tree
+                raise BudgetExceeded(
+                    "budget exhausted: "
+                    f"self_cost={self._used_cost:.4f}/{self.max_cost_usd}, "
+                    f"tree_cost={self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
+                )
 
     def _tree_exhausted(self) -> bool:
         """Whether the root's total (self + all descendants) is over limit."""
         root = self._root()
         total_cost = root._used_cost + root._descendants_cost
         total_tokens = root._used_tokens + root._descendants_tokens
-        return total_cost >= root.max_cost_usd or total_tokens >= root.max_tokens
+        total_iter = root._used_iter + root._descendants_iter
+        return (
+            total_cost >= root.max_cost_usd
+            or total_tokens >= root.max_tokens
+            or total_iter >= root.max_iterations
+        )
 
     def _root(self) -> Budget:
         node = self
@@ -156,6 +172,12 @@ class Budget:
         )
 
     def reset(self) -> None:
+        """Reset all counters to zero.
+
+        NOTE: This method is NOT thread-safe — it does not acquire
+        _lock. It is intended for test/setup use only, where no
+        concurrent consume() calls are in flight.
+        """
         self._used_iter = 0
         self._used_tokens = 0
         self._used_cost = 0.0
