@@ -42,7 +42,6 @@ class BrowserState:
     """Per-session browser page state."""
 
     page: object = None  # Playwright Page | None
-    _last_screenshot: str | None = None  # base64 PNG cache for vision
 
 
 _current_state: contextvars.ContextVar[BrowserState | None] = contextvars.ContextVar(
@@ -102,8 +101,8 @@ async def browser_navigate(
             await state.page.close()
         state.page = await _browser.new_page()
 
-        # Inject console listener so browser_console can read messages
-        state.page.on("console", lambda msg: None)  # placeholder for real capture
+        # Inject console capture — intercepts console.* calls into
+        # window.__microagent_console so browser_console can read them.
         await state.page.evaluate("""() => {
             window.__microagent_console = [];
             const orig = {
@@ -158,12 +157,17 @@ async def browser_snapshot(
                 if (!els.length) return body.innerText.substring(0, 5000);
                 const seen = new Set();
                 const parts = [];
-                for (const el of els) {
+                for (let i = 0; i < els.length; i++) {
+                    const el = els[i];
                     const rect = el.getBoundingClientRect();
                     if (rect.width === 0 || rect.height === 0) continue;
                     const text = (el.textContent || '').trim().substring(0, 200);
-                    if (!text || seen.has(text)) continue;
-                    seen.add(text);
+                    if (!text) continue;
+                    // Dedupe by position, not text — two buttons with same
+                    // label are different elements.
+                    const posKey = Math.round(rect.x) + ',' + Math.round(rect.y);
+                    if (seen.has(posKey)) continue;
+                    seen.add(posKey);
                     const tag = el.tagName.toLowerCase();
                     const id = el.id ? '#' + el.id : '';
                     const cls = el.className && typeof el.className === 'string'
@@ -259,6 +263,16 @@ async def browser_scroll(
         return ToolResult.error(f"scroll failed: {e!r}")
 
 
+_VALID_KEYS = frozenset({
+    "Enter", "Tab", "Escape", "Backspace", "Delete",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    "PageUp", "PageDown", "Home", "End",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+    "Control", "Alt", "Shift", "Meta",
+    "Space", "Insert",
+})
+
+
 @tool("browser_press", description="Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.).")
 async def browser_press(
     key: Annotated[str, Field(description="Key to press: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, etc.")],
@@ -267,6 +281,12 @@ async def browser_press(
         page = _require_page()
     except RuntimeError as e:
         return ToolResult.error(str(e))
+
+    if key not in _VALID_KEYS and len(key) > 1:
+        return ToolResult.error(
+            f"invalid key: {key}. Use a named key (Enter, Tab, Escape, ArrowDown, etc.) "
+            f"or a single character."
+        )
 
     try:
         await page.keyboard.press(key)
@@ -390,9 +410,7 @@ async def browser_vision(
                 "() => document.querySelectorAll('.microagent-label').forEach(el => el.remove())"
             )
 
-        # Store for potential reuse and return as data URL so vision models can see it
-        _get_state()._last_screenshot = f"data:image/png;base64,{b64}"
-
+        # Return as data URL so vision-capable models can see it
         return ToolResult.ok(
             f"[Screenshot captured: {len(screenshot)} bytes]\n"
             f"Question: {question}\n\n"
