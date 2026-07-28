@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~6k LOC, 22 tools, 287 tests).
+MicroAgent is an embeddable AI agent core library (~7k LOC, 34 tools, 409 tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
@@ -37,14 +37,16 @@ microagent/
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
 │   │   └── search.py        # FTS5 session search
-│   ├── tools/builtins/      # 22 built-in tools
+│   ├── tools/builtins/      # 34 built-in tools
 │   │   ├── read_file.py, write_file.py, edit_file.py, grep.py, glob.py
 │   │   ├── bash.py, process.py
 │   │   ├── web_search.py, web_fetch.py, context7.py
-│   │   ├── browser.py        # 4 browser tools (Playwright)
+│   │   ├── browser.py        # 10 browser tools (Playwright)
 │   │   ├── execute_code.py, vision_analyze.py
 │   │   ├── task.py, todo_plan_exit.py
 │   │   ├── skill_manage.py, session_search.py
+│   │   ├── question.py, lsp.py, mcp_connect.py
+│   │   ├── git.py, file_tree.py
 │   ├── memory/              # MemoryProvider Protocol + SQLite + LLM extractor
 │   ├── skill/               # SkillLoader + Curator lifecycle
 │   ├── subagent/            # SubagentManager — task delegation
@@ -152,7 +154,7 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 287 tests
+python -m pytest tests/unit/ -q            # 409 tests
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-287%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-409%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~6k LOC**, **22 built-in tools**, **62 public API symbols**, **287 unit tests**.
+**~7k LOC**, **34 built-in tools**, **62 public API symbols**, **409 unit tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop is <200 LOC. Capability lives in tools and extension points, not in the core.
 
@@ -368,7 +368,7 @@ await scheduler.stop()
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
 | `core/` | 5 | 969 | types, tool registry, permission, store, event bus |
-| `tools/` | 17 | 1364 | 22 built-in tools (read, write, bash, grep, browser, etc.) |
+| `tools/` | 25 | 2155 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) |
 | `session/` | 5 | 1341 | runner loop, compression pyramid, budget, attachments, search |
 | `memory/` | 2 | 345 | FTS5 memory provider, LLM extractor |
 | `skill/` | 2 | 258 | Claude skill loader, curator |
@@ -395,16 +395,28 @@ await scheduler.stop()
 | `web_fetch` | Fetch URL content via httpx (SSRF-protected) |
 | `context7` | Fetch up-to-date documentation via Context7 API |
 | `browser_navigate` | Open a URL in Playwright browser |
-| `browser_snapshot` | Get a text snapshot of the current page |
-| `browser_click` | Click an element by CSS selector or text content |
+| `browser_snapshot` | Get a text snapshot of the current page (full or compact mode) |
+| `browser_click` | Click an element by CSS selector, ref ID, or text content |
 | `browser_type` | Type text into an input field by CSS selector |
+| `browser_back` | Navigate back to the previous page |
+| `browser_scroll` | Scroll the page up/down by pixel amount |
+| `browser_press` | Press keyboard keys (Enter, Tab, Escape, ArrowDown, etc.) |
+| `browser_console` | Read console messages or evaluate JavaScript |
+| `browser_get_images` | List visible images with URLs, alt text, dimensions |
+| `browser_vision` | Full-page PNG screenshot with optional element annotations |
 | `execute_code` | Execute Python code in a subprocess sandbox |
+| `lsp` | Language Server Protocol client (Python/TypeScript/Rust/Go/C++) |
 | `vision_analyze` | Analyze images via base64 + vision API |
 | `session_search` | Search past conversation history (FTS5) |
 | `task` | Spawn subagents (explore: read-only, general: multi-step) |
 | `todo` | Manage inline task list (list/add/update/remove) |
 | `plan` | Create multi-step plans without executing |
+| `question` | Ask user for input (non-blocking, asyncio.to_thread) |
 | `skill_manage` | Runtime skill creation/patching/deletion |
+| `skills_list` | List all available skills |
+| `git` | Git operations (status, diff, log, commit) |
+| `file_tree` | Directory tree visualization |
+| `mcp_connect` | Connect to MCP server at runtime |
 | `exit` | Signal task completion |
 
 ## Optional Extras
@@ -422,7 +434,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 287 passed, 1 skipped
+# 409 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \

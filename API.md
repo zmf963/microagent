@@ -237,5 +237,5 @@ pip install microagent[browser]   # Playwright 浏览器自动化
 
 ## 下一步
 
-- `DESIGN.md` — 完整架构文档（模块详解、数据流图、对比分析）
+- `DESIGN.md` — 完整架构文档（模块详解、数据流图、对比分析、已知问题与优化方向）
 - `README.md` — 项目概览

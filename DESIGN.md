@@ -1,8 +1,8 @@
 # MicroAgent 设计说明
 
-> 版本 0.1.0 | Python ≥3.14 | ~6,200 行核心代码 | 22 内置工具 | 287 测试
+> 版本 0.1.0 | Python ≥3.14 | ~7,000 行核心代码 | 34 内置工具 | 409 测试
 
-**MicroAgent 是一个将 AI Agent 的核心循环压缩到 6,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 7,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
 **核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
 
@@ -111,19 +111,23 @@ registry = ToolRegistry(_default_builtins())   # 22 内置工具
 registry.to_openai_tools()                     # → OpenAI function schema
 ```
 
-### 22 内置工具
+### 34 内置工具
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
 | 文件 | `read_file`, `write_file`, `edit_file`, `grep`, `glob` | 文件 I/O |
 | 终端 | `bash`, `process` | 前台 + 后台进程管理 |
 | 网络 | `web_search`, `web_fetch`, `context7` | 搜索 + 文档 |
-| 浏览器 | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type` | Playwright |
-| 代码 | `execute_code` | 子进程沙箱 |
+| 浏览器 | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_back`, `browser_scroll`, `browser_press`, `browser_console`, `browser_get_images`, `browser_vision` | Playwright |
+| 代码 | `execute_code`, `lsp` | 沙箱执行 + LSP 代码智能 |
 | 视觉 | `vision_analyze` | base64 + vision API |
 | 会话 | `session_search` | FTS5 历史搜索 |
 | 代理 | `task`, `todo`, `plan`, `exit` | 子代理 + 计划 |
-| 技能 | `skill_manage` | create/patch/list/delete |
+| 交互 | `question` | 用户输入（非阻塞） |
+| 技能 | `skill_manage`, `skills_list` | create/patch/list/delete |
+| Git | `git` | git 操作封装 |
+| 文件树 | `file_tree` | 目录结构可视化 |
+| MCP | `mcp_connect` | 运行时连接 MCP server |
 
 ### 权限引擎 (`core/permission.py` — 190 行)
 
@@ -297,13 +301,13 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-287 tests, 1 skipped, 0 failures  —  3,778 / 6,199 = 61% test/code ratio
+409 tests, 1 skipped, 0 failures  —  ~4,100 / 7,000 = 59% test/code ratio
 ```
 
 | 测试文件 | 覆盖 |
 |---------|------|
 | test_runner.py | SessionRunner, Budget |
-| test_builtins.py | 22 工具注册 |
+| test_builtins.py | 34 工具注册 |
 | test_compression.py + test_compaction_pyramid.py | 4 层压缩 |
 | test_session_persist.py | 会话持久化 |
 | test_process.py | 进程管理 |
@@ -313,18 +317,33 @@ system_prompt: "你是一个Python专家。"
 
 ---
 
+## 十三、已知问题与优化方向
+
+| 优先级 | 问题 | 现状 | 方案 |
+|:---:|------|------|------|
+| 🔴 | 多级子代理嵌套 | 单级 `task.spawn()`，子代理不能创建孙子代理 | 引入 orchestrator 角色，允许子代理再 spawn |
+| 🔴 | 增量压缩 | 每次全量 LLM 摘要，旧摘要被丢弃 | `CompactionState.previous_summary` 迭代更新 |
+| 🟡 | 文件附件恢复 | L3 摘要后 Agent 丢失文件上下文 | 压缩时记录最近 N 个文件，自动 re-attach |
+| 🟡 | Session 搜索 | LIKE 查询，无 ranking | 升级 FTS5（同 memory provider） |
+| 🟡 | 终端多后端 | local/docker/ssh | 按需增加 modal/daytona（非核心） |
+| 🟡 | 浏览器 page 类型标注 | `page: object` 导致 Pyright 报错 | `TYPE_CHECKING` 下导入 Playwright Page 类型 |
+| 🟢 | 完整插件框架 | 3 Protocol（PreLLM/ToolHook/ContextSource） | 按需扩展（非核心） |
+| 🟢 | Skill hub 远程安装 | 仅本地文件 | 增加 `skills install` 命令（非核心） |
+
+---
+
 ## 十二、与 Hermes / Claude Code / OpenCode 详细对比
 
 ### 12.1 规模对比
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~6,200 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心代码量 | ~7,000 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
 | 核心循环模块 | 340 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
-| 工具数量 | 22 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
+| 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 528 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
 | CLI 代码量 | 369 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 287（61% 覆盖比） | ~17,000 | 闭源 |
+| 测试数量 | 409（59% 覆盖比） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
@@ -363,9 +382,11 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | 文件 I/O | `read_file`, `write_file`, `edit_file`, `grep`, `glob` | ✅ 同名工具 | ✅ 同名工具 |
 | 终端 | `bash` + `process`（start/poll/kill/wait/log/write/list） | `terminal`（前景/后台/PTY/多后端） | `bash`（前景/后台） |
-| 浏览器 | `browser_navigate/snapshot/click/type` (Playwright) | `browser_navigate/click/type/snapshot/vision/scroll…` (Playwright) | ❌ 无原生浏览器 |
+| 浏览器 | `browser_navigate/snapshot/click/type/back/scroll/press/console/get_images/vision` (Playwright) | `browser_navigate/click/type/snapshot/vision/scroll…` (Playwright) | ❌ 无原生浏览器 |
 | 网络搜索 | `web_search` (DuckDuckGo lite) + `web_fetch` + `context7` | `web_search` (多引擎) + `web_extract` | `web_search` + `web_fetch` |
 | 代码执行 | `execute_code` (子进程) | `execute_code` (子进程 + venv) | `bash` (执行代码) |
+| LSP 代码智能 | `lsp` (stdio, 5 语言) | ❌ | ❌ |
+| 用户交互 | `question` (非阻塞 input) | ❌ | ❌ |
 | 视觉 | `vision_analyze` (base64 + vision API) | `vision_analyze` (图片分析) | ✅ 内置 vision |
 | 子代理 | `task` (单级 spawn) | `delegate_task` (多级嵌套 + orchestrator) | `task` (多级子代理) |
 | 记忆 | `session_search` (FTS5) | `memory_search` (FTS5) | — |
@@ -410,7 +431,7 @@ system_prompt: "你是一个Python专家。"
 | 特性 | MicroAgent | Hermes | Claude Code |
 |------|-----------|--------|-------------|
 | 加载器 | ClaudeSkillLoader + Composite（keyword+fuzzy） | scan_skill_commands() + YAML frontmatter | CLAUDE.md 文件 |
-| 运行时管理 | `skill_manage` 工具 (create/patch/list/delete) | `skill_manage` + skill editor | 手动编辑文件 |
+| 运行时管理 | `skill_manage` + `skills_list` 工具 (create/patch/list/delete) | `skill_manage` + skill editor | 手动编辑文件 |
 | 生命周期 | Curator（active → stale → archived，pinned） | Curator（同上） | 无 |
 | 双生态 | skills/ + ~/.hermes/skills/ | skills/ + optional-skills/ + hub | CLAUDE.md 单文件 |
 | 与 Memory 集成 | ✅ skill 加载状态持久化 | ✅ | N/A |
@@ -463,7 +484,7 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | Python 版本 | 3.14+ | 3.11+ | N/A (Node.js) |
 | 类型系统 | ✅ 完整类型标注 + `slots=True` + `frozen=True` | ✅ 大规模类型系统 | ✅ TypeScript |
-| 测试策略 | ✅ TDD, 215 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
+| 测试策略 | ✅ TDD, 409 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
 | 测试隔离 | ✅ 子进程 per test file | ✅ 子进程 per test file | N/A |
 | 构建系统 | hatchling | setuptools + uv | npm/esbuild |
 | 依赖管理 | `>=floor,<next_major` 上限 | 同上 + SHA pinning | npm lock |
@@ -480,8 +501,11 @@ system_prompt: "你是一个Python专家。"
 | 🟡 中 | 终端多后端 | local + docker + ssh | Hermes 6 种 | 缺 modal/daytona/singularity |
 | 🟡 中 | Session 搜索 | LIKE 查询 | Hermes FTS5 | LIKE 性能差，不支持 ranking |
 | 🟡 中 | 多 Provider 协议 | 仅 OpenAI 兼容 | Hermes 31 providers | 覆盖 ~90% 端点，但缺 Anthropic/Gemini 原生 |
+| 🟡 中 | 浏览器工具 | 10 个（含 back/scroll/press/console/get_images/vision） | Hermes 10 个 | 已对齐 |
+| 🟡 中 | LSP 代码智能 | 5 语言（py/ts/rs/go/cpp） | OpenCode 完整 LSP | 已对齐（真实 stdio） |
 | 🟢 低 | 完整插件框架 | 3 Protocol | Hermes PluginManager | Protocol 覆盖 80% 场景 |
 | 🟢 低 | Skill hub 远程安装 | 仅本地文件 | Hermes `skills install official/...` | 用户需手动放置 skill 文件 |
+| 🟢 低 | MCP 运行时连接 | `mcp_connect` 工具 | Hermes 内置 MCP client | 已对齐 |
 | ⚪ N/A | Gateway 20+ 平台 | — | Hermes | 产品层，MicroAgent 不做 |
 | ⚪ N/A | Electron Desktop | — | Hermes / Claude Code | 产品层，MicroAgent 不做 |
 | ⚪ N/A | Kanban 多 Agent | — | Hermes | 产品层，MicroAgent 不做 |
@@ -497,4 +521,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。6,199 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~7,000 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
