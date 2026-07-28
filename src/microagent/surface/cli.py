@@ -128,19 +128,33 @@ _HISTORY_FILE = "~/.microagent/cli_history"
 
 
 def _setup_readline() -> None:
-    """Enable line editing, persistent history, and /-command completion."""
+    """Enable line editing, persistent history, and /-command completion.
+
+    Skipped silently on platforms without readline (e.g. Windows).
+    """
     import atexit
     import os
-    import readline
+
+    try:
+        import readline
+    except ImportError:
+        return  # Windows: no readline — history/completion unavailable
 
     hist_path = os.path.expanduser(_HISTORY_FILE)
     os.makedirs(os.path.dirname(hist_path), exist_ok=True)
     try:
         readline.read_history_file(hist_path)
-    except FileNotFoundError:
+    except (FileNotFoundError, PermissionError, OSError):
         pass
     readline.set_history_length(1000)
-    atexit.register(readline.write_history_file, hist_path)
+
+    def _write_history() -> None:
+        try:
+            readline.write_history_file(hist_path)
+        except OSError:
+            pass
+
+    atexit.register(_write_history)
 
     def _completer(text: str, state: int) -> str | None:
         # Only complete when the line is a slash command (starts with /)
