@@ -101,11 +101,12 @@ async def browser_navigate(
 
     try:
         await _ensure_browser()
-        assert _browser is not None
+        browser = _browser
+        assert browser is not None
         state = _get_state()
         if state.page is not None:
             await state.page.close()
-        state.page = await _browser.new_page()
+        state.page = await browser.new_page()
 
         # Inject console capture — intercepts console.* calls into
         # window.__microagent_console so browser_console can read them.
