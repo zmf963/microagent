@@ -15,13 +15,10 @@ import time
 from dataclasses import dataclass, field
 
 from rich.console import Console
-from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
-from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
 from rich.theme import Theme
 
 from ..agent import Agent
@@ -123,6 +120,44 @@ def main():
     asyncio.run(_main())
 
 
+# ---------------------------------------------------------------------------
+# Readline: history + slash-command completion (stdlib, zero deps)
+# ---------------------------------------------------------------------------
+
+_HISTORY_FILE = "~/.microagent/cli_history"
+
+
+def _setup_readline() -> None:
+    """Enable line editing, persistent history, and /-command completion."""
+    import atexit
+    import os
+    import readline
+
+    hist_path = os.path.expanduser(_HISTORY_FILE)
+    os.makedirs(os.path.dirname(hist_path), exist_ok=True)
+    try:
+        readline.read_history_file(hist_path)
+    except FileNotFoundError:
+        pass
+    readline.set_history_length(1000)
+    atexit.register(readline.write_history_file, hist_path)
+
+    def _completer(text: str, state: int) -> str | None:
+        # Only complete when the line is a slash command (starts with /)
+        buf = readline.get_line_buffer()
+        if buf.startswith("/"):
+            options = [f"/{name} " for name in _COMMANDS if name.startswith(text)]
+        else:
+            options = []
+        try:
+            return options[state]
+        except IndexError:
+            return None
+
+    readline.set_completer(_completer)
+    readline.parse_and_bind("tab: complete")
+
+
 async def _main():
     cli_base_url = None
     cli_api_key = None
@@ -186,7 +221,9 @@ async def _main():
 
     console.print(f"[info]MicroAgent v1.0.0[/]  (model={config.llm.model})")
     console.print(f"Session: {session_id}")
-    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Ctrl-D to exit\n")
+    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Tab completes /commands | Ctrl-D to exit\n")
+
+    _setup_readline()
 
     messages: list[Message] = []
     usage_tracker = _UsageTracker()
@@ -306,7 +343,11 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                     console.print()
                 if not text_started:
                     console.print(Markdown(event.content))
-                console.print()
+                # Status line after each turn: tokens + cost
+                if usage_tracker is not None:
+                    console.print(usage_tracker.status_table())
+                else:
+                    console.print()
                 return
 
             elif isinstance(event, TurnFailed):
