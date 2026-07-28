@@ -18,7 +18,7 @@ from __future__ import annotations
 import base64
 import contextvars
 from dataclasses import dataclass
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import anyio
 from pydantic import Field
@@ -26,9 +26,12 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 
+if TYPE_CHECKING:
+    from playwright.async_api import Browser, Page, Playwright
+
 # Module-level browser instances (expensive to create, shared across sessions)
-_browser: object = None
-_playwright: object = None
+_browser: Browser | None = None
+_playwright: Playwright | None = None
 _lock = anyio.Lock()
 
 
@@ -41,7 +44,7 @@ _lock = anyio.Lock()
 class BrowserState:
     """Per-session browser page state."""
 
-    page: object = None  # Playwright Page | None
+    page: Page | None = None
 
 
 _current_state: contextvars.ContextVar[BrowserState | None] = contextvars.ContextVar(
@@ -73,9 +76,11 @@ async def _ensure_browser():
             )
         _playwright = await async_playwright().start()
         _browser = await _playwright.chromium.launch(headless=True)
+    # After the lock, _browser is guaranteed non-None
+    assert _browser is not None
+    return _browser
 
-
-def _require_page() -> object:
+def _require_page() -> Page:
     state = _get_state()
     if state.page is None:
         raise RuntimeError("no page open — call browser_navigate first")
@@ -96,6 +101,7 @@ async def browser_navigate(
 
     try:
         await _ensure_browser()
+        assert _browser is not None
         state = _get_state()
         if state.page is not None:
             await state.page.close()
