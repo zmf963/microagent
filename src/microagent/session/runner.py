@@ -391,11 +391,16 @@ class SessionRunner:
                         )
                         break
 
+            # Run pre_llm_hooks. Cache the hooked system to detect when
+            # hooks produce deterministic output (same input → same output).
+            # Non-deterministic hooks (e.g. timestamp injection) will
+            # naturally invalidate the cache every turn — that's correct.
+            hooked_system = system
             for hook in self.pre_llm_hooks:
-                system = await hook(system)
+                hooked_system = await hook(hooked_system)
 
-            if self._cached_system is None or system != self._cached_system or self.mode != self._cached_mode:
-                self._cached_system = system
+            if self._cached_system is None or hooked_system != self._cached_system or self.mode != self._cached_mode:
+                self._cached_system = hooked_system
                 self._cached_mode = self.mode
                 all_tools = self.registry.to_openai_tools() or None
                 # Filter tools by mode (plan mode blocks write tools)
@@ -403,6 +408,7 @@ class SessionRunner:
                     available = self._get_available_tools()
                     all_tools = [t for t in all_tools if t.get("function", {}).get("name", "") in available] or None
                 self._cached_tools = all_tools
+            system = self._cached_system
             oai_tools = self._cached_tools
 
             content_parts: list[str] = []
