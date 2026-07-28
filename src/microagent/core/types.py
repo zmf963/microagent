@@ -193,4 +193,5 @@ Event = (
     | TurnComplete
     | TurnFailed
     | SteerEvent
+    | Usage
 )

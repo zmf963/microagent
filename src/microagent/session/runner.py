@@ -504,6 +504,7 @@ class SessionRunner:
                 await self.store.append(self.session_id, assistant_msg)
 
             if usage:
+                yield usage
                 try:
                     await self.budget.consume(
                         tokens=usage.input_tokens + usage.output_tokens,
