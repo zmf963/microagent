@@ -1,7 +1,7 @@
-"""CLI: REPL mode + one-shot mode with boxed tool calls and clean text.
+"""CLI: REPL mode + one-shot mode with Rich UI.
 
 Visual hierarchy:
-  ╭─ 🔧 tool_name ─────────────────────────╮  ← cyan box for tool call
+  ╭─ 🔧 tool_name ─────────────────────────╮  ← cyan Panel for tool call
   │  args                                  │
   ╰─ ✓ result summary ────────────────────╯  ← green/red result line
 
@@ -10,12 +10,19 @@ Visual hierarchy:
 
 from __future__ import annotations
 
-import re
-import shutil
 import sys
 import time
-import unicodedata
 from dataclasses import dataclass, field
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+from rich.theme import Theme
 
 from ..agent import Agent
 from ..config import Config
@@ -30,17 +37,31 @@ from ..core.types import (
     Usage,
 )
 
-# ANSI
-GRAY = "\033[90m"
-CYAN = "\033[96m"
-GREEN = "\033[92m"
-RED = "\033[91m"
-BOLD = "\033[1m"
-RST = "\033[0m"
+# ---------------------------------------------------------------------------
+# Theme
+# ---------------------------------------------------------------------------
+
+CLI_THEME = Theme({
+    "info": "cyan",
+    "success": "green",
+    "error": "red",
+    "warning": "yellow",
+    "dim": "grey62",
+    "thinking": "grey70 italic",
+    "tool.title": "bold cyan",
+    "tool.args": "grey62",
+    "tool.result.ok": "green",
+    "tool.result.error": "red",
+    "prompt": "bold",
+    "status.tokens": "grey62",
+    "status.cost": "grey62",
+})
+
+console = Console(theme=CLI_THEME, highlight=False)
 
 
 # ---------------------------------------------------------------------------
-# Usage tracker — local token/cost accumulation (display layer only)
+# Usage tracker
 # ---------------------------------------------------------------------------
 
 
@@ -71,9 +92,16 @@ class _UsageTracker:
             f"Cost: ${self.total_cost:.4f}, Turns: {self.turns}"
         )
 
-    def status_line(self) -> str:
-        """Compact one-line status for the CLI bottom bar."""
-        return f"{GRAY}tokens: {self.total_input + self.total_output} | cost: ${self.total_cost:.4f}{RST}"
+    def status_table(self) -> Table:
+        """Rich Table for the bottom status bar."""
+        t = Table.grid(expand=True)
+        t.add_column(justify="left")
+        t.add_column(justify="right")
+        t.add_row(
+            f"[status.tokens]tokens: {self.total_input + self.total_output}[/]",
+            f"[status.cost]cost: ${self.total_cost:.4f} | turns: {self.turns}[/]",
+        )
+        return t
 
 
 @dataclass
@@ -87,34 +115,6 @@ class ReplState:
     messages: list[Message] = field(default_factory=list)
     usage_tracker: _UsageTracker = field(default_factory=_UsageTracker)
     disabled_skills: set[str] = field(default_factory=set)
-
-
-def _term_width() -> int:
-    return shutil.get_terminal_size().columns
-
-
-def _display_width(s: str) -> int:
-    """Visible display width accounting for ANSI codes and CJK characters.
-
-    ANSI escape sequences are stripped. CJK characters count as 2.
-    Emoji and other wide chars also count as 2.
-    """
-    # Strip ANSI
-    clean = re.sub(r"\033\[[0-9;]*m", "", s)
-    w = 0
-    for ch in clean:
-        ea = unicodedata.east_asian_width(ch)
-        if ea in ("W", "F"):  # Wide / Fullwidth
-            w += 2
-        else:
-            w += 1
-    return w
-
-
-def _pad_to(s: str, target_width: int, fill: str = "─") -> str:
-    """Pad s with fill chars to reach target display width."""
-    current = _display_width(s)
-    return s + fill * max(0, target_width - current)
 
 
 def main():
@@ -160,9 +160,8 @@ async def _main():
         cli_system_prompt=cli_system_prompt,
     )
     if not config.llm.api_key:
-        print("Warning: API key not set.", file=sys.stderr)
+        console.print("[warning]Warning: API key not set.[/]")
 
-    # Default: persist sessions to ~/.microagent/sessions.db
     from pathlib import Path as _Path
 
     from ..core.store import SQLiteStore
@@ -185,9 +184,9 @@ async def _main():
         store.close()
         return
 
-    print(f"{CYAN}{BOLD}MicroAgent v1.0.0{RST}  (model={config.llm.model})")
-    print(f"Session: {session_id}")
-    print("Commands: /new /list /resume /compact /model /history /skill /clear /cost  |  Ctrl-D to exit\n")
+    console.print(f"[info]MicroAgent v1.0.0[/]  (model={config.llm.model})")
+    console.print(f"Session: {session_id}")
+    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Ctrl-D to exit\n")
 
     messages: list[Message] = []
     usage_tracker = _UsageTracker()
@@ -205,14 +204,13 @@ async def _main():
 
     while True:
         try:
-            raw = input(f"{BOLD}>>>{RST} ").strip()
+            raw = Prompt.ask("[prompt]>>>[/prompt]").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nBye!")
+            console.print("\nBye!")
             break
         if not raw:
             continue
 
-        # Handle slash commands
         if raw.startswith("/"):
             cmd, *rest = raw[1:].split(maxsplit=1)
             arg = rest[0] if rest else ""
@@ -222,20 +220,20 @@ async def _main():
                 handler, _desc = handler_entry
                 await handler(repl_state, arg)
             else:
-                print(f"{RED}✗{RST} Unknown command: /{cmd}. Type /help for available commands.")
+                console.print(f"[error]✗[/] Unknown command: /{cmd}. Type /help for available commands.")
 
             continue
 
         messages.append(Message.user(raw))
         await _run_streaming(agent, messages, usage_tracker)
-        print()
+        console.print()
 
     await agent.close()
     store.close()
 
 
 async def _list_sessions(store) -> list[tuple[str, int, str]]:
-    """List sessions with message count and preview — single query via session_summaries."""
+    """List sessions with message count and preview."""
     summaries = await store.session_summaries()
     return [(s["session_id"], s["count"], s["preview"]) for s in summaries]
 
@@ -247,21 +245,12 @@ async def _pick_last_session(store) -> str | None:
 
 
 async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _UsageTracker | None = None) -> None:
+    """Run agent turn with Rich streaming output."""
 
     async def _stream():
         text_started = False
         thinking_started = False
         pending_tool_call: tuple[str, dict] | None = None
-
-        def _box_width() -> int:
-            """Dynamic box width: terminal - 2 margin, capped at 100."""
-            return min(_term_width() - 2, 100)
-
-        def _box_line(prefix: str, suffix: str, fill: str = "─") -> str:
-            """Build a box border line: prefix + fill + suffix, width-matched."""
-            W = _box_width()
-            body = _pad_to(prefix, W - _display_width(suffix), fill)
-            return f"{GRAY}{body}{suffix}{RST}"
 
         async for event in agent.runner.run_turn(messages):
             if isinstance(event, Usage):
@@ -273,55 +262,57 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                     if not thinking_started:
                         thinking_started = True
                         if text_started:
-                            print()
-                        print(f"{GRAY}────── 💭 thinking ──────{RST}")
-                    print(f"{GRAY}{event.text}{RST}", end="", flush=True)
+                            console.print()
+                        console.rule("[thinking]💭 thinking[/]", style="dim")
+                    console.print(f"[thinking]{event.text}[/]", end="", highlight=False)
 
                 else:  # kind == "content"
                     if thinking_started and not text_started:
-                        print(f"\n{GRAY}──────────────────────────{RST}")
+                        console.print()
+                        console.rule(style="dim")
                         thinking_started = False
                     if not text_started:
                         text_started = True
                         if pending_tool_call:
-                            print()
+                            console.print()
                             pending_tool_call = None
-                    print(event.text, end="", flush=True)
+                    console.print(event.text, end="", highlight=False)
 
             elif isinstance(event, ToolCallDelta):
-                title = f"╭─ 🔧 {event.name} "
-                print(f"\n{_box_line(title, '╮')}")
                 args = _short_args(event.arguments)
-                W = _box_width()
-                arg_body = f"│ {GRAY}{args}{RST}"
-                arg_pad = W - _display_width(arg_body) - 1
-                print(f"{GRAY}{arg_body}{' ' * max(0, arg_pad)}│{RST}")
+                panel = Panel(
+                    f"[tool.args]{args}[/]",
+                    title=f"[tool.title]🔧 {event.name}[/]",
+                    border_style="cyan",
+                    padding=(0, 1),
+                )
+                console.print()
+                console.print(panel)
                 pending_tool_call = (event.name, event.arguments)
 
             elif isinstance(event, ToolResultDelta):
                 summary = _summarize(event.content)
-                mark = f"{RED}✗{RST}" if event.is_error else f"{GREEN}✓{RST}"
-                print(_box_line(f"╰─ {mark} {GRAY}{summary}{RST} ", "╯"))
+                mark = "[tool.result.error]✗[/]" if event.is_error else "[tool.result.ok]✓[/]"
+                console.print(f"{mark} [dim]{summary}[/]")
                 pending_tool_call = None
 
             elif isinstance(event, ToolProgressDelta):
-                # Live streaming tool output
                 text = event.text or ""
                 for line in text.splitlines():
-                    print(f" {GRAY}┊{RST} {line}", flush=True)
+                    console.print(f" [dim]┊[/] {line}")
 
             elif isinstance(event, TurnComplete):
                 if pending_tool_call:
-                    print()
+                    console.print()
                 if not text_started:
-                    print(event.content)
-                print()
+                    console.print(Markdown(event.content))
+                console.print()
                 return
 
             elif isinstance(event, TurnFailed):
                 if pending_tool_call:
-                    print()
-                print(f"{RED}✗{RST} {event.reason}")
+                    console.print()
+                console.print(f"[error]✗[/] {event.reason}")
                 return
 
     await _stream()
@@ -347,21 +338,21 @@ def _summarize(content: str) -> str:
 
 
 def _print_help():
-    print("Usage: microagent [options] [prompt]")
-    print()
-    print("Options:")
-    print("  --base-url URL        LLM API base URL")
-    print("  --api-key KEY         API key")
-    print("  --model MODEL         Model name")
-    print("  --system-prompt TEXT  System prompt")
-    print("  --help, -h            Show this help")
-    print()
-    print("Config file: ~/.microagent/config.yaml")
-    print("Env vars: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL")
+    console.print("Usage: microagent [options] [prompt]")
+    console.print()
+    console.print("Options:")
+    console.print("  --base-url URL        LLM API base URL")
+    console.print("  --api-key KEY         API key")
+    console.print("  --model MODEL         Model name")
+    console.print("  --system-prompt TEXT  System prompt")
+    console.print("  --help, -h            Show this help")
+    console.print()
+    console.print("Config file: ~/.microagent/config.yaml")
+    console.print("Env vars: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL")
 
 
 # ---------------------------------------------------------------------------
-# Slash command handlers — each takes (repl_state, arg) and is async
+# Slash command handlers
 # ---------------------------------------------------------------------------
 
 
@@ -381,18 +372,23 @@ async def _cmd_new(state: ReplState, arg: str) -> None:
         session_id=state.session_id,
         skills_path=config.skills_path,
     )
-    print(f"{GREEN}✓{RST} New session: {state.session_id}")
+    console.print(f"[success]✓[/] New session: {state.session_id}")
 
 
 async def _cmd_list(state: ReplState, arg: str) -> None:
     sessions = await _list_sessions(state.store)
     if sessions:
-        print(f"{GRAY}Sessions:{RST}")
+        table = Table(title="Sessions", show_header=True, header_style="bold cyan")
+        table.add_column("", width=2)
+        table.add_column("Session ID", style="dim")
+        table.add_column("Msgs", justify="right")
+        table.add_column("Preview", overflow="fold")
         for sid, count, preview in sessions[:10]:
-            mark = f"{GREEN}*{RST}" if sid == state.session_id else " "
-            print(f"  {mark} {GRAY}{sid}{RST} ({count} msgs) {preview}")
+            mark = "[success]*[/]" if sid == state.session_id else " "
+            table.add_row(mark, sid, str(count), preview)
+        console.print(table)
     else:
-        print(f"{GRAY}(no saved sessions){RST}")
+        console.print("[dim](no saved sessions)[/]")
 
 
 async def _cmd_resume(state: ReplState, arg: str) -> None:
@@ -413,17 +409,17 @@ async def _cmd_resume(state: ReplState, arg: str) -> None:
                 session_id=target,
                 skills_path=config.skills_path,
             )
-            print(f"{GREEN}✓{RST} Resumed: {target} ({len(history)} messages)")
+            console.print(f"[success]✓[/] Resumed: {target} ({len(history)} messages)")
         else:
-            print(f"{RED}✗{RST} Session not found: {target}")
+            console.print(f"[error]✗[/] Session not found: {target}")
     else:
-        print(f"{RED}✗{RST} No sessions to resume. Use /list to see sessions.")
+        console.print(f"[error]✗[/] No sessions to resume. Use /list to see sessions.")
 
 
 async def _cmd_compact(state: ReplState, arg: str) -> None:
     messages = state.messages
     if len(messages) < 5:
-        print(f"{GRAY}(not enough messages to compact){RST}")
+        console.print("[dim](not enough messages to compact)[/]")
         return
 
     from ..session.compress import (
@@ -457,8 +453,8 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
     state.agent.runner._compaction_state = state_obj
     after_count = len(messages)
     after_tokens = count_tokens(tuple(messages))
-    print(
-        f"{GREEN}✓{RST} Compacted: {before_count} → {after_count} messages, "
+    console.print(
+        f"[success]✓[/] Compacted: {before_count} → {after_count} messages, "
         f"{before_tokens} → {after_tokens} tokens"
     )
 
@@ -466,7 +462,7 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
 async def _cmd_model(state: ReplState, arg: str) -> None:
     config = state.config
     if not arg:
-        print(f"Current model: {config.llm.model}")
+        console.print(f"Current model: {config.llm.model}")
         return
     from ..llm.client import LLMConfig, OpenAIChatClient
 
@@ -478,25 +474,28 @@ async def _cmd_model(state: ReplState, arg: str) -> None:
         service_tier=config.llm.service_tier,
         auxiliary_model=config.llm.auxiliary_model,
     )
-    # Close old LLM client before replacing
     old_llm = state.agent.runner.llm
     if hasattr(old_llm, "close"):
         await old_llm.close()
     state.agent.runner.llm = OpenAIChatClient(new_llm_config)
-    print(f"{GREEN}✓{RST} Model switched to: {arg}")
+    console.print(f"[success]✓[/] Model switched to: {arg}")
 
 
 async def _cmd_history(state: ReplState, arg: str) -> None:
     messages = state.messages
     if not messages:
-        print(f"{GRAY}(no messages in this session){RST}")
+        console.print("[dim](no messages in this session)[/]")
         return
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Role", width=10)
+    table.add_column("Content", overflow="fold")
     for i, msg in enumerate(messages):
-        role = msg.role
         preview = msg.content[:80].replace("\n", " ")
         if len(msg.content) > 80:
             preview += "..."
-        print(f"  {GRAY}[{i}]{RST} {role}: {preview}")
+        table.add_row(str(i), msg.role, preview)
+    console.print(table)
 
 
 async def _cmd_skill(state: ReplState, arg: str) -> None:
@@ -510,66 +509,73 @@ async def _cmd_skill(state: ReplState, arg: str) -> None:
         agent = state.agent
         loader = agent.runner.skill_loader
         if loader is None:
-            print(f"{GRAY}(no skill loader configured){RST}")
+            console.print("[dim](no skill loader configured)[/]")
             return
         try:
             skills = await loader.load()
         except Exception:
-            print(f"{GRAY}(failed to load skills){RST}")
+            console.print("[dim](failed to load skills)[/]")
             return
         if not skills:
-            print(f"{GRAY}(no skills found){RST}")
+            console.print("[dim](no skills found)[/]")
             return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Status", width=10)
+        table.add_column("Skill", style="dim")
+        table.add_column("Description", overflow="fold")
         for s in skills:
-            status = f"{RED}disabled{RST}" if s.name in disabled else f"{GREEN}enabled{RST}"
+            status = "[error]disabled[/]" if s.name in disabled else "[success]enabled[/]"
             desc = s.description[:60] if s.description else ""
-            print(f"  {status} {GRAY}{s.namespace}:{s.name}{RST} — {desc}")
+            table.add_row(status, f"{s.namespace}:{s.name}", desc)
+        console.print(table)
 
     elif subcmd == "unload":
         if not skill_name:
-            print(f"{RED}✗{RST} Usage: /skill unload <name>")
+            console.print("[error]✗[/] Usage: /skill unload <name>")
             return
         disabled.add(skill_name)
-        print(f"{GREEN}✓{RST} Skill '{skill_name}' disabled (will be filtered from matches)")
+        console.print(f"[success]✓[/] Skill '{skill_name}' disabled (will be filtered from matches)")
 
     elif subcmd == "load":
         if not skill_name:
-            print(f"{RED}✗{RST} Usage: /skill load <name>")
+            console.print("[error]✗[/] Usage: /skill load <name>")
             return
         if skill_name in disabled:
             disabled.discard(skill_name)
-            print(f"{GREEN}✓{RST} Skill '{skill_name}' re-enabled")
+            console.print(f"[success]✓[/] Skill '{skill_name}' re-enabled")
         else:
-            print(f"{GRAY}Skill '{skill_name}' is already enabled{RST}")
+            console.print(f"[dim]Skill '{skill_name}' is already enabled[/]")
 
     else:
-        print(f"{RED}✗{RST} Unknown subcommand: {subcmd}. Use: list, load, unload")
+        console.print(f"[error]✗[/] Unknown subcommand: {subcmd}. Use: list, load, unload")
 
 
 async def _cmd_clear(state: ReplState, arg: str) -> None:
-    import os
-
-    os.system("clear" if os.name == "posix" else "cls")
+    console.clear()
 
 
 async def _cmd_cost(state: ReplState, arg: str) -> None:
     tracker = state.usage_tracker
-    print(tracker.summary())
+    console.print(tracker.summary())
 
 
 async def _cmd_help(state: ReplState, arg: str) -> None:
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Command", style="dim")
+    table.add_column("Description")
     for name, (_handler, desc) in sorted(_COMMANDS.items()):
-        print(f"  {GRAY}/{name}{RST}  {desc}")
+        table.add_row(f"/{name}", desc)
+    console.print(table)
 
 
 async def _cmd_plan(state: ReplState, arg: str) -> None:
     state.agent.runner.mode = "plan"
-    print(f"{GREEN}✓{RST} Switched to plan mode (read-only tools)")
+    console.print("[success]✓[/] Switched to plan mode (read-only tools)")
 
 
 async def _cmd_build(state: ReplState, arg: str) -> None:
     state.agent.runner.mode = "build"
-    print(f"{GREEN}✓{RST} Switched to build mode (all tools enabled)")
+    console.print("[success]✓[/] Switched to build mode (all tools enabled)")
 
 
 # Command registry: name → (handler, description)
