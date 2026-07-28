@@ -215,6 +215,14 @@ class SessionRunner:
             return all_names - self._PLAN_BLOCKED_TOOLS
         return all_names
 
+    def interrupt(self) -> None:
+        """Request interrupt of the current turn.
+
+        Sets a flag that is checked between LLM stream events and tool
+        executions. The runner will yield TurnFailed and return.
+        """
+        self._interrupt_requested = True
+
     async def run_turn(
         self,
         messages: list[Message],
@@ -227,8 +235,13 @@ class SessionRunner:
                 await self.store.append(self.session_id, last)
 
         self._overflow_retried = False
+        self._interrupt_requested = False
 
         while not self.budget.exhausted:
+            if self._interrupt_requested:
+                yield TurnFailed("interrupted by user")
+                return
+
             try:
                 await self.budget.consume(iterations=1)
             except BudgetExceeded as e:
@@ -421,6 +434,10 @@ class SessionRunner:
                 messages=tuple(send_messages),
                 tools=oai_tools,
             ):
+                if self._interrupt_requested:
+                    yield TurnFailed("interrupted by user")
+                    return
+
                 if isinstance(event, TextDelta):
                     content_parts.append(event.text)
                     yield event

@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.theme import Theme
 
@@ -96,17 +97,6 @@ class _UsageTracker:
             f"[status.cost]cost: ${self.total_cost:.4f}[/]  "
             f"[dim]turns: {self.turns}[/]"
         )
-
-    def status_table(self) -> Table:
-        """Rich Table for the bottom status bar."""
-        t = Table.grid(expand=True)
-        t.add_column(justify="left")
-        t.add_column(justify="right")
-        t.add_row(
-            f"[status.tokens]tokens: {self.total_input + self.total_output}[/]",
-            f"[status.cost]cost: ${self.total_cost:.4f} | turns: {self.turns}[/]",
-        )
-        return t
 
 
 @dataclass
@@ -236,7 +226,8 @@ async def _main():
 
     if positional:
         prompt = " ".join(positional)
-        await _run_streaming(agent, [Message.user(prompt)])
+        tracker = _UsageTracker()
+        await _run_streaming(agent, [Message.user(prompt)], tracker)
         await agent.close()
         store.close()
         return
@@ -263,7 +254,8 @@ async def _main():
 
     while True:
         try:
-            raw = Prompt.ask("[prompt]>>>[/prompt]").strip()
+            # Multi-line: paste code blocks with triple backticks, then Enter on empty line
+            raw = _read_multiline()
         except (EOFError, KeyboardInterrupt):
             console.print("\nBye!")
             break
@@ -297,6 +289,33 @@ async def _list_sessions(store) -> list[tuple[str, int, str]]:
     return [(s["session_id"], s["count"], s["preview"]) for s in summaries]
 
 
+def _read_multiline() -> str:
+    """Read user input with multi-line support.
+
+    - Single line: normal input
+    - Multi-line: paste text containing newlines, then press Enter on empty line
+    - Code blocks: paste ```...``` blocks directly
+    """
+    first = Prompt.ask("[prompt]>>>[/prompt]").strip()
+    if not first:
+        return ""
+
+    # If first line ends with ``` or contains newline continuation, read more
+    if first.endswith("```") or first.endswith("\\"):
+        lines = [first]
+        while True:
+            try:
+                line = Prompt.ask("[dim]...[/dim]").rstrip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not line:
+                break
+            lines.append(line)
+        return "\n".join(lines)
+
+    return first
+
+
 async def _pick_last_session(store) -> str | None:
     """Pick the most recent session."""
     sessions = await store.list_sessions()
@@ -323,7 +342,10 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
     _interrupt = asyncio.Event()
 
     async def _watch_esc() -> None:
-        """Watch for double-ESC keypress to interrupt streaming."""
+        """Watch for double-ESC keypress to interrupt streaming.
+
+        Only active while streaming (not during Prompt.ask input).
+        """
         nonlocal _esc_count
         if not sys.stdin.isatty() or not _HAS_TERMIOS:
             return
@@ -346,6 +368,7 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
         except (OSError, termios.error):
             pass
         finally:
+            # Restore cooked mode so Prompt.ask works normally
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     # Start ESC watcher
@@ -356,8 +379,13 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
         thinking_started = False
         pending_tool_call: tuple[str, dict] | None = None
 
+        # Bridge CLI interrupt → runner interrupt
+        if _interrupt.is_set():
+            agent.runner.interrupt()
+
         async for event in agent.runner.run_turn(messages):
             if _interrupt.is_set():
+                agent.runner.interrupt()
                 console.print("\n[warning]⚠ Interrupted by user (Esc×2)[/]")
                 return
 
@@ -413,7 +441,26 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                 if pending_tool_call:
                     console.print()
                 if not text_started:
-                    console.print(Markdown(event.content))
+                    # Render with syntax highlighting for code blocks
+                    content = event.content
+                    if "```" in content:
+                        # Split by code blocks and highlight each
+                        parts = content.split("```")
+                        for i, part in enumerate(parts):
+                            if i % 2 == 0:
+                                # Plain text
+                                if part.strip():
+                                    console.print(Markdown(part))
+                            else:
+                                # Code block: first line is language, rest is code
+                                lines = part.split("\n")
+                                if lines:
+                                    lang = lines[0].strip() or "text"
+                                    code = "\n".join(lines[1:])
+                                    if code.strip():
+                                        console.print(Syntax(code, lang, theme="monokai", line_numbers=True))
+                    else:
+                        console.print(Markdown(content))
                 # Status on its own line, separated from LLM output
                 if usage_tracker is not None:
                     console.print()  # blank line separator
@@ -429,7 +476,12 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                 return
 
     try:
-        await _stream()
+        _status = console.status("[dim]⠋ Thinking…[/]", spinner="dots")
+        _status.start()
+        try:
+            await _stream()
+        finally:
+            _status.stop()
     finally:
         _interrupt.set()
         if _esc_task and not _esc_task.done():
