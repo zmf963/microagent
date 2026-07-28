@@ -18,6 +18,7 @@ from .core.store import Store
 from .core.tool import ToolRegistry, _default_builtins
 from .core.types import Message, TurnComplete, TurnFailed
 from .llm.client import LLMConfig, OpenAIChatClient
+from .llm.templates import DEFAULT_TEMPLATE
 from .session.budget import Budget
 from .session.runner import SessionRunner
 from .skill.loader import ClaudeSkillLoader
@@ -36,7 +37,7 @@ class Agent:
         cls,
         llm_config: LLMConfig,
         *,
-        system_prompt: str = "You are a helpful assistant.",
+        system_prompt: str = DEFAULT_TEMPLATE,
         max_iterations: int = 25,
         tools: list[Any] | None = None,
         store: Store | None = None,

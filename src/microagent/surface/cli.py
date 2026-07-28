@@ -89,6 +89,14 @@ class _UsageTracker:
             f"Cost: ${self.total_cost:.4f}, Turns: {self.turns}"
         )
 
+    def status_line(self) -> str:
+        """One-line status string, printed on its own line after LLM output."""
+        return (
+            f"[status.tokens]tokens: {self.total_input + self.total_output}[/]  "
+            f"[status.cost]cost: ${self.total_cost:.4f}[/]  "
+            f"[dim]turns: {self.turns}[/]"
+        )
+
     def status_table(self) -> Table:
         """Rich Table for the bottom status bar."""
         t = Table.grid(expand=True)
@@ -235,7 +243,7 @@ async def _main():
 
     console.print(f"[info]MicroAgent v1.0.0[/]  (model={config.llm.model})")
     console.print(f"Session: {session_id}")
-    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Tab completes /commands | Ctrl-D to exit\n")
+    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Tab completes /commands | Esc×2 to interrupt | Ctrl-D to exit\n")
 
     _setup_readline()
 
@@ -296,7 +304,52 @@ async def _pick_last_session(store) -> str | None:
 
 
 async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _UsageTracker | None = None) -> None:
-    """Run agent turn with Rich streaming output."""
+    """Run agent turn with Rich streaming output and double-ESC interrupt."""
+
+    import asyncio
+    import sys
+
+    # termios/tty are Unix-only; skip ESC watcher on Windows
+    try:
+        import termios
+        import tty
+        _HAS_TERMIOS = True
+    except ImportError:
+        _HAS_TERMIOS = False
+
+    # Double-ESC state
+    _esc_count = 0
+    _esc_task: asyncio.Task | None = None
+    _interrupt = asyncio.Event()
+
+    async def _watch_esc() -> None:
+        """Watch for double-ESC keypress to interrupt streaming."""
+        nonlocal _esc_count
+        if not sys.stdin.isatty() or not _HAS_TERMIOS:
+            return
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while not _interrupt.is_set():
+                ch = await asyncio.to_thread(sys.stdin.read, 1)
+                if ch == "\x1b":  # ESC
+                    _esc_count += 1
+                    if _esc_count >= 2:
+                        _interrupt.set()
+                        return
+                    # Reset after 500ms if no second ESC
+                    await asyncio.sleep(0.5)
+                    _esc_count = 0
+                else:
+                    _esc_count = 0
+        except (OSError, termios.error):
+            pass
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    # Start ESC watcher
+    _esc_task = asyncio.create_task(_watch_esc())
 
     async def _stream():
         text_started = False
@@ -304,6 +357,10 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
         pending_tool_call: tuple[str, dict] | None = None
 
         async for event in agent.runner.run_turn(messages):
+            if _interrupt.is_set():
+                console.print("\n[warning]⚠ Interrupted by user (Esc×2)[/]")
+                return
+
             if isinstance(event, Usage):
                 if usage_tracker is not None:
                     usage_tracker.record(event)
@@ -357,9 +414,10 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                     console.print()
                 if not text_started:
                     console.print(Markdown(event.content))
-                # Status line after each turn: tokens + cost
+                # Status on its own line, separated from LLM output
                 if usage_tracker is not None:
-                    console.print(usage_tracker.status_table())
+                    console.print()  # blank line separator
+                    console.print(usage_tracker.status_line())
                 else:
                     console.print()
                 return
@@ -370,7 +428,16 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                 console.print(f"[error]✗[/] {event.reason}")
                 return
 
-    await _stream()
+    try:
+        await _stream()
+    finally:
+        _interrupt.set()
+        if _esc_task and not _esc_task.done():
+            _esc_task.cancel()
+            try:
+                await _esc_task
+            except asyncio.CancelledError:
+                pass
 
 
 def _short_args(args: dict) -> str:

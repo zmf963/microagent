@@ -189,8 +189,9 @@ class SessionRunner:
         "   and a recommended plan of action.\n"
         "4. Do NOT use write_file, edit_file, execute_code, or process. Use the\n"
         "   plan tool to document your multi-step action plan.\n"
-        "5. When you're done analyzing, tell the user to switch to build mode\n"
-        "   (/build) to execute your plan."
+        "5. When you're done analyzing, end your final message with the exact\n"
+        "   text '/build' on its own line so the user can switch to build mode\n"
+        "   to execute your plan."
     )
 
     def _process_tool_output(self, tool_call_id: str, result) -> Any:
@@ -284,13 +285,13 @@ class SessionRunner:
 
             system = self.system_prompt
 
-            # Use model-specific template if available
-            from ..llm.templates import get_model_template
+            # Compose user prompt + model-specific template (both preserved)
+            from ..llm.templates import build_system_prompt
 
-            if system == "You are a helpful assistant." or not system:
-                system = get_model_template(self.llm.config.model)
+            system = build_system_prompt(self.llm.config.model, system)
 
-            # Override with plan-mode prompt when appropriate
+            # Override with plan-mode prompt when appropriate.
+            # Skill catalog is appended AFTER this so plan mode still sees it.
             if self.mode == "plan":
                 system = self._PLAN_SYSTEM_PROMPT
 

@@ -6,6 +6,8 @@ Other models use the default template.
 
 from __future__ import annotations
 
+# Single source of truth for the generic default prompt.
+# config.py and agent.py import this instead of hardcoding their own.
 DEFAULT_TEMPLATE = "You are a helpful assistant."
 
 MODEL_TEMPLATES: dict[str, str] = {
@@ -31,12 +33,37 @@ MODEL_TEMPLATES: dict[str, str] = {
 
 
 def get_model_template(model: str) -> str:
-    """Get the system prompt template for a model by prefix match.
+    """Get the system prompt template for a model.
 
+    Longest-prefix match wins so "deepseek-v4" doesn't shadow a more
+    specific future entry like "deepseek-v4-vision".
     Falls back to DEFAULT_TEMPLATE for unknown models.
     """
     model_lower = model.lower()
+    best: tuple[int, str] = (0, DEFAULT_TEMPLATE)
     for prefix, template in MODEL_TEMPLATES.items():
-        if model_lower.startswith(prefix):
-            return template
-    return DEFAULT_TEMPLATE
+        if model_lower.startswith(prefix) and len(prefix) > best[0]:
+            best = (len(prefix), template)
+    return best[1]
+
+
+def build_system_prompt(model: str, user_prompt: str = "") -> str:
+    """Compose the final system prompt: user custom + model template.
+
+    User's custom prompt always comes first (higher priority instructions).
+    Model template is appended as supplementary capability guidance —
+    it is NOT discarded just because the user set a custom prompt.
+    """
+    user_prompt = (user_prompt or "").strip()
+    model_tmpl = get_model_template(model)
+
+    if not user_prompt or user_prompt == DEFAULT_TEMPLATE:
+        # No meaningful user prompt — model template alone
+        return model_tmpl
+
+    if model_tmpl == DEFAULT_TEMPLATE:
+        # Unknown model — user prompt alone, no generic filler
+        return user_prompt
+
+    # Both: user instructions take precedence, model guidance appended
+    return f"{user_prompt}\n\n{model_tmpl}"

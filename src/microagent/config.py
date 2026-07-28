@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .llm.client import LLMConfig
+from .llm.templates import DEFAULT_TEMPLATE
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +23,7 @@ class Config:
     """Resolved configuration for an Agent."""
 
     llm: LLMConfig
-    system_prompt: str = "You are a helpful assistant."
+    system_prompt: str = DEFAULT_TEMPLATE
     skills_path: str | None = None  # colon-separated list of skill directories
     toolset: str = "core,extended"  # comma-separated toolset layers
 
