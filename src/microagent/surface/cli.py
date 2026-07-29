@@ -93,9 +93,11 @@ class _UsageTracker:
     def status_line(self) -> str:
         """One-line status string, printed on its own line after LLM output."""
         return (
-            f"[status.tokens]tokens: {self.total_input + self.total_output}[/]  "
-            f"[status.cost]cost: ${self.total_cost:.4f}[/]  "
-            f"[dim]turns: {self.turns}[/]"
+            "[dim]📊[/] "
+            f"[status.tokens]tokens: {self.total_input + self.total_output}[/status.tokens]  "
+            "[dim]💰[/] "
+            f"[status.cost]cost: ${self.total_cost:.4f}[/status.cost]  "
+            f"[dim]🔄 turns: {self.turns}[/dim]"
         )
 
 
@@ -374,16 +376,27 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
     # Start ESC watcher
     _esc_task = asyncio.create_task(_watch_esc())
 
+    _status = console.status("[dim]⠋ Thinking…[/]", spinner="dots")
+    _status.start()
+
     async def _stream():
+        nonlocal _status
         text_started = False
         thinking_started = False
         pending_tool_call: tuple[str, dict] | None = None
+        text_buffer: list[str] = []  # collect streaming text for Markdown render
 
         # Bridge CLI interrupt → runner interrupt
         if _interrupt.is_set():
             agent.runner.interrupt()
 
         async for event in agent.runner.run_turn(messages):
+            # Stop spinner on first real output
+            if not text_started and not thinking_started and pending_tool_call is None:
+                if _status:
+                    _status.stop()
+                    _status = None
+
             if _interrupt.is_set():
                 agent.runner.interrupt()
                 console.print("\n[warning]⚠ Interrupted by user (Esc×2)[/]")
@@ -412,15 +425,19 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                         if pending_tool_call:
                             console.print()
                             pending_tool_call = None
+                    # Stream raw text; collect for final Markdown render
                     console.print(event.text, end="", highlight=False)
+                    text_buffer.append(event.text)
 
             elif isinstance(event, ToolCallDelta):
                 args = _short_args(event.arguments)
                 panel = Panel(
                     f"[tool.args]{args}[/]",
                     title=f"[tool.title]🔧 {event.name}[/]",
+                    title_align="left",
                     border_style="cyan",
                     padding=(0, 1),
+                    expand=False,
                 )
                 console.print()
                 console.print(panel)
@@ -429,7 +446,13 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
             elif isinstance(event, ToolResultDelta):
                 summary = _summarize(event.content)
                 mark = "[tool.result.error]✗[/]" if event.is_error else "[tool.result.ok]✓[/]"
-                console.print(f"{mark} [dim]{summary}[/]")
+                result_panel = Panel(
+                    f"{mark} [dim]{summary}[/]",
+                    border_style="green" if not event.is_error else "red",
+                    padding=(0, 1),
+                    expand=False,
+                )
+                console.print(result_panel)
                 pending_tool_call = None
 
             elif isinstance(event, ToolProgressDelta):
@@ -441,26 +464,8 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                 if pending_tool_call:
                     console.print()
                 if not text_started:
-                    # Render with syntax highlighting for code blocks
-                    content = event.content
-                    if "```" in content:
-                        # Split by code blocks and highlight each
-                        parts = content.split("```")
-                        for i, part in enumerate(parts):
-                            if i % 2 == 0:
-                                # Plain text
-                                if part.strip():
-                                    console.print(Markdown(part))
-                            else:
-                                # Code block: first line is language, rest is code
-                                lines = part.split("\n")
-                                if lines:
-                                    lang = lines[0].strip() or "text"
-                                    code = "\n".join(lines[1:])
-                                    if code.strip():
-                                        console.print(Syntax(code, lang, theme="monokai", line_numbers=True))
-                    else:
-                        console.print(Markdown(content))
+                    # Non-streaming: render with syntax highlighting for code blocks
+                    _render_content(event.content)
                 # Status on its own line, separated from LLM output
                 if usage_tracker is not None:
                     console.print()  # blank line separator
@@ -476,13 +481,10 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
                 return
 
     try:
-        _status = console.status("[dim]⠋ Thinking…[/]", spinner="dots")
-        _status.start()
-        try:
-            await _stream()
-        finally:
-            _status.stop()
+        await _stream()
     finally:
+        if _status:
+            _status.stop()
         _interrupt.set()
         if _esc_task and not _esc_task.done():
             _esc_task.cancel()
@@ -509,6 +511,27 @@ def _summarize(content: str) -> str:
     if len(clean) > 70:
         clean = clean[:67] + "..."
     return clean
+
+
+def _render_content(content: str) -> None:
+    """Render LLM content with Markdown + Syntax highlighting for code blocks."""
+    if "```" in content:
+        parts = content.split("```")
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                # Plain text / markdown
+                if part.strip():
+                    console.print(Markdown(part))
+            else:
+                # Code block: first line is language, rest is code
+                lines = part.split("\n")
+                if lines:
+                    lang = lines[0].strip() or "text"
+                    code = "\n".join(lines[1:])
+                    if code.strip():
+                        console.print(Syntax(code, lang, theme="monokai", line_numbers=True))
+    else:
+        console.print(Markdown(content))
 
 
 def _print_help():
