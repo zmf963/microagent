@@ -10,6 +10,7 @@ Visual hierarchy:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -112,12 +113,40 @@ class ReplState:
     messages: list[Message] = field(default_factory=list)
     usage_tracker: _UsageTracker = field(default_factory=_UsageTracker)
     disabled_skills: set[str] = field(default_factory=set)
+    show_thinking: bool = False
 
 
 def main():
     import asyncio
 
     asyncio.run(_main())
+
+
+def _resolve_show_thinking(cli_flag: bool | None) -> bool:
+    """Resolve whether to display reasoning/thinking deltas.
+
+    Priority: CLI flag > MICROAGENT_SHOW_THINKING env > config file
+    ``display.show_thinking`` > default (False). Display-only concern, kept in
+    the surface layer so the core ``Config``/Agent stay unaware of it.
+    """
+    if cli_flag is not None:
+        return cli_flag
+    env_val = os.environ.get("MICROAGENT_SHOW_THINKING")
+    if env_val is not None:
+        return env_val.strip().lower() in {"1", "true", "yes", "on"}
+    # Config file: ~/.microagent/config.yaml → display.show_thinking
+    try:
+        path = Config._config_path()
+        if path.exists():
+            import yaml
+
+            data = yaml.safe_load(path.read_text()) or {}
+            display = data.get("display", {}) if isinstance(data, dict) else {}
+            if isinstance(display, dict):
+                return bool(display.get("show_thinking", False))
+    except Exception:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +206,7 @@ async def _main():
     cli_api_key = None
     cli_model = None
     cli_system_prompt = None
+    cli_show_thinking: bool | None = None
     positional: list[str] = []
 
     args = sys.argv[1:]
@@ -195,6 +225,12 @@ async def _main():
         elif arg == "--system-prompt" and i + 1 < len(args):
             cli_system_prompt = args[i + 1]
             i += 2
+        elif arg == "--show-thinking":
+            cli_show_thinking = True
+            i += 1
+        elif arg == "--no-show-thinking":
+            cli_show_thinking = False
+            i += 1
         elif arg in ("--help", "-h"):
             _print_help()
             return
@@ -210,6 +246,8 @@ async def _main():
     )
     if not config.llm.api_key:
         console.print("[warning]Warning: API key not set.[/]")
+
+    _show_thinking = _resolve_show_thinking(cli_show_thinking)
 
     from pathlib import Path as _Path
 
@@ -229,14 +267,16 @@ async def _main():
     if positional:
         prompt = " ".join(positional)
         tracker = _UsageTracker()
-        await _run_streaming(agent, [Message.user(prompt)], tracker)
+        await _run_streaming(
+            agent, [Message.user(prompt)], tracker, show_thinking=_show_thinking
+        )
         await agent.close()
         store.close()
         return
 
     console.print(f"[info]MicroAgent v1.0.0[/]  (model={config.llm.model})")
     console.print(f"Session: {session_id}")
-    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build | Tab completes /commands | Esc×2 to interrupt | Ctrl-D to exit\n")
+    console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build /thinking | Tab completes /commands | Esc×2 to interrupt | Ctrl-D to exit\n")
 
     _setup_readline()
 
@@ -252,6 +292,7 @@ async def _main():
         messages=messages,
         usage_tracker=usage_tracker,
         disabled_skills=disabled_skills,
+        show_thinking=_show_thinking,
     )
 
     while True:
@@ -278,7 +319,7 @@ async def _main():
             continue
 
         messages.append(Message.user(raw))
-        await _run_streaming(agent, messages, usage_tracker)
+        await _run_streaming(agent, messages, usage_tracker, show_thinking=repl_state.show_thinking)
         console.print()
 
     await agent.close()
@@ -324,13 +365,29 @@ async def _pick_last_session(store) -> str | None:
     return sessions[0] if sessions else None
 
 
-async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _UsageTracker | None = None) -> None:
-    """Run agent turn with Rich streaming output and double-ESC interrupt."""
+async def _run_streaming(
+    agent: Agent,
+    messages: list[Message],
+    usage_tracker: _UsageTracker | None = None,
+    *,
+    show_thinking: bool = False,
+) -> None:
+    """Run agent turn — OpenCode style: spinner + final Markdown render.
 
+    Flow:
+      1. spinner "Thinking…" while waiting
+      2. tool call → cyan Panel, spinner restarts "Running…"
+      3. tool result → green/red Panel
+      4. LLM text collected silently (no raw stream print)
+      5. TurnComplete → spinner stops, final text rendered as Markdown+Syntax
+      6. status line (📊 tokens 💰 cost 🔄 turns)
+
+    When ``show_thinking`` is True, reasoning deltas are printed inline
+    under a dim "thinking" rule.
+    """
     import asyncio
     import sys
 
-    # termios/tty are Unix-only; skip ESC watcher on Windows
     try:
         import termios
         import tty
@@ -338,31 +395,24 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
     except ImportError:
         _HAS_TERMIOS = False
 
-    # Double-ESC state
     _esc_count = 0
-    _esc_task: asyncio.Task | None = None
     _interrupt = asyncio.Event()
 
     async def _watch_esc() -> None:
-        """Watch for double-ESC keypress to interrupt streaming.
-
-        Only active while streaming (not during Prompt.ask input).
-        """
         nonlocal _esc_count
         if not sys.stdin.isatty() or not _HAS_TERMIOS:
             return
         fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
+        old = termios.tcgetattr(fd)
         try:
             tty.setraw(fd)
             while not _interrupt.is_set():
                 ch = await asyncio.to_thread(sys.stdin.read, 1)
-                if ch == "\x1b":  # ESC
+                if ch == "\x1b":
                     _esc_count += 1
                     if _esc_count >= 2:
                         _interrupt.set()
                         return
-                    # Reset after 500ms if no second ESC
                     await asyncio.sleep(0.5)
                     _esc_count = 0
                 else:
@@ -370,33 +420,19 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
         except (OSError, termios.error):
             pass
         finally:
-            # Restore cooked mode so Prompt.ask works normally
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-    # Start ESC watcher
     _esc_task = asyncio.create_task(_watch_esc())
-
     _status = console.status("[dim]⠋ Thinking…[/]", spinner="dots")
     _status.start()
 
     async def _stream():
         nonlocal _status
-        text_started = False
+        text_buffer: list[str] = []
+        pending_tool: tuple[str, dict] | None = None
         thinking_started = False
-        pending_tool_call: tuple[str, dict] | None = None
-        text_buffer: list[str] = []  # collect streaming text for Markdown render
-
-        # Bridge CLI interrupt → runner interrupt
-        if _interrupt.is_set():
-            agent.runner.interrupt()
 
         async for event in agent.runner.run_turn(messages):
-            # Stop spinner on first real output
-            if not text_started and not thinking_started and pending_tool_call is None:
-                if _status:
-                    _status.stop()
-                    _status = None
-
             if _interrupt.is_set():
                 agent.runner.interrupt()
                 console.print("\n[warning]⚠ Interrupted by user (Esc×2)[/]")
@@ -408,75 +444,80 @@ async def _run_streaming(agent: Agent, messages: list[Message], usage_tracker: _
 
             elif isinstance(event, TextDelta):
                 if event.kind == "thinking":
-                    if not thinking_started:
-                        thinking_started = True
-                        if text_started:
-                            console.print()
-                        console.rule("[thinking]💭 thinking[/]", style="dim")
-                    console.print(f"[thinking]{event.text}[/]", end="", highlight=False)
-
-                else:  # kind == "content"
-                    if thinking_started and not text_started:
-                        console.print()
-                        console.rule(style="dim")
-                        thinking_started = False
-                    if not text_started:
-                        text_started = True
-                        if pending_tool_call:
-                            console.print()
-                            pending_tool_call = None
-                    # Stream raw text; collect for final Markdown render
-                    console.print(event.text, end="", highlight=False)
+                    if show_thinking:
+                        if _status:
+                            _status.stop()
+                            _status = None
+                        if not thinking_started:
+                            thinking_started = True
+                            console.rule("[thinking]💭 thinking[/]", style="dim")
+                        console.print(f"[thinking]{event.text}[/]", end="", highlight=False)
+                else:  # content
                     text_buffer.append(event.text)
+                    if _status:
+                        _status.stop()
+                        _status = None
 
             elif isinstance(event, ToolCallDelta):
+                if _status:
+                    _status.stop()
+                    _status = None
                 args = _short_args(event.arguments)
-                panel = Panel(
+                console.print(Panel(
                     f"[tool.args]{args}[/]",
                     title=f"[tool.title]🔧 {event.name}[/]",
                     title_align="left",
                     border_style="cyan",
                     padding=(0, 1),
                     expand=False,
-                )
-                console.print()
-                console.print(panel)
-                pending_tool_call = (event.name, event.arguments)
+                ))
+                pending_tool = (event.name, event.arguments)
+                _status = console.status("[dim]⠋ Running…[/]", spinner="dots")
+                _status.start()
 
             elif isinstance(event, ToolResultDelta):
+                if _status:
+                    _status.stop()
+                    _status = None
                 summary = _summarize(event.content)
                 mark = "[tool.result.error]✗[/]" if event.is_error else "[tool.result.ok]✓[/]"
-                result_panel = Panel(
+                border = "red" if event.is_error else "green"
+                console.print(Panel(
                     f"{mark} [dim]{summary}[/]",
-                    border_style="green" if not event.is_error else "red",
+                    border_style=border,
                     padding=(0, 1),
                     expand=False,
-                )
-                console.print(result_panel)
-                pending_tool_call = None
+                ))
+                pending_tool = None
 
             elif isinstance(event, ToolProgressDelta):
-                text = event.text or ""
-                for line in text.splitlines():
+                if _status:
+                    _status.stop()
+                    _status = None
+                for line in (event.text or "").splitlines():
                     console.print(f" [dim]┊[/] {line}")
 
             elif isinstance(event, TurnComplete):
-                if pending_tool_call:
+                if _status:
+                    _status.stop()
+                    _status = None
+                # Final render: Markdown + Syntax highlighting
+                full = "".join(text_buffer) if text_buffer else event.content
+                if full.strip():
                     console.print()
-                if not text_started:
-                    # Non-streaming: render with syntax highlighting for code blocks
-                    _render_content(event.content)
-                # Status on its own line, separated from LLM output
+                    _render_content(full)
+                # Status line
                 if usage_tracker is not None:
-                    console.print()  # blank line separator
+                    console.print()
                     console.print(usage_tracker.status_line())
                 else:
                     console.print()
                 return
 
             elif isinstance(event, TurnFailed):
-                if pending_tool_call:
-                    console.print()
+                if _status:
+                    _status.stop()
+                    _status = None
                 console.print(f"[error]✗[/] {event.reason}")
                 return
 
@@ -542,10 +583,12 @@ def _print_help():
     console.print("  --api-key KEY         API key")
     console.print("  --model MODEL         Model name")
     console.print("  --system-prompt TEXT  System prompt")
+    console.print("  --show-thinking       Show reasoning/thinking deltas (default: hidden)")
+    console.print("  --no-show-thinking    Hide reasoning/thinking deltas")
     console.print("  --help, -h            Show this help")
     console.print()
     console.print("Config file: ~/.microagent/config.yaml")
-    console.print("Env vars: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL")
+    console.print("Env vars: MICROAGENT_BASE_URL, MICROAGENT_API_KEY, MICROAGENT_MODEL, MICROAGENT_SHOW_THINKING")
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +653,7 @@ async def _cmd_resume(state: ReplState, arg: str) -> None:
         else:
             console.print(f"[error]✗[/] Session not found: {target}")
     else:
-        console.print(f"[error]✗[/] No sessions to resume. Use /list to see sessions.")
+        console.print("[error]✗[/] No sessions to resume. Use /list to see sessions.")
 
 
 async def _cmd_compact(state: ReplState, arg: str) -> None:
@@ -775,6 +818,19 @@ async def _cmd_build(state: ReplState, arg: str) -> None:
     console.print("[success]✓[/] Switched to build mode (all tools enabled)")
 
 
+async def _cmd_thinking(state: ReplState, arg: str) -> None:
+    """Toggle or set display of reasoning (💭 thinking) deltas."""
+    val = arg.strip().lower()
+    if val in {"on", "true", "yes", "1"}:
+        state.show_thinking = True
+    elif val in {"off", "false", "no", "0"}:
+        state.show_thinking = False
+    else:
+        state.show_thinking = not state.show_thinking
+    status = "shown" if state.show_thinking else "hidden"
+    console.print(f"[success]✓[/] Reasoning/thinking deltas are now {status}")
+
+
 # Command registry: name → (handler, description)
 _COMMANDS: dict[str, tuple] = {
     "new": (_cmd_new, "Start a new session"),
@@ -788,5 +844,6 @@ _COMMANDS: dict[str, tuple] = {
     "cost": (_cmd_cost, "Show token usage and cost for this session"),
     "plan": (_cmd_plan, "Switch to plan mode (read-only tools)"),
     "build": (_cmd_build, "Switch to build mode (all tools)"),
+    "thinking": (_cmd_thinking, "Toggle reasoning display (/thinking [on|off])"),
     "help": (_cmd_help, "Show available commands"),
 }
