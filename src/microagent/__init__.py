@@ -16,6 +16,7 @@ from .core.tool import FunctionTool, Tool, ToolRegistry, tool
 from .core.types import (
     Event,
     Message,
+    SteerEvent,
     TextDelta,
     ToolCall,
     ToolCallDelta,
@@ -64,6 +65,7 @@ __all__ = [
     "ToolResultDelta",
     "TurnComplete",
     "TurnFailed",
+    "SteerEvent",
     "Event",
     # Tools
     "Tool",
