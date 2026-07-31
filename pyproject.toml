@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "microagent"
 version = "1.0.0"
-description = "A 5,000-line embeddable AI agent core library — LLM loop, 22 tools, 4-layer compression pyramid."
+description = "A 9,300-line embeddable AI agent core library — LLM loop, 34 tools, 4-layer compression pyramid."
 requires-python = ">=3.14"
 license = "MIT"
 license-files = ["LICENSE"]

@@ -1,8 +1,8 @@
 # MicroAgent 设计说明
 
-> 版本 0.1.0 | Python ≥3.14 | ~7,000 行核心代码 | 34 内置工具 | 409 测试
+> 版本 1.0.0 | Python ≥3.14 | ~9,300 行核心代码 | 34 内置工具 | 432 测试
 
-**MicroAgent 是一个将 AI Agent 的核心循环压缩到 7,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 10,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
 **核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
 
@@ -13,8 +13,8 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 ### 核心原则
 
 1. **最小内核** — 核心循环 LLM→Tool→LLM 是唯一必选路径，所有能力通过 Protocol 扩展
-2. **零依赖核心** — 必装仅 5 个（openai、pydantic、anyio、httpx、pyyaml），其余 optional
-3. **TDD 全覆盖** — 287 测试，red-green-refactor 驱动
+2. **零依赖核心** — 必装仅 6 个（openai、pydantic、anyio、httpx、pyyaml、rich），其余 optional
+3. **TDD 全覆盖** — 432 测试，red-green-refactor 驱动
 4. **信息分通道** — 借鉴 Claude Code，压缩走 4 层金字塔
 
 ### 架构全景
@@ -47,7 +47,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 ┌──────────┐  ┌──────────────┐  ┌──────────────┐
 │ LLM 层   │  │  Tool 层     │  │ Session 层   │
 │          │  │              │  │              │
-│ OpenAI   │  │ 22 tools     │  │ SQLite WAL   │
+│ OpenAI   │  │ 34 tools     │  │ SQLite WAL   │
 │ CredPool │  │ Permission   │  │ 4层压缩      │
 │ Cost calc│  │ ScriptRule   │  │ 树形 Budget  │
 │ Context  │  │ Pydantic     │  │ resume/search│
@@ -107,7 +107,7 @@ class Usage:
 @tool("read_file", description="Read a file...")
 async def read_file(path, offset=1, limit=500) -> ToolResult: ...
 
-registry = ToolRegistry(_default_builtins())   # 22 内置工具
+registry = ToolRegistry(_default_builtins())   # 34 内置工具
 registry.to_openai_tools()                     # → OpenAI function schema
 ```
 
@@ -134,7 +134,7 @@ registry.to_openai_tools()                     # → OpenAI function schema
 ```python
 DEFAULT_RULES = (
     Rule("read_file", {}, Decision.ALLOW),
-    Rule("bash", {}, Decision.ASK_USER),
+    Rule("bash", {}, Decision.ASK),
     Rule("edit_file", {"glob": "*.py"}, Decision.ALLOW),
     ScriptRule("bash", {}, "/usr/local/bin/approver.sh"),
 )
@@ -177,7 +177,7 @@ _estimate_cost("gpt-4o", 1000, 500) → $0.0075  # 11 模型定价
 
 ## 五、会话管理 (`session/`)
 
-### SessionRunner (`runner.py` — 340 行)
+### SessionRunner (`runner.py` — 654 行)
 
 核心循环：
 
@@ -197,7 +197,7 @@ while not budget.exhausted:
 - **自动持久化**：user/assistant/tool_result 自动写入 store
 - **压缩**：`compression_threshold=0` 时自动用 60% 窗口计算
 
-### 4 层压缩金字塔 (`compress.py` — 528 行)
+### 4 层压缩金字塔 (`compress.py` — 697 行)
 
 | 层 | 名称 | API | 触发 | 操作 |
 |----|------|-----|------|------|
@@ -261,7 +261,7 @@ class ContextSource(Protocol):
 
 ## 九、Surface 层
 
-### CLI (`surface/cli.py` — 369 行)
+### CLI (`surface/cli.py` — 855 行)
 
 ```
 ────── 💭 thinking ──────      思考过程（灰色分割线）
@@ -301,7 +301,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-409 tests, 1 skipped, 0 failures  —  ~4,100 / 7,000 = 59% test/code ratio
+432 tests, 1 skipped, 0 failures  —  ~4,300 / 9,300 = 46% test/code ratio
 ```
 
 | 测试文件 | 覆盖 |
@@ -338,12 +338,12 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~7,000 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
-| 核心循环模块 | 340 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
+| 核心代码量 | ~9,300 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心循环模块 | 654 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
-| 压缩代码量 | 528 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
-| CLI 代码量 | 369 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 409（59% 覆盖比） | ~17,000 | 闭源 |
+| 压缩代码量 | 697 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
+| CLI 代码量 | 855 行 | 16,304 行 | 闭源（产品级 CLI） |
+| 测试数量 | 432（46% 覆盖比） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
@@ -484,7 +484,7 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | Python 版本 | 3.14+ | 3.11+ | N/A (Node.js) |
 | 类型系统 | ✅ 完整类型标注 + `slots=True` + `frozen=True` | ✅ 大规模类型系统 | ✅ TypeScript |
-| 测试策略 | ✅ TDD, 409 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
+| 测试策略 | ✅ TDD, 432 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
 | 测试隔离 | ✅ 子进程 per test file | ✅ 子进程 per test file | N/A |
 | 构建系统 | hatchling | setuptools + uv | npm/esbuild |
 | 依赖管理 | `>=floor,<next_major` 上限 | 同上 + SHA pinning | npm lock |
@@ -521,4 +521,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~7,000 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~9,300 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。

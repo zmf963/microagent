@@ -4,13 +4,13 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~7k LOC, 34 tools, 409 tests).
+MicroAgent is an embeddable AI agent core library (~9,300 LOC, 34 tools, 432 tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
 The single most important principle: **the core is a narrow waist; capability
 lives in tools and extension points, not in the core loop.** SessionRunner
-(~340 LOC) is the sole execution path. Everything else — memory, skills,
+(~654 LOC) is the sole execution path. Everything else — memory, skills,
 compression, permissions, subagents — plugs in through Protocols.
 
 ## Project Structure
@@ -32,7 +32,7 @@ microagent/
 │   │   ├── client.py        # LLMConfig, OpenAIChatClient, pricing, context windows
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
-│   │   ├── runner.py        # SessionRunner — the core loop (~340 LOC)
+│   │   ├── runner.py        # SessionRunner — the core loop (~654 LOC)
 │   │   ├── compress.py      # 4-layer compression pyramid
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
@@ -64,7 +64,7 @@ microagent/
 
 ### 1. The core loop is sacred
 
-`SessionRunner.run_turn()` is the only execution path. It is ~340 LOC and
+`SessionRunner.run_turn()` is the only execution path. It is ~654 LOC and
 every line traces to the core contract:
 
 ```
@@ -154,7 +154,7 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 409 tests
+python -m pytest tests/unit/ -q            # 432 tests
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

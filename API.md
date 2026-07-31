@@ -186,11 +186,11 @@ from microagent.core.permission import PermissionEngine, Rule, Decision, ScriptR
 
 rules = (
     Rule("read_file", {}, Decision.ALLOW),
-    Rule("bash", {}, Decision.ASK_USER),                # 需要确认
-    Rule("bash", {"pattern": "ls *"}, Decision.ALLOW),  # ls 命令允许
+    Rule("bash", {}, Decision.ASK),                     # 需要确认
+    Rule("bash", {"command": "ls *"}, Decision.ALLOW),  # ls 命令允许
     ScriptRule("write_file", {}, "./approve_write.sh"), # 外部脚本决策
 )
-engine = PermissionEngine(*rules)
+engine = PermissionEngine(rules=rules)
 ```
 
 ## 扩展点（Hooks）

@@ -2,12 +2,12 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-409%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-432%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~7k LOC**, **34 built-in tools**, **62 public API symbols**, **409 unit tests**.
+**~9,300 LOC**, **34 built-in tools**, **63 public API symbols**, **432 unit tests**.
 
-> *"narrow waist + thick edges"* — the core agent loop is <200 LOC. Capability lives in tools and extension points, not in the core.
+> *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
 ---
 
@@ -410,7 +410,7 @@ await scheduler.stop()
 | `session_search` | Search past conversation history (FTS5) |
 | `task` | Spawn subagents (explore: read-only, general: multi-step) |
 | `todo` | Manage inline task list (list/add/update/remove) |
-| `plan` | Create multi-step plans without executing |
+| `task_plan` | Create multi-step plans without executing |
 | `question` | Ask user for input (non-blocking, asyncio.to_thread) |
 | `skill_manage` | Runtime skill creation/patching/deletion |
 | `skills_list` | List all available skills |
@@ -434,7 +434,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 409 passed, 1 skipped
+# 432 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
