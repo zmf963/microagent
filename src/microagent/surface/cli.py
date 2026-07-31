@@ -405,7 +405,13 @@ async def _run_streaming(
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
-            tty.setraw(fd)
+            # Use setcbreak, NOT setraw: setraw disables OPOST (output
+            # post-processing), which kills ONLCR (\n → \r\n). In raw mode
+            # every Rich newline moves the cursor down WITHOUT returning to
+            # column 0, so multi-line Panels/Markdown/progress lines overlap
+            # and misalign. setcbreak keeps output processing intact while
+            # still disabling ECHO/ICANON for single-key Esc detection.
+            tty.setcbreak(fd)
             while not _interrupt.is_set():
                 ch = await asyncio.to_thread(sys.stdin.read, 1)
                 if ch == "\x1b":
