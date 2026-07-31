@@ -88,3 +88,48 @@ class TestClaudeSkillLoader:
         assert skills == ()
         matches = await loader.match("anything")
         assert matches == ()
+
+    async def test_description_with_colon_and_arrow(self, tmp_path):
+        """Regression: a description containing ': ' (colon+space, e.g. a
+        'reproduce → fix' arrow) must not break YAML frontmatter parsing.
+
+        YAML rejects unquoted `key: value: more` as a mapping error; the
+        parser must still load the skill (quoted value or tolerant parse).
+        """
+        _make_skill_dir(
+            tmp_path,
+            "arrow-skill",
+            "name: arrow-skill\n"
+            'description: "Reproduce: fix → verify."\n',
+        )
+        loader = ClaudeSkillLoader(search_paths=(tmp_path,))
+        skills = await loader.load()
+        assert len(skills) == 1
+        assert skills[0].name == "arrow-skill"
+        assert skills[0].description == "Reproduce: fix → verify."
+
+    async def test_match_cjk_long_description(self, tmp_path):
+        """Regression: CJK matching must survive long descriptions.
+
+        A short natural-language query against a long Chinese description
+        used to score near zero because Jaccard divided by the union of
+        bigrams (dominated by the target's length). Query-coverage must
+        let a verbatim sub-phrase of the description match.
+        """
+        _make_skill_dir(
+            tmp_path,
+            "zh-skill",
+            "name: zh-skill\n"
+            "description: 测试驱动开发。当用户想要测试先行地构建功能或修复 bug、"
+            "提到red-green-refactor或想要集成测试时使用。\n",
+        )
+        loader = ClaudeSkillLoader(search_paths=(tmp_path,))
+        # Verbatim sub-phrase of the description → must match.
+        matches = await loader.match("测试驱动开发")
+        assert any(m.skill.name == "zh-skill" for m in matches)
+        # Near-phrase → must match.
+        matches = await loader.match("测试先行构建功能")
+        assert any(m.skill.name == "zh-skill" for m in matches)
+        # Unrelated Chinese query → must NOT match (no false positive).
+        matches = await loader.match("今天天气怎么样")
+        assert all(m.skill.name != "zh-skill" for m in matches)

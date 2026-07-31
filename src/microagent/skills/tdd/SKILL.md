@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Test-driven development: red → green → refactor.
+description: "Test-driven development: red → green → refactor."
 triggers:
   - tdd
   - test-driven

@@ -1,6 +1,6 @@
 ---
 name: debugging
-description: Systematic debugging: reproduce → isolate → fix → verify.
+description: "Systematic debugging: reproduce → isolate → fix → verify."
 triggers:
   - debug
   - bug

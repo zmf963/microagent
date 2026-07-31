@@ -25,26 +25,34 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]+")
 def _cjk_aware_ratio(query: str, target: str) -> float:
     """Compute a similarity score between query and target text.
 
-    For CJK text, uses bigram overlap (Jaccard) instead of
-    SequenceMatcher which performs poorly on character-based scripts.
-    For Latin text, falls back to difflib.SequenceMatcher.
+    For CJK text, uses query-bigram coverage (fraction of the query's
+    bigrams that appear in the target) instead of Jaccard. Jaccard
+    divides by the union of bigrams, which is dominated by the target's
+    length — a short natural query (a handful of chars) against a long
+    skill description (dozens of chars) scores near zero even when it's a
+    verbatim sub-phrase. Query coverage measures recall, so it survives
+    long descriptions. A longest-common-substring ratio is blended in to
+    reward contiguous matches. Latin text falls back to SequenceMatcher.
     """
     cjk_query = _CJK_RE.findall(query)
     cjk_target = _CJK_RE.findall(target)
 
     if cjk_query and cjk_target:
-        # CJK present in both — use bigram Jaccard
-        q_bigrams = _bigrams("".join(cjk_query))
-        t_bigrams = _bigrams("".join(cjk_target))
+        q_joined = "".join(cjk_query)
+        t_joined = "".join(cjk_target)
+        q_bigrams = _bigrams(q_joined)
+        t_bigrams = _bigrams(t_joined)
         if not q_bigrams:
             return 0.0
-        intersection = q_bigrams & t_bigrams
-        union = q_bigrams | t_bigrams
-        cjk_score = len(intersection) / len(union) if union else 0.0
+        # Query coverage: recall of query bigrams in target (0..1).
+        coverage = len(q_bigrams & t_bigrams) / len(q_bigrams)
+        # Longest common substring ratio — rewards contiguous matches.
+        lcs_ratio = _lcs_len(q_joined, t_joined) / len(q_joined) if q_joined else 0.0
+        cjk_score = max(coverage, lcs_ratio)
 
         # Blend with Latin SequenceMatcher for the remaining text
-        latin_query = _CJK_RE.sub("", query).strip()
-        latin_target = _CJK_RE.sub("", target).strip()
+        latin_query = _CJK_RE.sub("", query).strip().lower()
+        latin_target = _CJK_RE.sub("", target).strip().lower()
         if latin_query and latin_target:
             latin_score = difflib.SequenceMatcher(None, latin_query, latin_target).ratio()
             # Weight by text composition
@@ -55,6 +63,23 @@ def _cjk_aware_ratio(query: str, target: str) -> float:
 
     # No CJK in query or target — use standard SequenceMatcher
     return difflib.SequenceMatcher(None, query, target).ratio()
+
+
+def _lcs_len(a: str, b: str) -> int:
+    """Length of the longest common substring of a and b (character level)."""
+    if not a or not b:
+        return 0
+    m, n = len(a), len(b)
+    prev = [0] * (n + 1)
+    best = 0
+    for i in range(1, m + 1):
+        cur = [0] * (n + 1)
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
 
 
 def _bigrams(text: str) -> set[str]:
