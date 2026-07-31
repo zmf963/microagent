@@ -31,7 +31,7 @@ class SubagentSpec:
     description: str
     system_prompt: str
     tools_allowed: tuple[str, ...]  # whitelist (empty = all)
-    tools_blocked: tuple[str, ...]  # blacklist
+    tools_blocked: tuple[str, ...] = ()  # blacklist (empty = none)
     model: str | None = None  # None = inherit parent
     max_iterations: int = 10
     max_cost_usd: float = 1.0
