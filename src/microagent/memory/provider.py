@@ -165,6 +165,7 @@ class SQLiteMemoryProvider:
                 (row[0],),
             )
         self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        self._conn.commit()
 
     def system_prompt_block(self) -> str:
         return ""
@@ -191,3 +192,7 @@ class SQLiteMemoryProvider:
                 "INSERT OR REPLACE INTO memories_fts(rowid, content) VALUES (?, ?)",
                 (rowid[0], m.content),
             )
+        # Commit so writes survive a process restart — Python's sqlite3
+        # defaults to a manual transaction; without commit(), close() rolls
+        # back every insert and memory silently disappears across restarts.
+        self._conn.commit()
