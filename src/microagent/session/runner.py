@@ -99,6 +99,10 @@ class SessionRunner:
         self._session_state = _tpe_module.SessionState()
         self._browser_state = _br_module.BrowserState()
         self._lsp_state = _lsp_module.LSPSessionState()
+        # MCP connection managers spawned by mcp_connect — tracked so close()
+        # can disconnect them. Without this, every mcp_connect() leaked a
+        # subprocess (npx/uvx/...) for the lifetime of the Python process.
+        self._mcp_managers: dict[str, object] = {}
 
         if store is not None:
             from ..tools.builtins import session_search as _ss
@@ -109,6 +113,12 @@ class SessionRunner:
             from ..tools.builtins import skills_list as _sl_mod
 
             _sl_mod._set_loader(self.skill_loader)
+
+        # Expose the per-session MCP manager dict to mcp_connect via ContextVar
+        # so it populates *this* runner's dict (which close() will iterate).
+        from ..tools.builtins import mcp_connect as _mcp_mod
+
+        _mcp_mod._current_managers.set(self._mcp_managers)
 
         if self.memory is not None:
             from ..memory.extractor import MemoryExtractor
@@ -121,7 +131,8 @@ class SessionRunner:
             )
 
     async def close(self) -> None:
-        """Clean up resources (memory extractor, browser page, LSP servers)."""
+        """Clean up resources (memory extractor, browser page, LSP servers,
+        background processes, MCP connections)."""
         # Close browser page if one was opened for this session
         if self._browser_state.page is not None:
             try:
@@ -140,6 +151,28 @@ class SessionRunner:
             except Exception:
                 pass
         self._lsp_state.clients.clear()
+
+        # Kill background processes started via the `process` tool.
+        # Without this, `process start` leaves orphan subprocesses that
+        # outlive the session and become zombies.
+        for sid, proc in list(self._proc_registry.procs.items()):
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+        self._proc_registry.procs.clear()
+        self._proc_registry.outputs.clear()
+
+        # Disconnect MCP servers so their child subprocesses (npx, uvx, ...)
+        # don't outlive the session.
+        for mgr in list(self._mcp_managers.values()):
+            try:
+                await mgr.disconnect()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        self._mcp_managers.clear()
 
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
         return tuple(await store.load_history(session_id))
