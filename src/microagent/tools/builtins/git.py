@@ -7,6 +7,7 @@ like push/reset/force-push are blocked.
 from __future__ import annotations
 
 import asyncio
+import shlex
 from typing import Annotated
 
 from pydantic import Field
@@ -43,15 +44,23 @@ async def git(
 
     cmd_parts = ["git", "-C", repo_path, subcommand]
     if args:
-        cmd_parts.extend(args.split())
+        # Use shlex.split so quoted multi-word args survive:
+        # args = "-m 'fixed bug'" → ['-m', 'fixed bug'] (not ['-m', "'fixed", "bug'"])
+        try:
+            cmd_parts.extend(shlex.split(args))
+        except ValueError as e:
+            return ToolResult.error(f"invalid args (unbalanced quotes?): {e}")
 
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd_parts,
+            stdin=asyncio.subprocess.DEVNULL,  # prevent hang if git opens $EDITOR
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        # Hard timeout — communicate() blocks until process exits, which is
+        # forever if git is waiting on a GPG passphrase or an editor.
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         output = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
 
@@ -59,6 +68,13 @@ async def git(
             return ToolResult.error(f"git {subcommand} failed (exit {proc.returncode}): {err}")
 
         return ToolResult.ok(output if output.strip() else "(no output)")
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return ToolResult.error(f"git {subcommand} timed out after 60s")
     except FileNotFoundError:
         return ToolResult.error("git not found — is git installed?")
     except Exception as e:

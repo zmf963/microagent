@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import signal
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +12,37 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+# Per-file size cap — reading a 5 GB log entirely (to scan for \x00 and
+# decode) exhausts memory even though only matching lines are needed.
+_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# SIGALRM-based regex timeout (Unix only). asyncio runs in the main thread,
+# so signal.alarm is safe to set from a tool. Catastrophic-backtracking
+# patterns (e.g. (a+)+b) on a long line would otherwise hang the loop —
+# a thread-based timeout doesn't work because the GIL prevents the search
+# thread from being interrupted.
+_HAS_SIGALRM = hasattr(signal, "SIGALRM")
+
+
+class _RegexTimeout(Exception):
+    """Raised when a regex search exceeds the alarm deadline."""
+
+
+def _search_with_alarm(regex, line: str, seconds: int = 5):
+    """Search with a SIGALRM deadline (Unix). Returns the Match or None."""
+    if not _HAS_SIGALRM:
+        return regex.search(line)
+    old_handler = signal.getsignal(signal.SIGALRM)
+    try:
+        signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(_RegexTimeout()))
+        signal.alarm(seconds)
+        return regex.search(line)
+    except _RegexTimeout:
+        return None
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 @tool(
@@ -41,7 +73,13 @@ async def grep(
     for fpath in files:
         if not fpath.is_file():
             continue
-        # Skip binary files
+        # Skip oversized files before reading.
+        try:
+            if fpath.stat().st_size > _MAX_FILE_BYTES:
+                continue
+        except OSError:
+            continue
+        # Skip binary files + read in a thread (network FS safety).
         try:
             raw = await asyncio.to_thread(fpath.read_bytes)
             if b"\x00" in raw:
@@ -51,7 +89,8 @@ async def grep(
             continue
 
         for i, line in enumerate(lines, 1):
-            if regex.search(line):
+            hit = _search_with_alarm(regex, line)
+            if hit:
                 rel = str(fpath)
                 matches.append(f"{rel}:{i}: {line.strip()}")
                 if len(matches) >= max_results:

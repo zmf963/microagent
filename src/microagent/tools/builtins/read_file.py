@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -9,6 +10,10 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+# Hard ceiling on file size — read_file loads the whole file before slicing,
+# so a multi-GB log would OOM or block the event loop for seconds.
+_MAX_READ_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 @tool("read_file", description="Read file contents. Returns lines as text.")
@@ -26,8 +31,20 @@ async def read_file(
     if not p.is_file():
         return ToolResult.error(f"not a file: {path}")
 
-    # Binary detection — read directly (small files, no need for thread pool)
-    raw = p.read_bytes()
+    # Guard against OOM before reading: stat first, reject oversized files.
+    try:
+        size = p.stat().st_size
+    except OSError as e:
+        return ToolResult.error(f"cannot stat {path}: {e}")
+    if size > _MAX_READ_BYTES:
+        return ToolResult.error(
+            f"file too large: {size:,} bytes exceeds {_MAX_READ_BYTES:,} byte limit. "
+            f"Use grep or offset/limit on a streamed reader instead."
+        )
+
+    # Read in a thread so a slow/network filesystem doesn't block the loop.
+    # (grep.py already does this; read_file was synchronous.)
+    raw = await asyncio.to_thread(p.read_bytes)
     if b"\x00" in raw:
         return ToolResult.error(f"binary file, cannot display: {path}")
 
@@ -47,6 +64,12 @@ async def read_file(
         result += f"\n[truncated: showing {end - start} of {total} lines]"
 
     if not result:
-        result = "(empty file)"
+        # Distinguish "empty file" from "offset past end of file".
+        if total == 0:
+            result = "(empty file)"
+        else:
+            return ToolResult.error(
+                f"offset {offset} is past the end of file ({total} lines)"
+            )
 
     return ToolResult.ok(result)

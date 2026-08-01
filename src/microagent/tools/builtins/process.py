@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -83,10 +85,14 @@ async def process(
             if not command:
                 return ToolResult.error("command is required for action=start")
             try:
+                # start_new_session=True creates a new process group so
+                # kill() can signal the whole group (not just /bin/sh),
+                # preventing orphaned grandchildren.
                 p = await asyncio.create_subprocess_shell(
                     command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
                 )
                 sid = _generate_id()
                 reg.procs[sid] = p
@@ -101,12 +107,18 @@ async def process(
                 return ToolResult.error(f"process not found: {session_id}")
             p = reg.procs[session_id]
             if p.returncode is not None:
-                # Already done — collect remaining output
+                # Already done — collect remaining output. Wrap in a timeout
+                # because a grandchild holding the stdout pipe open (daemon
+                # that inherited the fd) keeps read() blocked forever even
+                # after the shell exits.
                 out_lines = list(reg.outputs.get(session_id, []))
                 if p.stdout:
-                    remaining = await p.stdout.read()
-                    if remaining:
-                        out_lines.append(remaining.decode("utf-8", errors="replace").rstrip())
+                    try:
+                        remaining = await asyncio.wait_for(p.stdout.read(), timeout=2.0)
+                        if remaining:
+                            out_lines.append(remaining.decode("utf-8", errors="replace").rstrip())
+                    except TimeoutError:
+                        out_lines.append("(stdout pipe still open, partial output shown)")
                 return ToolResult.ok(f"(exited {p.returncode})\n" + "\n".join(out_lines))
             # Still running — read available output
             try:
@@ -131,7 +143,13 @@ async def process(
                 return ToolResult.error(f"process not found: {session_id}")
             p = reg.procs[session_id]
             try:
-                p.kill()
+                # Kill the whole process group so grandchildren (the actual
+                # workload, not just /bin/sh) are terminated too. Requires
+                # start_new_session=True at spawn (which start uses).
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    p.kill()  # fallback: kill just the shell
                 await p.wait()
                 return ToolResult.ok(f"killed (exit {p.returncode})")
             except Exception as e:

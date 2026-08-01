@@ -3,12 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 from typing import Annotated
 
 from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+
+def _kill_proc_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the process group so grandchildren die too (not just /bin/sh).
+
+    Requires start_new_session=True at spawn. Falls back to proc.kill()
+    if the process group can't be determined (already reaped, no perm).
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 @tool("bash", description="Execute a shell command and return its output.")
@@ -18,31 +35,31 @@ async def bash(
 ) -> ToolResult:
     MAX_OUTPUT = 100_000  # prevent OOM from runaway output
 
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,  # new process group for clean kill
+    )
+    # Read stdout incrementally so we can capture partial output on timeout.
+    chunks: list[bytes] = []
+    total = 0
+
+    async def _read_all() -> None:
+        nonlocal total
+        while True:
+            chunk = await proc.stdout.read(8192)
+            if not chunk:
+                break
+            if total < MAX_OUTPUT:
+                chunks.append(chunk)
+                total += len(chunk)
+
     try:
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        # Read stdout incrementally so we can capture partial output on timeout.
-        # Using communicate() would lose buffered data when wait_for cancels.
-        chunks: list[bytes] = []
-        total = 0
-
-        async def _read_all() -> None:
-            nonlocal total
-            while True:
-                chunk = await proc.stdout.read(8192)
-                if not chunk:
-                    break
-                if total < MAX_OUTPUT:
-                    chunks.append(chunk)
-                    total += len(chunk)
-
         try:
             await asyncio.wait_for(_read_all(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
+            _kill_proc_group(proc)
             await proc.wait()
             partial = b"".join(chunks).decode("utf-8", errors="replace")
             return ToolResult.error(
@@ -64,5 +81,13 @@ async def bash(
 
         return ToolResult.ok(output if output else "(no output)")
 
-    except Exception as e:
-        return ToolResult.error(f"failed to execute command: {e!r}")
+    except BaseException:
+        # CancelledError (budget exhausted, user Ctrl-C, runner.cancel())
+        # is a BaseException — bare `except Exception` misses it, leaving
+        # the subprocess orphaned. Kill before re-raising.
+        _kill_proc_group(proc)
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise

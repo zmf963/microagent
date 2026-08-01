@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -22,6 +23,13 @@ async def edit_file(
 ) -> ToolResult:
     MAX_REPLACEMENT_SIZE = 5_000_000  # 5 MB
 
+    # Empty old_string + replace_all corrupts the file: str.replace("", X)
+    # inserts X between every character (count("") = len(text)+1). The
+    # non-replace_all path is saved by the count>1 uniqueness check, but
+    # replace_all has no such guard.
+    if not old_string:
+        return ToolResult.error("old_string must be non-empty")
+
     if len(new_string) > MAX_REPLACEMENT_SIZE:
         return ToolResult.error(
             f"new_string too large: {len(new_string)} bytes exceeds {MAX_REPLACEMENT_SIZE} limit"
@@ -32,7 +40,7 @@ async def edit_file(
     if not p.exists():
         return ToolResult.error(f"file not found: {path}")
 
-    text = p.read_text()
+    text = await asyncio.to_thread(p.read_text)
     count = text.count(old_string)
 
     if count == 0:
@@ -48,6 +56,6 @@ async def edit_file(
             )
         new_text = text.replace(old_string, new_string, 1)
 
-    p.write_text(new_text)
+    await asyncio.to_thread(p.write_text, new_text)
     actual = count if replace_all else 1
     return ToolResult.ok(f"replaced {actual} occurrence(s) in {path}")
