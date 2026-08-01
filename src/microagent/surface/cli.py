@@ -318,11 +318,16 @@ async def _main():
 
             continue
 
-        messages.append(Message.user(raw))
-        await _run_streaming(agent, messages, usage_tracker, show_thinking=repl_state.show_thinking)
+        repl_state.messages.append(Message.user(raw))
+        await _run_streaming(
+            repl_state.agent,
+            repl_state.messages,
+            repl_state.usage_tracker,
+            show_thinking=repl_state.show_thinking,
+        )
         console.print()
 
-    await agent.close()
+    await repl_state.agent.close()
     store.close()
 
 
