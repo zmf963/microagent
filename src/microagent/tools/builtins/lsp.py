@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # LSP server commands (auto-detected, first-found wins)
@@ -116,6 +119,7 @@ class LSPClient:
         self._id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._initialized = False
         self._open_files: set[str] = set()
         self._capabilities: dict = {}
@@ -132,6 +136,12 @@ class LSPClient:
             stderr=asyncio.subprocess.PIPE,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
+        # Drain stderr continuously. pyright/clangd/rust-analyzer/gopls log
+        # progress and diagnostics to stderr; the OS pipe buffer is only
+        # ~16-64 KB. Without a reader, the server's stderr write() blocks
+        # once the buffer fills, deadlocking the server on every subsequent
+        # request ("LSP works once then hangs forever").
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
         # Initialize
         result = await self._request("initialize", {
@@ -266,27 +276,53 @@ class LSPClient:
         return symbols
 
     async def shutdown(self) -> None:
-        """Graceful shutdown."""
-        if self._reader_task:
-            self._reader_task.cancel()
+        """Graceful shutdown per LSP spec.
+
+        Order matters:
+          1. _request("shutdown", {})  — must be a REQUEST (id, awaits null
+             response), sent while the reader is still alive so the response
+             can be dispatched. Spec: server returns null, then waits for exit.
+          2. Cancel reader + stderr tasks — now safe, no more responses expected.
+          3. _notify("exit", {})  — must be a NOTIFICATION (no id). Spec: server
+             exits. Previously sent as a request → 2 s timeout every shutdown.
+          4. Wait briefly for the process to exit on its own.
+          5. kill() as a last resort if still alive.
+        """
+        if self._proc and self._proc.returncode is None:
+            # 1. shutdown request (reader still alive to dispatch the response)
             try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(
+                    self._request("shutdown", {}), timeout=2.0
+                )
+            except (TimeoutError, Exception):
+                pass  # server unresponsive — fall through to kill
+        # 2. cancel readers (no more responses to dispatch)
+        for task in (self._reader_task, self._stderr_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        # 3. exit notification + wait + kill
         if self._proc and self._proc.returncode is None:
             try:
-                self._notify("shutdown", {})
-                await asyncio.wait_for(
-                    self._request("exit", {}), timeout=2.0
-                )
+                self._notify("exit", {})
             except Exception:
                 pass
             try:
-                self._proc.kill()
-                await self._proc.wait()
-            except Exception:
-                pass
+                await asyncio.wait_for(self._proc.wait(), timeout=1.0)
+            except (TimeoutError, Exception):
+                try:
+                    self._proc.kill()
+                    await self._proc.wait()
+                except Exception:
+                    pass
         self._proc = None
+        self._reader_task = None
+        self._stderr_task = None
 
     # --- JSON-RPC internals ---
 
@@ -297,9 +333,12 @@ class LSPClient:
     async def _request(self, method: str, params: dict) -> dict | list | None:
         rid = self._next_id()
         msg = json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        # get_running_loop() is correct here — _request is always called from
+        # a coroutine. get_event_loop() is deprecated and can return a fresh
+        # non-running loop in edge cases (3.12+).
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = future
-        self._send(msg)
+        await self._send(msg)
         try:
             return await asyncio.wait_for(future, timeout=30.0)
         except TimeoutError:
@@ -308,13 +347,37 @@ class LSPClient:
 
     def _notify(self, method: str, params: dict) -> None:
         msg = json.dumps({"jsonrpc": "2.0", "method": method, "params": params})
-        self._send(msg)
+        # Notifications are fire-and-forget; schedule the drain but don't block.
+        # (Synchronous callers like shutdown() can't await here.)
+        try:
+            asyncio.get_running_loop().create_task(self._send(msg))
+        except RuntimeError:
+            # No running loop — best-effort sync write
+            self._send_sync(msg)
 
-    def _send(self, msg: str) -> None:
+    async def _send(self, msg: str) -> None:
         if self._proc and self._proc.stdin:
             frame = f"Content-Length: {len(msg.encode())}\r\n\r\n{msg}"
             self._proc.stdin.write(frame.encode())
-            # drain handled by the event loop
+            # Apply backpressure — a huge didOpen payload would otherwise sit
+            # in the in-memory write buffer and grow memory unbounded.
+            await self._proc.stdin.drain()
+
+    def _send_sync(self, msg: str) -> None:
+        if self._proc and self._proc.stdin:
+            frame = f"Content-Length: {len(msg.encode())}\r\n\r\n{msg}"
+            self._proc.stdin.write(frame.encode())
+
+    async def _drain_stderr(self) -> None:
+        """Continuously drain stderr so the LSP server never blocks on a
+        full OS pipe buffer. Discards output (servers log progress here)."""
+        try:
+            while self._proc and self._proc.stderr:
+                chunk = await self._proc.stderr.read(4096)
+                if not chunk:
+                    break
+        except (asyncio.CancelledError, Exception):
+            pass
 
     async def _read_loop(self) -> None:
         """Read JSON-RPC responses from stdout, dispatch to pending futures."""
@@ -362,7 +425,13 @@ class LSPClient:
                         elif not future.done():
                             future.set_result(msg.get("result"))
                     # Notifications (no id) are ignored
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # A malformed byte or transport error used to silently break
+                # the loop, stranding every pending request to time out 30 s
+                # later with no clue why. Surface the cause instead.
+                logger.warning("LSP read loop error: %r", e)
                 break
 
 
