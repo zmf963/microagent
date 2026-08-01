@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .safe_id import safe_filename_from_id
+
 MAX_OUTPUT_BYTES = 50_000
 MAX_OUTPUT_LINES = 2_000
 PREVIEW_CHARS = 500  # head + tail each
@@ -55,10 +57,12 @@ class ToolOutputStore:
         if len(content) <= self.max_bytes and content.count("\n") + 1 <= self.max_lines:
             return ProcessedOutput(content=content, saved_to_disk=False)
 
-        # Save to disk
-        out_dir = self.base_dir / session_id
+        # Save to disk. Hash the session/tool_call ids so a hostile or
+        # malformed id (e.g. '../../etc/cron.d/x') cannot traverse outside
+        # base_dir via the constructed path.
+        out_dir = self.base_dir / safe_filename_from_id(session_id)
         out_dir.mkdir(parents=True, exist_ok=True)
-        file_path = out_dir / f"{tool_call_id}.txt"
+        file_path = out_dir / f"{safe_filename_from_id(tool_call_id)}.txt"
         file_path.write_text(content)
 
         # Build preview: head + tail

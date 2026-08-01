@@ -15,6 +15,7 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+from ..safe_id import is_safe_name
 
 
 def _get_skills_dir() -> Path:
@@ -80,6 +81,11 @@ async def skill_manage(
     if action == "create":
         if not name or not content:
             return ToolResult.error("name and content are required for create")
+        if not is_safe_name(name):
+            return ToolResult.error(
+                "invalid skill name: must be alphanumeric with optional "
+                "'_', '-', '.' — no path separators or '..'"
+            )
 
         MAX_SKILL_SIZE = 1_000_000  # 1 MB
         if len(content) > MAX_SKILL_SIZE:
@@ -100,6 +106,8 @@ async def skill_manage(
     elif action == "patch":
         if not name or not old_string:
             return ToolResult.error("name and old_string are required for patch")
+        if not is_safe_name(name):
+            return ToolResult.error("invalid skill name")
         skill_path = skills_dir / name / "SKILL.md"
         if not skill_path.exists():
             return ToolResult.error(f"Skill '{name}' not found")
@@ -134,6 +142,8 @@ async def skill_manage(
     elif action == "delete":
         if not name:
             return ToolResult.error("name is required for delete")
+        if not is_safe_name(name):
+            return ToolResult.error("invalid skill name")
         skill_dir = skills_dir / name
         if not skill_dir.exists():
             return ToolResult.error(f"Skill '{name}' not found")
