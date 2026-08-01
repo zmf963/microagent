@@ -88,13 +88,12 @@ class TestSnipToolResults:
             Message.assistant("response"),
             Message.tool_result(ToolResult.ok("new"), tool_call_id="c2"),
         )
-        result = snip_tool_results(messages, keep_recent=0, max_tokens=15)
+        result = snip_tool_results(messages, keep_recent=0, max_tokens=40)
         # User and assistant must survive (snip only removes tool results)
         roles = [m.role for m in result]
         assert "user" in roles
         assert "assistant" in roles
-        # Both tool results survive (under token limit after user/assist removed? no — keep_recent=0 removes oldest tool results)
-        # With max_tokens=15 and keep_recent=0, oldest tool results snipped first
+        # With keep_recent=0, oldest tool results snipped first
         tool_contents = " ".join(m.content for m in result if m.role == "tool")
         assert "new" in tool_contents  # newer tool result kept
 

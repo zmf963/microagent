@@ -40,11 +40,14 @@ class TestTokenEstimation:
         assert estimate_tokens("你好世界") >= estimate_tokens("你好")
 
     def test_count_tokens_aggregates(self):
-        """count_tokens sums across messages."""
+        """count_tokens sums across messages (including role framing overhead)."""
         msgs = (
             Message.user("hi"),
             Message.assistant("hello there"),
         )
         total = count_tokens(msgs)
-        # "hi" ~1 + "hello there" ~2-3 + safety margins
-        assert 2 <= total <= 8
+        # "hi" ~1 + "hello there" ~2-3 content + 4 tokens/msg framing overhead
+        # (2 msgs × 4 = 8) → ~11-12 total. The framing overhead was added so
+        # that assistant messages with tool_calls but empty content still
+        # count as non-zero tokens.
+        assert 9 <= total <= 16
