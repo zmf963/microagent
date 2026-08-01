@@ -11,6 +11,14 @@ from __future__ import annotations
 DEFAULT_TEMPLATE = "You are a helpful assistant."
 
 MODEL_TEMPLATES: dict[str, str] = {
+    "deepseek-v4-flash": (
+        "You are a helpful assistant powered by DeepSeek-V4 Flash, a fast, "
+        "low-latency reasoning model. You prioritize concise, correct, "
+        "direct responses. For code: give complete runnable solutions, but "
+        "avoid unnecessary verbosity. Use markdown code blocks with "
+        "language specifiers. Match the user's language when it is Chinese "
+        "or English."
+    ),
     "deepseek-v4": (
         "You are a helpful assistant powered by DeepSeek-V4. "
         "You excel at code generation, analysis, and step-by-step reasoning. "
@@ -31,18 +39,31 @@ MODEL_TEMPLATES: dict[str, str] = {
     ),
 }
 
+# Gateway alias → canonical model-family prefix. Local gateways expose
+# DeepSeek-V4 under compact aliases (tx-d4f, oc-d4f, tx-d4p) that do not
+# match the "deepseek-v4" prefix, so template lookup would fall through to
+# the generic default. Map them to the flash template.
+_ALIAS_TO_MODEL: dict[str, str] = {
+    "tx-d4f": "deepseek-v4-flash",
+    "oc-d4f": "deepseek-v4-flash",
+    "tx-d4p": "deepseek-v4-flash",
+}
+
 
 def get_model_template(model: str) -> str:
     """Get the system prompt template for a model.
 
-    Longest-prefix match wins so "deepseek-v4" doesn't shadow a more
-    specific future entry like "deepseek-v4-vision".
+    Gateway aliases (tx-d4f → deepseek-v4-flash, etc.) are resolved first,
+    then longest-prefix match wins so "deepseek-v4" doesn't shadow a more
+    specific entry like "deepseek-v4-flash".
     Falls back to DEFAULT_TEMPLATE for unknown models.
     """
     model_lower = model.lower()
+    # Resolve gateway aliases to the canonical model-family prefix.
+    canonical = _ALIAS_TO_MODEL.get(model_lower, model_lower)
     best: tuple[int, str] = (0, DEFAULT_TEMPLATE)
     for prefix, template in MODEL_TEMPLATES.items():
-        if model_lower.startswith(prefix) and len(prefix) > best[0]:
+        if canonical.startswith(prefix) and len(prefix) > best[0]:
             best = (len(prefix), template)
     return best[1]
 

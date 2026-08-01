@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from microagent.llm.client import LLMConfig
-from microagent.llm.templates import get_model_template, MODEL_TEMPLATES
+from microagent.llm.client import LLMConfig, get_context_window, _estimate_cost
+from microagent.llm.templates import get_model_template, MODEL_TEMPLATES, build_system_prompt
 from microagent.tools.builtins.context_ref import parse_file_ref
 from microagent.core.permission import Rule, Decision, PermissionEngine, AskCallback
 from microagent.core.types import ToolCall
@@ -38,6 +38,42 @@ class TestModelTemplates:
         glm = get_model_template("glm-5.2")
         kimi = get_model_template("kimi-k3")
         assert ds != glm or ds != kimi  # at least some are different
+
+    # --- DeepSeek-V4 Flash (tx-d4f) specific ---
+
+    def test_flash_template_exists(self):
+        """deepseek-v4-flash has a dedicated template."""
+        assert "deepseek-v4-flash" in MODEL_TEMPLATES
+        assert "Flash" in MODEL_TEMPLATES["deepseek-v4-flash"]
+
+    def test_flash_template_is_more_specific_than_v4(self):
+        """deepseek-v4-flash gets the flash template, not the generic v4."""
+        flash = get_model_template("deepseek-v4-flash")
+        v4 = get_model_template("deepseek-v4")
+        assert flash != v4
+        assert "Flash" in flash
+
+    def test_gateway_aliases_map_to_flash_template(self):
+        """tx-d4f / oc-d4f / tx-d4p resolve to the flash template."""
+        for alias in ("tx-d4f", "oc-d4f", "tx-d4p"):
+            tpl = get_model_template(alias)
+            assert "Flash" in tpl, f"{alias} did not resolve to flash template"
+        # Case-insensitive
+        assert "Flash" in get_model_template("TX-D4F")
+
+    def test_build_system_prompt_keeps_user_instructions(self):
+        """User system prompt takes precedence; flash guidance appended."""
+        out = build_system_prompt("tx-d4f", "You are a code reviewer.")
+        assert out.startswith("You are a code reviewer.")
+        assert "Flash" in out
+
+    def test_tx_d4f_context_window(self):
+        """tx-d4f reports the d4f-family 200K window, not the 128K default."""
+        assert get_context_window("tx-d4f") == 200_000
+
+    def test_tx_d4f_zero_cost(self):
+        """tx-d4f is a local-gateway model with no per-token cost."""
+        assert _estimate_cost("tx-d4f", 1000, 500) == 0.0
 
 
 class TestAuxiliaryModel:

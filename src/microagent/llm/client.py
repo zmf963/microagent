@@ -41,6 +41,7 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
     "deepseek-r1": (0.55, 2.19),
     "glm-4": (0.50, 0.50),
     "oc-d4f": (0.0, 0.0),
+    "tx-d4f": (0.0, 0.0),
     "tx-d4p": (0.0, 0.0),
 }
 
@@ -81,6 +82,7 @@ _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "deepseek-r1": 128_000,
     "glm-4": 128_000,
     "oc-d4f": 200_000,
+    "tx-d4f": 200_000,
     "tx-d4p": 200_000,
 }
 
