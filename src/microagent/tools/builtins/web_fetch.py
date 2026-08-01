@@ -7,6 +7,7 @@ Redirects are NOT followed — each redirect target must pass the same checks.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from typing import Annotated
@@ -40,11 +41,22 @@ _BLOCKED_HOSTNAMES = frozenset({
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
-    """Check if an IP address string is in blocked ranges."""
+    """Check if an IP address string is in blocked ranges.
+
+    Also catches IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1) that
+    would otherwise bypass the IPv4 blocklist because ip_address() reports
+    them as family=6.
+    """
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+    # Reject any IPv4-mapped IPv6 address whose mapped v4 is internal.
+    # This covers ::ffff:127.0.0.1, ::ffff:169.254.169.254 (AWS metadata), etc.
+    if isinstance(addr, ipaddress.IPv6Address):
+        mapped = addr.ipv4_mapped
+        if mapped is not None:
+            return any(mapped in net for net in _BLOCKED_RANGES if isinstance(net, ipaddress.IPv4Network))
     return any(addr in net for net in _BLOCKED_RANGES)
 
 
@@ -83,7 +95,7 @@ async def web_fetch(
     if not host:
         return ToolResult.error(f"invalid URL: no hostname found in {url!r}")
 
-    error = _resolve_and_check(host)
+    error = await asyncio.to_thread(_resolve_and_check, host)
     if error is not None:
         return ToolResult.error(error)
 
@@ -97,10 +109,20 @@ async def web_fetch(
             follow_redirects=False,
             timeout=timeout,
         ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+            # Stream the body so a multi-GB response cannot OOM the agent
+            # before the truncation at max_chars runs.
+            max_bytes = 2 * 1024 * 1024  # 2 MB hard ceiling
+            chunks: list[bytes] = []
+            total = 0
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    if total >= max_bytes:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            content = b"".join(chunks).decode("utf-8", errors="replace")
 
-        content = resp.text
         max_chars = 10_000
         if len(content) > max_chars:
             content = content[:max_chars] + f"\n[truncated at {max_chars} chars]"
