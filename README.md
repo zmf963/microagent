@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-432%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-527%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~9,300 LOC**, **34 built-in tools**, **63 public API symbols**, **432 unit tests**.
+**~9,900 LOC**, **34 built-in tools**, **63 public API symbols**, **527 unit tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -434,7 +434,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 432 passed, 1 skipped
+# 527 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
