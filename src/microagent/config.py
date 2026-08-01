@@ -10,9 +10,12 @@ CLI args:    --base-url, --api-key, --model, --system-prompt
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 from .llm.client import LLMConfig
 from .llm.templates import DEFAULT_TEMPLATE
@@ -86,7 +89,11 @@ class Config:
             import yaml
 
             data = yaml.safe_load(path.read_text()) or {}
-        except Exception:
+        except Exception as e:
+            # A malformed/permission-denied config file silently fell back
+            # to defaults — the user's API key/model/base_url vanished with
+            # no warning, and the agent connected to the wrong endpoint.
+            _logger.warning("Failed to read config file %s: %r", path, e)
             return {}
 
         model_section = data.get("model", {})

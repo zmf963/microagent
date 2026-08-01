@@ -29,8 +29,12 @@ class StreamingContextScrubber:
 
         while self._buffer:
             if self._in_span:
-                # Look for closing tag
-                close_idx = self._buffer.find(_CLOSE_TAG)
+                # Look for closing tag (case-insensitive — LLMs often
+                # echo the fence with different capitalization, e.g.
+                # </Context> or </CONTEXT>, which would never close the
+                # span and discard all subsequent output).
+                lower_buf = self._buffer.lower()
+                close_idx = lower_buf.find(_CLOSE_TAG)
                 if close_idx == -1:
                     # Still inside span — discard everything, keep buffer for tag matching
                     # Keep last len(close_tag)-1 chars in case tag is split
@@ -44,8 +48,9 @@ class StreamingContextScrubber:
                     self._in_span = False
                     continue
             else:
-                # Look for opening tag
-                open_idx = self._buffer.find(_OPEN_TAG)
+                # Look for opening tag (case-insensitive)
+                lower_buf = self._buffer.lower()
+                open_idx = lower_buf.find(_OPEN_TAG)
                 if open_idx == -1:
                     # No opening tag — but check for partial match at end
                     partial = self._check_partial_open()

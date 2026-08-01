@@ -13,8 +13,11 @@ from ...core.types import ToolResult
 _IGNORE_DIRS = frozenset({
     "__pycache__", ".git", ".venv", "venv", "node_modules",
     ".pytest_cache", ".ruff_cache", ".mypy_cache", "dist", "build",
-    ".eggs", "*.egg-info",
+    ".eggs",
 })
+# Note: "*.egg-info" was in this set but is dead code — the membership test
+# on line 47 does exact matching, and no directory is literally named
+# "*.egg-info". The .endswith(".egg-info") check below handles it.
 
 
 @tool(
@@ -42,15 +45,18 @@ async def file_tree(
         except OSError:
             return
 
-        for i, entry in enumerate(entries):
-            # Skip ignored directories
-            if entry.is_dir() and entry.name in _IGNORE_DIRS:
-                continue
-            # Skip egg-info pattern
-            if entry.name.endswith(".egg-info"):
-                continue
+        # Filter out ignored entries BEFORE computing is_last, so the tree
+        # connectors are correct. (Previously is_last was computed from the
+        # pre-filter index — if the last raw entry was skipped, no visible
+        # entry got is_last=True, producing wrong └──/├── connectors.)
+        visible = [
+            e for e in entries
+            if not (e.is_dir() and e.name in _IGNORE_DIRS)
+            and not e.name.endswith(".egg-info")
+        ]
 
-            is_last = i == len(entries) - 1
+        for i, entry in enumerate(visible):
+            is_last = i == len(visible) - 1
             connector = "└── " if is_last else "├── "
 
             if entry.is_dir():

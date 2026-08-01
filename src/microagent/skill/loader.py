@@ -166,7 +166,15 @@ def _parse_skill_md(path: Path, namespace: str = "claude") -> Skill | None:
         return None
     try:
         front = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        # Log instead of silently returning None — a single corrupted
+        # frontmatter key used to make the entire skill vanish with zero
+        # indication of why. The quoting fix prevented the most common
+        # trigger, but any YAML error still hides the skill.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Skipping malformed SKILL.md frontmatter in %s: %s", path, e
+        )
         return None
 
     triggers_raw = front.get("triggers", [])

@@ -20,22 +20,25 @@ async def write_file(
     backup: Annotated[bool, Field(description="If True, create a .bak copy of existing file before overwriting")] = False,
 ) -> ToolResult:
     MAX_FILE_SIZE = 10_000_000  # 10 MB
+    content_bytes_len = len(content.encode("utf-8"))
 
-    if len(content) > MAX_FILE_SIZE:
+    if content_bytes_len > MAX_FILE_SIZE:
         return ToolResult.error(
-            f"content too large: {len(content)} bytes exceeds {MAX_FILE_SIZE} limit"
+            f"content too large: {content_bytes_len} bytes exceeds {MAX_FILE_SIZE} limit"
         )
 
     p = Path(path).expanduser().resolve()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create backup if requested and file exists
+        # Create backup if requested and file exists.
+        # Use read_bytes/write_bytes so binary files don't crash on
+        # UnicodeDecodeError (read_text assumes UTF-8).
         if backup and p.exists():
             bak = p.with_suffix(p.suffix + ".bak")
-            bak.write_text(p.read_text())
+            bak.write_bytes(p.read_bytes())
 
         p.write_text(content)
-        return ToolResult.ok(f"wrote {len(content)} bytes to {p}")
+        return ToolResult.ok(f"wrote {content_bytes_len} bytes to {p}")
     except Exception as e:
         return ToolResult.error(f"failed to write: {e!r}")

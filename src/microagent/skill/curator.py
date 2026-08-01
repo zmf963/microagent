@@ -94,9 +94,32 @@ class Curator:
     def _load_usage(usage_file: Path) -> dict:
         if not usage_file.exists():
             return {}
-        return json.loads(usage_file.read_text())
+        try:
+            return json.loads(usage_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            # A truncated usage.json (crashed write, OOM, power loss) used
+            # to crash run_once on every subsequent run, requiring manual
+            # deletion to recover. Treat corruption as a fresh start.
+            return {}
 
     @staticmethod
     def _save_usage(usage_file: Path, data: dict) -> None:
         usage_file.parent.mkdir(parents=True, exist_ok=True)
-        usage_file.write_text(json.dumps(data, indent=2))
+        # Atomic write: write to a temp file then os.replace() so a crash
+        # mid-write doesn't leave a truncated JSON that would crash every
+        # subsequent curator run (see _load_usage).
+        import os as _os
+        import tempfile as _tf
+        fd, tmp_path = _tf.mkstemp(
+            dir=str(usage_file.parent), suffix=".tmp", prefix=".usage_",
+        )
+        try:
+            with _os.fdopen(fd, "w") as f:
+                f.write(json.dumps(data, indent=2))
+            _os.replace(tmp_path, str(usage_file))
+        except Exception:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
