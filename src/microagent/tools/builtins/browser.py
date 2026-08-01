@@ -92,6 +92,43 @@ def _require_page() -> Page:
 # ---------------------------------------------------------------------------
 
 
+# Console interceptor JS, installed via page.add_init_script so it runs
+# BEFORE any page document loads and survives client-side navigations / SPA
+# route changes. Wraps console.log/warn/error/info/debug into a captured
+# buffer that browser_console can read. Guards JSON.stringify against
+# circular structures (DOM elements, event objects) so logging them does
+# not throw back into page code.
+_CONSOLE_INTERCEPTOR_JS = r"""
+window.__microagent_console = [];
+(function () {
+    var orig = {
+        log: console.log, warn: console.warn, error: console.error,
+        info: console.info, debug: console.debug,
+    };
+    function safeStringify(a) {
+        if (typeof a === 'object' && a !== null) {
+            try { return JSON.stringify(a); }
+            catch (e) { return String(a); }
+        }
+        return String(a);
+    }
+    for (var level in orig) {
+        (function (level, fn) {
+            console[level] = function () {
+                var args = Array.prototype.slice.call(arguments);
+                window.__microagent_console.push({
+                    level: level,
+                    text: args.map(safeStringify).join(' '),
+                    ts: Date.now()
+                });
+                fn.apply(console, args);
+            };
+        })(level, orig[level]);
+    }
+})();
+"""
+
+
 @tool("browser_navigate", description="Open a URL in the browser. Must be called first.")
 async def browser_navigate(
     url: Annotated[str, Field(description="URL to navigate to")],
@@ -108,26 +145,12 @@ async def browser_navigate(
             await state.page.close()
         state.page = await browser.new_page()
 
-        # Inject console capture — intercepts console.* calls into
-        # window.__microagent_console so browser_console can read them.
-        await state.page.evaluate("""() => {
-            window.__microagent_console = [];
-            const orig = {
-                log: console.log, warn: console.warn, error: console.error,
-                info: console.info, debug: console.debug,
-            };
-            for (const [level, fn] of Object.entries(orig)) {
-                console[level] = function() {
-                    window.__microagent_console.push({
-                        level, text: Array.from(arguments).map(a =>
-                            typeof a === 'object' ? JSON.stringify(a) : String(a)
-                        ).join(' '),
-                        ts: Date.now()
-                    });
-                    fn.apply(console, arguments);
-                };
-            }
-        }""")
+        # Install the console interceptor as an init script so Playwright
+        # re-runs it on every navigation BEFORE page scripts execute.
+        # (Previously this was injected via page.evaluate() on about:blank,
+        #  then page.goto() replaced the document and silently destroyed the
+        #  interceptor — browser_console never captured anything.)
+        await state.page.add_init_script(_CONSOLE_INTERCEPTOR_JS)
 
         await state.page.goto(url, timeout=30000)
         title = await state.page.title()
