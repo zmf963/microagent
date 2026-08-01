@@ -811,6 +811,38 @@ async def _cmd_cost(state: ReplState, arg: str) -> None:
     console.print(tracker.summary())
 
 
+async def _cmd_models(state: ReplState, arg: str) -> None:
+    """Show current model pricing or refresh the cache.
+
+    /models           — show the active model's pricing + context window
+    /models <name>    — look up pricing for a specific model
+    /models refresh   — re-download the models.dev catalog
+    /models count     — show how many models are in the cache
+    """
+    from ..llm import pricing as _pricing
+
+    arg = (arg or "").strip()
+    if arg == "refresh":
+        console.print("[dim]Refreshing models.dev catalog…[/]")
+        n = await asyncio.to_thread(_pricing.refresh)
+        console.print(f"[success]✓[/] Cache refreshed: {n} models")
+        return
+    if arg == "count":
+        _pricing._load_cache()
+        console.print(f"{len(_pricing._cache)} models in cache")
+        return
+
+    model = arg or state.agent.runner.llm.config.model
+    inp, out = _pricing.get_pricing(model)
+    ctx = _pricing.get_context_window(model)
+    cost_per_1m = f"${inp:.4f}/1M in  ${out:.4f}/1M out"
+    console.print(
+        f"[info]{model}[/info]\n"
+        f"  pricing:  {cost_per_1m}\n"
+        f"  context:  {ctx:,} tokens"
+    )
+
+
 async def _cmd_help(state: ReplState, arg: str) -> None:
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("Command", style="dim")
@@ -854,6 +886,7 @@ _COMMANDS: dict[str, tuple] = {
     "skill": (_cmd_skill, "Manage skills (/skill list|load|unload)"),
     "clear": (_cmd_clear, "Clear the screen"),
     "cost": (_cmd_cost, "Show token usage and cost for this session"),
+    "models": (_cmd_models, "Show model pricing (/models [name|refresh|count])"),
     "plan": (_cmd_plan, "Switch to plan mode (read-only tools)"),
     "build": (_cmd_build, "Switch to build mode (all tools)"),
     "thinking": (_cmd_thinking, "Toggle reasoning display (/thinking [on|off])"),

@@ -26,73 +26,14 @@ from ..core.types import (
 )
 
 # ---------------------------------------------------------------------------
-# Model pricing (USD per 1M tokens)
+# Model pricing + context windows — delegated to the pricing module, which
+# reads a local cache seeded from models.dev (see llm/pricing.py). The
+# legacy hand-maintained tables are kept only as a final fallback for the
+# handful of model ids the cache doesn't carry; the cache is the source of
+# truth for the long tail (364 models as of the seed).
 # ---------------------------------------------------------------------------
 
-_MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # (input_price_per_1M, output_price_per_1M)
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4-turbo": (10.00, 30.00),
-    "gpt-3.5-turbo": (0.50, 1.50),
-    "claude-sonnet-4": (3.00, 15.00),
-    "claude-haiku": (0.25, 1.25),
-    "deepseek-v3": (0.27, 1.10),
-    "deepseek-r1": (0.55, 2.19),
-    "glm-4": (0.50, 0.50),
-    "oc-d4f": (0.0, 0.0),
-    "tx-d4f": (0.0, 0.0),
-    "tx-d4p": (0.0, 0.0),
-}
-
-
-def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate USD cost from token counts and model pricing.
-
-    Falls back to a conservative $0.50 / 1M tokens for unknown models
-    rather than returning 0.0 (which would make Budget cost tracking
-    silently ineffective).
-    """
-    prices = _MODEL_PRICING.get(model)
-    if prices is None:
-        for prefix, p in _MODEL_PRICING.items():
-            if model.startswith(prefix):
-                prices = p
-                break
-    if prices is None:
-        # Conservative fallback — prevents cost-unaware Budget runaway
-        prices = (0.50, 0.50)
-    input_price, output_price = prices
-    return (input_tokens / 1_000_000) * input_price + (output_tokens / 1_000_000) * output_price
-
-
-# ---------------------------------------------------------------------------
-# Model context windows (tokens) — for adaptive compression thresholds
-# ---------------------------------------------------------------------------
-
-_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    "gpt-4o": 128_000,
-    "gpt-4o-mini": 128_000,
-    "gpt-4-turbo": 128_000,
-    "gpt-3.5-turbo": 16_385,
-    "claude-sonnet-4": 200_000,
-    "claude-haiku": 200_000,
-    "claude-opus-4": 200_000,
-    "deepseek-v3": 128_000,
-    "deepseek-r1": 128_000,
-    "glm-4": 128_000,
-    "oc-d4f": 200_000,
-    "tx-d4f": 200_000,
-    "tx-d4p": 200_000,
-}
-
-
-def get_context_window(model: str) -> int:
-    """Return the context window size for a model (prefix match)."""
-    for prefix, window in _MODEL_CONTEXT_WINDOWS.items():
-        if model.startswith(prefix):
-            return window
-    return 128_000  # safe default
+from .pricing import estimate_cost as _estimate_cost, get_context_window
 
 
 # ---------------------------------------------------------------------------
