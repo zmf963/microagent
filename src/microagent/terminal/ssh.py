@@ -6,6 +6,7 @@ Requires: pip install microagent[ssh] (paramiko)
 from __future__ import annotations
 
 import asyncio
+import shlex
 from pathlib import Path
 
 from .backend import TerminalResult
@@ -47,9 +48,15 @@ class SSHTerminal:
 
         full_cmd = command
         if cwd:
-            full_cmd = f"cd {cwd} && {full_cmd}"
+            # Quote cwd/env values to prevent shell injection on the remote
+            # host. cwd/env can originate from LLM tool calls (prompt
+            # injection), so unquoted metacharacters (;, |, $, `) would
+            # execute on the remote. LocalTerminal is safe (structured
+            # args to create_subprocess_exec); SSHTerminal builds a raw
+            # shell string, so it must quote.
+            full_cmd = f"cd {shlex.quote(str(cwd))} && {full_cmd}"
         if env:
-            exports = " ".join(f"{k}={v}" for k, v in env.items())
+            exports = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
             full_cmd = f"{exports} {full_cmd}"
 
         client = paramiko.SSHClient()

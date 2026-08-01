@@ -69,14 +69,28 @@ async def mcp_connect(
             "mcp_connect: no active session runner."
         )
 
+    # Stable id for dedup (hash is per-process salted — use sha256 instead
+    # for cross-run stability and collision resistance).
+    import hashlib
+    if name.startswith("raw:"):
+        mgr_id = "raw_" + hashlib.sha256(command).hexdigest()[:16]
+    else:
+        mgr_id = name
+
+    managers = _get_managers()
+    # Idempotency: if already connected to this server, don't spawn a
+    # second subprocess — the first would be orphaned (its _task keeps
+    # running but is no longer tracked, leaking the npx/uvx process).
+    if mgr_id in managers:
+        return ToolResult.ok(f"MCP server '{mgr_id}' already connected (idempotent).")
+
     try:
         before_count = len(runner.registry.names)
         manager = await connect_mcp_stdio(command, runner.registry)
         after_count = len(runner.registry.names)
 
         # Keep manager alive for session lifetime
-        mgr_id = name if not name.startswith("raw:") else f"raw_{abs(hash(command))}"
-        _get_managers()[mgr_id] = manager
+        managers[mgr_id] = manager
 
         return ToolResult.ok(
             f"Connected to MCP server '{mgr_id}'. "

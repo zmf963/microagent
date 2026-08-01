@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape as _rich_escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.syntax import Syntax
@@ -462,7 +463,7 @@ async def _run_streaming(
                         if not thinking_started:
                             thinking_started = True
                             console.rule("[thinking]💭 thinking[/]", style="dim")
-                        console.print(f"[thinking]{event.text}[/]", end="", highlight=False)
+                        console.print(f"[thinking]{_rich_escape(event.text)}[/]", end="", highlight=False)
                 else:  # content
                     text_buffer.append(event.text)
                     if _status:
@@ -494,7 +495,7 @@ async def _run_streaming(
                 mark = "[tool.result.error]✗[/]" if event.is_error else "[tool.result.ok]✓[/]"
                 border = "red" if event.is_error else "green"
                 console.print(Panel(
-                    f"{mark} [dim]{summary}[/]",
+                    f"{mark} [dim]{_rich_escape(summary)}[/]",
                     border_style=border,
                     padding=(0, 1),
                     expand=False,
@@ -506,7 +507,7 @@ async def _run_streaming(
                     _status.stop()
                     _status = None
                 for line in (event.text or "").splitlines():
-                    console.print(f" [dim]┊[/] {line}")
+                    console.print(f" [dim]┊[/] {_rich_escape(line)}")
 
             elif isinstance(event, TurnComplete):
                 if _status:
@@ -529,7 +530,7 @@ async def _run_streaming(
                 if _status:
                     _status.stop()
                     _status = None
-                console.print(f"[error]✗[/] {event.reason}")
+                console.print(f"[error]✗[/] {_rich_escape(str(event.reason))}")
                 return
 
     try:

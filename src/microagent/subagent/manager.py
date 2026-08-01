@@ -62,7 +62,11 @@ DEFAULT_SUBAGENTS: tuple[SubagentSpec, ...] = (
             "efficiently and return a clear result."
         ),
         tools_allowed=(),
-        tools_blocked=("exit",),
+        # Block 'task' to prevent unbounded recursion: a general subagent
+        # that inherits the task tool can spawn task(general) → task(general)
+        # → ... with no depth cap, fanning out an expensive/wide tree before
+        # the budget exhausts. Matches the "context firewall" design intent.
+        tools_blocked=("exit", "task"),
         max_iterations=25,
         max_cost_usd=2.0,
     ),

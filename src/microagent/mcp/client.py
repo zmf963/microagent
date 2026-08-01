@@ -55,11 +55,15 @@ class _MCPConnectionManager:
     """
 
     def __init__(self, command: tuple[str, ...]):
+        # Store the executable and args separately — the MCP SDK's
+        # StdioServerParameters expects command: str (executable) and
+        # args: list[str] (arguments), NOT the full list as command.
         self._command = list(command)
         self._session: Any = None
         self._transport: Any = None
         self._task: asyncio.Task | None = None
         self._tools: list[dict] = []
+        self._connected: bool = False  # track connect state independent of tool count
 
     async def connect(self) -> None:
         """Start the MCP connection in a background task."""
@@ -70,12 +74,20 @@ class _MCPConnectionManager:
             raise ImportError("mcp package required. Install with: pip install mcp")
 
         async def _run_connection():
-            params = StdioServerParameters(command=self._command)
+            # Split command into executable + args for StdioServerParameters.
+            # The SDK model has command: str + args: list[str]; passing the
+            # full list as command causes a Pydantic ValidationError or, if
+            # coerced, loses the args entirely.
+            cmd_args = self._command[1:] if len(self._command) > 1 else []
+            params = StdioServerParameters(
+                command=self._command[0], args=cmd_args,
+            )
             async with stdio_client(params) as (read, write):
                 self._transport = (read, write)
                 async with ClientSession(read, write) as session:
                     self._session = session
                     await session.initialize()
+                    self._connected = True
                     tools_result = await session.list_tools()
                     self._tools = [
                         {
@@ -94,9 +106,11 @@ class _MCPConnectionManager:
 
         self._task = asyncio.create_task(_run_connection())
 
-        # Wait for initial connection + tool listing
+        # Wait for the connection to be established (NOT for tools to appear).
+        # A server that legitimately exposes 0 tools would otherwise trip the
+        # old `if self._tools:` check (falsy empty list → spurious timeout).
         for _ in range(50):  # 5 seconds max
-            if self._tools:
+            if self._connected:
                 break
             await asyncio.sleep(0.1)
         else:
