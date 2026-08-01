@@ -161,7 +161,7 @@ class LSPClient:
         self._initialized = True
 
         # Send initialized notification
-        self._notify("initialized", {})
+        await self._notify("initialized", {})
 
     async def ensure_open(self, filepath: str) -> str:
         """Send didOpen for a file, return its URI."""
@@ -172,7 +172,7 @@ class LSPClient:
             text = Path(filepath).read_text()
         except (OSError, UnicodeDecodeError):
             raise
-        self._notify("textDocument/didOpen", {
+        await self._notify("textDocument/didOpen", {
             "textDocument": {
                 "uri": uri,
                 "languageId": _detect_lang(filepath),
@@ -294,7 +294,7 @@ class LSPClient:
                 await asyncio.wait_for(
                     self._request("shutdown", {}), timeout=2.0
                 )
-            except (TimeoutError, Exception):
+            except Exception:
                 pass  # server unresponsive — fall through to kill
         # 2. cancel readers (no more responses to dispatch)
         for task in (self._reader_task, self._stderr_task):
@@ -302,19 +302,17 @@ class LSPClient:
                 task.cancel()
                 try:
                     await task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     pass
         # 3. exit notification + wait + kill
         if self._proc and self._proc.returncode is None:
             try:
-                self._notify("exit", {})
+                await self._notify("exit", {})
             except Exception:
                 pass
             try:
                 await asyncio.wait_for(self._proc.wait(), timeout=1.0)
-            except (TimeoutError, Exception):
+            except Exception:
                 try:
                     self._proc.kill()
                     await self._proc.wait()
@@ -345,15 +343,17 @@ class LSPClient:
             self._pending.pop(rid, None)
             raise
 
-    def _notify(self, method: str, params: dict) -> None:
+    async def _notify(self, method: str, params: dict) -> None:
+        """Send a JSON-RPC notification (no id, no response awaited).
+
+        All callers (start, ensure_open, shutdown) are async, so we await
+        _send directly. Previously this fired-and-forgot a Task via
+        create_task — the Task could be GC'd before stdin.drain() completed,
+        so the server never received 'exit' and shutdown stalled anyway,
+        defeating the whole shutdown-sequence fix.
+        """
         msg = json.dumps({"jsonrpc": "2.0", "method": method, "params": params})
-        # Notifications are fire-and-forget; schedule the drain but don't block.
-        # (Synchronous callers like shutdown() can't await here.)
-        try:
-            asyncio.get_running_loop().create_task(self._send(msg))
-        except RuntimeError:
-            # No running loop — best-effort sync write
-            self._send_sync(msg)
+        await self._send(msg)
 
     async def _send(self, msg: str) -> None:
         if self._proc and self._proc.stdin:
@@ -362,11 +362,6 @@ class LSPClient:
             # Apply backpressure — a huge didOpen payload would otherwise sit
             # in the in-memory write buffer and grow memory unbounded.
             await self._proc.stdin.drain()
-
-    def _send_sync(self, msg: str) -> None:
-        if self._proc and self._proc.stdin:
-            frame = f"Content-Length: {len(msg.encode())}\r\n\r\n{msg}"
-            self._proc.stdin.write(frame.encode())
 
     async def _drain_stderr(self) -> None:
         """Continuously drain stderr so the LSP server never blocks on a

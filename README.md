@@ -2,7 +2,7 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-527%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-526%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
 **~9,900 LOC**, **34 built-in tools**, **63 public API symbols**, **527 unit tests**.
@@ -434,7 +434,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 527 passed, 1 skipped
+# 526 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \

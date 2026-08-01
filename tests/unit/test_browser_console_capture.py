@@ -8,7 +8,9 @@ which Playwright re-runs before every navigation's scripts execute.
 
 Playwright is not installed in the unit-test environment, so these are
 structural/source-level assertions on the navigate tool and the
-interceptor JS. An end-to-end capture test lives under integration/.
+interceptor JS. The full end-to-end capture (navigate → page console.log
+→ browser_console reads it) requires Playwright and is not covered here;
+it should be added under integration/ when a browser is available.
 """
 
 import inspect

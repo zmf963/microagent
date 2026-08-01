@@ -154,11 +154,19 @@ class SessionRunner:
 
         # Kill background processes started via the `process` tool.
         # Without this, `process start` leaves orphan subprocesses that
-        # outlive the session and become zombies.
+        # outlive the session and become zombies. Use the process GROUP
+        # (process.py spawns with start_new_session=True) so grandchildren
+        # — the actual workload, not just /bin/sh — are terminated too.
+        # This mirrors process.py's own kill action.
+        import os as _os
+        import signal as _signal
         for sid, proc in list(self._proc_registry.procs.items()):
             if proc.returncode is None:
                 try:
-                    proc.kill()
+                    try:
+                        _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError, OSError):
+                        proc.kill()  # fallback: kill just the shell
                     await proc.wait()
                 except Exception:
                     pass

@@ -143,13 +143,7 @@ class Agent:
         # Close the store so SQLite connections / WAL files are released.
         # Library users who construct Agent directly (not via the CLI) would
         # otherwise leak a connection per agent. The CLI calls store.close()
-        # itself, but calling it twice is harmless (close() is idempotent).
-        store = getattr(self.runner, "store", None)
-        if store is not None and hasattr(store, "close"):
-            close = store.close
-            if callable(close):
-                result = close()
-                # close() may be sync or async; await if it returns a coroutine
-                import inspect as _inspect
-                if _inspect.isawaitable(result):
-                    await result
+        # itself too — sqlite3.Connection.close() is a documented no-op on a
+        # second call, so the double-close is harmless.
+        if self.runner.store is not None and hasattr(self.runner.store, "close"):
+            self.runner.store.close()

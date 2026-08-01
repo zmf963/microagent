@@ -140,6 +140,37 @@ async def test_grep_redos_pattern_times_out_not_hangs(tmp_path):
     assert not result.is_error
 
 
+def test_grep_search_with_alarm_falls_back_off_main_thread():
+    """Regression: signal.signal() raises ValueError outside the main
+    thread (embed scenario where asyncio runs in a worker). The old code
+    let this propagate and crash grep entirely — worse than no protection.
+    The fix falls back to an unprotected search."""
+    import threading
+    from microagent.tools.builtins.grep import _search_with_alarm
+    import re
+
+    regex = re.compile(r"hello")
+    result_holder = []
+    err_holder = []
+
+    def _in_worker():
+        try:
+            # This thread is NOT the main thread → signal.signal raises
+            # ValueError. The fix must catch it and return the real match.
+            result_holder.append(_search_with_alarm(regex, "hello world"))
+        except Exception as e:
+            err_holder.append(e)
+
+    t = threading.Thread(target=_in_worker)
+    t.start()
+    t.join()
+
+    assert not err_holder, f"off-main-thread search crashed: {err_holder}"
+    assert result_holder and result_holder[0] is not None, (
+        "off-main-thread fallback must still return the match"
+    )
+
+
 @pytest.mark.asyncio
 async def test_grep_skips_oversized_files(tmp_path):
     from microagent.tools.builtins.grep import _MAX_FILE_BYTES

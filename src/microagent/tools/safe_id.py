@@ -8,8 +8,8 @@ directory (path traversal → arbitrary file write / delete).
 
 from __future__ import annotations
 
-import re
 import hashlib
+import re
 from pathlib import Path
 
 # Safe id chars: alphanumerics, underscore, dash, dot. Rejects path
@@ -42,16 +42,3 @@ def safe_filename_from_id(id_str: str) -> str:
     """
     return hashlib.sha256(id_str.encode("utf-8")).hexdigest()[:32]
 
-
-def ensure_within(base: Path, candidate: Path) -> Path:
-    """Resolve candidate against base and assert the result stays inside base.
-
-    Defense in depth: even after is_safe_name(), verify the resolved path
-    has not escaped the intended directory (catches symlink escapes, etc.).
-    Raises ValueError if candidate resolves outside base.
-    """
-    base_resolved = base.resolve()
-    cand_resolved = candidate.resolve()
-    if not str(cand_resolved).startswith(str(base_resolved)):
-        raise ValueError(f"path escapes base directory: {candidate}")
-    return cand_resolved

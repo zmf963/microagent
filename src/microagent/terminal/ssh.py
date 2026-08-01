@@ -56,7 +56,11 @@ class SSHTerminal:
             # shell string, so it must quote.
             full_cmd = f"cd {shlex.quote(str(cwd))} && {full_cmd}"
         if env:
-            exports = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
+            # Quote both keys and values — env keys can be LLM-controlled in
+            # some flows; a key like "FOO; rm -rf ~" would inject without quoting.
+            exports = " ".join(
+                f"{shlex.quote(str(k))}={shlex.quote(str(v))}" for k, v in env.items()
+            )
             full_cmd = f"{exports} {full_cmd}"
 
         client = paramiko.SSHClient()

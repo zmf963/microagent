@@ -30,19 +30,39 @@ class _RegexTimeout(Exception):
 
 
 def _search_with_alarm(regex, line: str, seconds: int = 5):
-    """Search with a SIGALRM deadline (Unix). Returns the Match or None."""
+    """Search with a SIGALRM deadline (Unix, main thread only).
+
+    Returns the Match or None (None also means "timed out / not available").
+
+    Limitations (inherent to SIGALRM, documented here):
+      - Main thread only: signal.signal() raises ValueError when asyncio
+        runs in a non-main thread (embed scenario). Falls back to an
+        unprotected search in that case.
+      - Not concurrency-safe: SIGALRM is process-global, so two concurrent
+        grep calls inside one TaskGroup would clobber each other's alarm.
+        The runner dispatches tool calls concurrently, but in practice a
+        single agent rarely issues two greps in one turn; if it does, the
+        worst case is one grep's line runs without timeout protection.
+    """
     if not _HAS_SIGALRM:
         return regex.search(line)
-    old_handler = signal.getsignal(signal.SIGALRM)
     try:
+        old_handler = signal.getsignal(signal.SIGALRM)
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(_RegexTimeout()))
         signal.alarm(seconds)
         return regex.search(line)
     except _RegexTimeout:
         return None
+    except ValueError:
+        # signal.signal() raises ValueError outside the main thread.
+        # Fall back to an unprotected search rather than crashing grep.
+        return regex.search(line)
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+        try:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        except (ValueError, OSError):
+            pass
 
 
 @tool(

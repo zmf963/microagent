@@ -301,7 +301,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-527 tests, 1 skipped, 0 failures  —  ~5,100 / 9,900 = 52% test/code ratio
+526 passed, 1 skipped, 0 failures  —  ~5,100 / 9,900 = 52% test/code ratio
 ```
 
 | 测试文件 | 覆盖 |

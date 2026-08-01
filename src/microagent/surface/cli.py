@@ -476,8 +476,8 @@ async def _run_streaming(
                     _status = None
                 args = _short_args(event.arguments)
                 console.print(Panel(
-                    f"[tool.args]{args}[/]",
-                    title=f"[tool.title]🔧 {event.name}[/]",
+                    f"[tool.args]{_rich_escape(args)}[/]",
+                    title=f"[tool.title]🔧 {_rich_escape(event.name)}[/]",
                     title_align="left",
                     border_style="cyan",
                     padding=(0, 1),
