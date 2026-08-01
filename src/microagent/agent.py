@@ -133,10 +133,23 @@ class Agent:
             asyncio.run(self.runner.steer(text))
 
     async def close(self) -> None:
-        """Clean up all resources (cron, runner, LLM client)."""
+        """Clean up all resources (cron, runner, LLM client, store)."""
         if self.cron is not None:
             await self.cron.stop()
         await self.runner.close()
         # Close the LLM client if it supports close()
         if hasattr(self.runner.llm, "close"):
             await self.runner.llm.close()
+        # Close the store so SQLite connections / WAL files are released.
+        # Library users who construct Agent directly (not via the CLI) would
+        # otherwise leak a connection per agent. The CLI calls store.close()
+        # itself, but calling it twice is harmless (close() is idempotent).
+        store = getattr(self.runner, "store", None)
+        if store is not None and hasattr(store, "close"):
+            close = store.close
+            if callable(close):
+                result = close()
+                # close() may be sync or async; await if it returns a coroutine
+                import inspect as _inspect
+                if _inspect.isawaitable(result):
+                    await result

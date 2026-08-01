@@ -269,6 +269,13 @@ class SessionRunner:
 
         self._overflow_retried = False
         self._interrupt_requested = False
+        # Reset anti-jitter counter once per user turn (not per loop
+        # iteration). Previously this lived inside the while loop, so the
+        # counter was reset on every tool-call iteration — it could never
+        # reach the skip threshold, and ineffective compression retried
+        # every iteration, burning LLM tokens / budget.
+        if hasattr(self, "_compaction_state"):
+            self._compaction_state.reset_for_new_turn()
 
         while not self.budget.exhausted:
             if self._interrupt_requested:
@@ -324,10 +331,6 @@ class SessionRunner:
                     except BudgetExceeded as e:
                         yield TurnFailed(f"budget exhausted during compaction: {e}")
                         return
-
-            # Reset anti-jitter counter on new user input
-            if hasattr(self, "_compaction_state"):
-                self._compaction_state.reset_for_new_turn()
 
             system = self.system_prompt
 
@@ -523,11 +526,14 @@ class SessionRunner:
                                 yield TurnFailed("LLM overflow recovery failed after retry")
                                 return
 
-                        # Content was streamed (truncation) — fail
+                        # Content was streamed (truncation) — fail.
+                        # Do NOT persist partial tool_calls: they would be
+                        # orphaned (no matching tool results), and the OpenAI
+                        # API rejects the next turn with "messages must contain
+                        # tool results for all tool calls". Keep only the text.
                         if content_parts:
                             assistant_msg = Message.assistant(
                                 text="".join(content_parts),
-                                tool_calls=tuple(tool_calls),
                                 usage=usage,
                             )
                             messages.append(assistant_msg)
@@ -608,12 +614,18 @@ class SessionRunner:
                     is_error=result.is_error,
                 )
 
-            # Inject steer text into the last tool_result if pending
+            # Inject steer text into the last tool_result if pending.
+            # NOTE: the modified message is in-memory only — we do NOT
+            # store.append() it, because that would persist a second tool
+            # message with the same tool_call_id and corrupt the session
+            # (OpenAI API rejects duplicate tool_call_id on resume). The
+            # original tool result stays in the store unchanged; the steer
+            # is a live intervention (like interrupt), not persisted state.
             if self._steer_pending is not None and messages:
                 steer_text = self._steer_pending
                 self._steer_pending = None
                 yield SteerEvent(text=steer_text)
-                # Find last tool message and append steer text
+                # Find last tool message and append steer text (in-memory only)
                 for i in range(len(messages) - 1, -1, -1):
                     if messages[i].role == "tool":
                         messages[i] = Message(
@@ -621,8 +633,6 @@ class SessionRunner:
                             content=messages[i].content + f"\n\n[steer] {steer_text}",
                             tool_call_id=messages[i].tool_call_id,
                         )
-                        if self.store is not None:
-                            await self.store.append(self.session_id, messages[i])
                         break
 
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")
@@ -638,15 +648,32 @@ class SessionRunner:
             try:
                 from ..tools.builtins import browser as _br_module
                 from ..tools.builtins import lsp as _lsp_module
+                from ..tools.builtins import mcp_connect as _mcp_module
                 from ..tools.builtins import process as _proc_module
+                from ..tools.builtins import skills_list as _sl_mod
                 from ..tools.builtins import task as _task_module
                 from ..tools.builtins import todo_plan_exit as _tpe_module
 
+                # Re-bind ALL per-session ContextVars per task. anyio
+                # start_soon copies the current context, but if two
+                # SessionRunners were created in the same context (the common
+                # pattern), the second __init__ overwrites the first's values
+                # in the shared context. _settle runs inside each task's own
+                # copy, so setting here ensures isolation. Previously
+                # _current_store and _current_loader were missed (set only
+                # in __init__), causing session_search and skills_list to
+                # cross-contaminate between concurrent sessions.
                 _proc_module._current_registry.set(self._proc_registry)
                 _tpe_module._current_state.set(self._session_state)
                 _br_module._current_state.set(self._browser_state)
                 _lsp_module._current_state.set(self._lsp_state)
                 _task_module._current_runner.set(self)
+                _mcp_module._current_managers.set(self._mcp_managers)
+                if self.store is not None:
+                    from ..tools.builtins import session_search as _ss
+                    _ss._current_store.set(self.store)
+                if self.skill_loader is not None:
+                    _sl_mod._set_loader(self.skill_loader)
 
                 modified = call
                 for hook in self.tool_hooks:

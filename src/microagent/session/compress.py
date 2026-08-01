@@ -152,8 +152,27 @@ def estimate_tokens(text: str) -> int:
 
 
 def count_tokens(messages: tuple[Message, ...]) -> int:
-    """Sum estimated tokens across all messages."""
-    return sum(estimate_tokens(m.content or "") for m in messages)
+    """Sum estimated tokens across all messages.
+
+    Includes tool_calls and tool_call_id overhead — an assistant message
+    with 5 tool calls (each with id, name, JSON args) can represent
+    hundreds of API tokens even when content is empty. Ignoring them
+    caused count_tokens to severely underestimate actual usage, making
+    the compression threshold fire too late (context overflow / API error).
+    """
+    import json
+    total = 0
+    for m in messages:
+        total += estimate_tokens(m.content or "")
+        # Account for serialized tool_calls (id + function name + args)
+        if m.tool_calls:
+            for tc in m.tool_calls:
+                total += estimate_tokens(json.dumps({
+                    "id": tc.id, "name": tc.name, "arguments": tc.arguments,
+                }))
+        # role + tool_call_id framing overhead (~4 tokens)
+        total += 4
+    return total
 
 
 # ---------------------------------------------------------------------------
