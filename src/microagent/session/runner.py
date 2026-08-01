@@ -488,6 +488,13 @@ class SessionRunner:
                 elif isinstance(event, ToolCallDelta):
                     tc = ToolCall(id=event.id, name=event.name, arguments=event.arguments)
                     tool_calls.append(tc)
+                    # Forward to consumers so the CLI's 🔧 tool-call panel
+                    # can render the tool name + args BEFORE execution (the
+                    # ✓ result panel follows once the tool runs). Previously
+                    # this was consumed but not re-yielded, making the panel
+                    # handler dead code — same class as the Usage-swallow bug
+                    # fixed in 6c24b81.
+                    yield event
                 elif isinstance(event, Usage):
                     usage = event
                 elif isinstance(event, StreamDone):
