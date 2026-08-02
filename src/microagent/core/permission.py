@@ -7,6 +7,15 @@ Design (from design doc §4):
 - Rules are matched top-to-bottom; first match wins.
 - Default policy: DENY (if no rule matches).
 - ASK delegates to an ask_callback (CLI/Web injects one).
+
+**Library extension point — NOT wired into SessionRunner by default.**
+The core loop (``SessionRunner.run_turn`` / ``_settle``) does not invoke
+``PermissionEngine.evaluate``; tool calls bypass permission enforcement
+unless a library user explicitly wires it in (e.g., via a ``ToolHook.before``
+that calls ``engine.evaluate(call)`` and returns ``None`` to deny). The
+CLI/REPL runs without permission enforcement. To enforce: construct a
+``PermissionEngine`` with your rules and call ``evaluate()`` from a
+``ToolHook`` passed to ``SessionRunner(tool_hooks=[...])``.
 """
 
 from __future__ import annotations

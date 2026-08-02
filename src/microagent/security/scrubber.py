@@ -2,6 +2,12 @@
 
 Prevents the LLM from echoing injected context fence content back to the user.
 Stateful: handles fence content split across multiple feed() calls.
+
+**Library extension point — NOT applied by the CLI by default.** The
+surface CLI emits TextDelta events directly to Rich without scrubbing
+``<context>...</context>`` fences. Library users streaming TextDelta
+events to untrusted viewers should wrap their consumer:
+``safe = scrubber.feed(chunk)`` before display/forwarding.
 """
 
 from __future__ import annotations

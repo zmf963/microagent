@@ -2,6 +2,13 @@
 
 Provides a unified interface for running shell commands across
 different execution environments.
+
+**Library extension point — NOT used by the default bash tool.** The
+``bash`` builtin (tools/builtins/bash.py) uses ``asyncio.create_subprocess_shell``
+directly. ``LocalTerminal`` / ``DockerTerminal`` / ``SSHTerminal`` are
+for library users who need SSH or container-isolated execution; wire
+them in by replacing the bash tool with one that delegates to a
+TerminalBackend, or by injecting a TerminalBackend via a custom tool.
 """
 
 from __future__ import annotations
