@@ -65,6 +65,25 @@ Cost is displayed in CNY (¥) by default. Override the exchange rate:
 export MICROAGENT_CURRENCY_RATE=7.35  # CNY per 1 USD (default 7.20)
 ```
 
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/new` | Start a new session |
+| `/list` | List saved sessions |
+| `/resume [id]` | Resume last or specific session |
+| `/compact` | Manually compress current conversation |
+| `/model [name]` | Show or switch model |
+| `/models [name\|refresh\|count]` | Show model pricing (CNY), refresh cache, or count |
+| `/cost` | Show session token usage + cost summary |
+| `/history` | Show message history for current session |
+| `/skill list\|load\|unload` | Manage skills |
+| `/plan` | Switch to plan mode (read-only tools) |
+| `/build` | Switch to build mode (all tools) |
+| `/thinking [on\|off]` | Toggle reasoning/thinking display |
+| `/clear` | Clear the screen |
+| `/help` | Show available commands |
+
 ---
 
 ## Usage Guide
@@ -137,6 +156,8 @@ async for event in runner.run_turn(messages):
 
 ### Permissions
 
+> **Library extension point.** `PermissionEngine` is NOT wired into `SessionRunner` by default — tool calls bypass permission enforcement unless a library user wires it in via a `ToolHook.before`. The CLI runs without permission enforcement.
+
 ```python
 from microagent import PermissionEngine, Rule, Decision, ScriptRule
 
@@ -148,7 +169,7 @@ engine = PermissionEngine(rules=(
     Rule("write_file", {}, Decision.DENY),                    # block all writes
 ))
 
-# External script rule: delegates to a Python script
+# External script rule: delegates to a Python script (stdout "allow"/"deny")
 engine = PermissionEngine(rules=(
     ScriptRule("*", {}, script="./audit.py", timeout=5.0),   # every tool call
 ))
@@ -159,6 +180,16 @@ async def ask_user(call, rule):
     return Decision.ALLOW if answer.lower() == "y" else Decision.DENY
 
 engine = PermissionEngine(rules=(...), ask_callback=ask_user)
+
+# Wire into SessionRunner via a ToolHook:
+class PermissionHook:
+    def __init__(self, engine): self.engine = engine
+    async def before(self, call, ctx):
+        decision = await self.engine.evaluate(call, ctx)
+        return call if decision.decision is Decision.ALLOW else None  # None denies
+    async def after(self, call, result, ctx): return result
+
+runner = SessionRunner(llm=..., registry=..., tool_hooks=(PermissionHook(engine),))
 ```
 
 ### Subagents
@@ -261,12 +292,12 @@ except BudgetExceeded:
 ```python
 from microagent import PreLLMHook, ToolHook, ContextSource, EventBus
 
-# Transform system prompt before LLM call
+# Transform the system prompt string before the LLM call
 class AddContextHook:
     async def __call__(self, ctx):
         return ctx + "\nAdditional context here."
 
-# Intercept tool calls
+# Intercept tool calls (return None from before() to deny)
 class AuditHook:
     async def before(self, call, ctx):
         print(f"About to run: {call.name}({call.arguments})")
@@ -276,7 +307,8 @@ class AuditHook:
         print(f"Result: {result.content[:100]}")
         return result
 
-# Inject extra content into system prompt
+# Inject extra content into the USER message (per ADR-0005 the system
+# prompt is frozen; ContextSource appends to the user turn)
 class GitSource:
     async def contribute(self, ctx):
         return f"\ngit: main branch, 3 files changed"
@@ -363,7 +395,7 @@ await scheduler.stop()
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Surface Layer (CLI / TUI / Web)                │
+│  Surface Layer (Rich CLI with /slash commands)  │
 ├─────────────────────────────────────────────────┤
 │  Plugin Layer (PreLLMHook / ToolHook / Context) │
 ├─────────────────────────────────────────────────┤
@@ -374,24 +406,26 @@ await scheduler.stop()
 │  └──────────┴──────────┴──────────┴──────────┘ │
 ├─────────────────────────────────────────────────┤
 │  Core (types / permission / store / event /     │
-│        budget tree / LLM client)                │
+│        budget tree / LLM client / pricing)      │
 └─────────────────────────────────────────────────┘
 ```
 
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
-| `core/` | 5 | 969 | types, tool registry, permission, store, event bus |
-| `tools/` | 25 | 2155 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) |
-| `session/` | 5 | 1341 | runner loop, compression pyramid, budget, attachments, search |
-| `memory/` | 2 | 345 | FTS5 memory provider, LLM extractor |
-| `skill/` | 2 | 258 | Claude skill loader, curator |
-| `terminal/` | 2 | 266 | local + docker + SSH backends |
-| `surface/` | 1 | 369 | CLI REPL with /slash commands |
-| `llm/` | 2 | 382 | OpenAI-compatible client, credential pool |
-| `subagent/` | 1 | 159 | subagent manager with isolated budgets |
-| `cron/` | 1 | 132 | APScheduler-based cron jobs |
-| `mcp/` | 2 | 256 | MCP client + catalog |
-| `plugin/` | 1 | 36 | 3 extension Protocols |
+| `core/` | 6 | 1131 | types, tool registry, permission, store, event bus |
+| `tools/` | 28 | 3058 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
+| `session/` | 6 | 1905 | runner loop, 4-layer compression, budget, attachments, search |
+| `memory/` | 3 | 350 | FTS5 memory provider, LLM extractor |
+| `skill/` | 3 | 353 | Claude skill loader, curator lifecycle |
+| `surface/` | 2 | 888 | Rich CLI REPL with /slash commands (/models, /cost, /compact, …) |
+| `llm/` | 5 | 774 | OpenAI client, credential pool, models.dev pricing cache, templates |
+| `terminal/` | 2 | 286 | local + docker + SSH backends (library extension point) |
+| `mcp/` | 3 | 270 | MCP stdio client + catalog |
+| `cron/` | 2 | 248 | APScheduler-based cron jobs |
+| `security/` | 3 | 173 | streaming context scrubber, injection patterns (library extension point) |
+| `subagent/` | 2 | 190 | subagent manager with isolated budgets |
+| `plugin/` | 2 | 46 | 3 extension Protocols (PreLLMHook, ToolHook, ContextSource) |
+| top-level | 2 | 460 | Agent facade, Config resolver, currency helper |
 
 ## Built-in Tools
 
@@ -458,17 +492,18 @@ python -m pytest tests/integration/ -v -m integration
 
 ## Key Features
 
-- **OpenAI-compatible LLM** — any `/v1/chat/completions` endpoint
-- **Accurate cost tracking** — models.dev pricing cache (364 models), CNY (¥) display, `/models` command
-- **Tree-shaped budget** — `spawn()` with shared cancel_event, descendants tracking
+- **OpenAI-compatible LLM** — any `/v1/chat/completions` endpoint (vLLM, Ollama, local-gateway, OpenRouter, etc.)
+- **Accurate cost tracking** — models.dev pricing cache (364 models, auto-refreshable), CNY (¥) display via `MICROAGENT_CURRENCY_RATE`, `/models` + `/cost` CLI commands
+- **34 built-in tools** — read/write/edit, bash, grep/glob, browser automation (10 Playwright tools), LSP (Python/TS/Rust/Go/C++), web search/fetch, MCP connect, vision, session search, todo/plan, and more
+- **Tree-shaped budget** — `spawn()` with shared cancel_event, descendants tracking, `consume_usage()` helper
+- **4-layer compression** — micro-compact → snip → LLM summary → circuit breaker; incremental summaries with file-attachment recovery
 - **Self-improving loop** — `skill_manage` tool + `Curator` lifecycle (Hermes-style)
-- **Dual-track testing** — `FakeLLMClient` (unit) + real API (integration)
-- **FTS5 memory** — zero-dependency SQLite full-text search
-- **Permission engine** — fnmatch rules + ScriptRule + ASK callback
-- **Subagent system** — isolated contexts, filtered toolsets, independent budgets
-- **Session persistence** — SQLite WAL store with checkpoint + resume
-- **Skills dual ecosystem** — Claude Code format + composite loader
-- **Extension points** — 3 Protocols + EventBus (zero overhead when unused)
+- **Subagent system** — isolated contexts, filtered toolsets, independent budgets, recursion-guarded
+- **Session persistence** — SQLite WAL store with checkpoint + resume + FTS5 search
+- **Skills dual ecosystem** — Claude Code SKILL.md format + composite loader with CJK-aware fuzzy matching
+- **Permission engine** — fnmatch rules + ScriptRule + ASK callback (library extension point, requires manual wiring)
+- **Extension points** — 3 Protocols (PreLLMHook, ToolHook, ContextSource) + EventBus (zero overhead when unused)
+- **Dual-track testing** — `FakeLLMClient` (553 unit tests) + real API (integration)
 
 ## License
 
