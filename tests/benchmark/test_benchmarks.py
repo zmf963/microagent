@@ -5,7 +5,6 @@ Benchmark tests are marked @pytest.mark.benchmark and skipped by default.
 Use --benchmark flag or run directly to execute.
 """
 
-import asyncio
 import time
 
 import pytest
@@ -13,14 +12,12 @@ import pytest
 from microagent.core.tool import ToolRegistry, _default_builtins
 from microagent.core.types import Message, ToolCall, ToolResult
 from microagent.session.compress import (
-    CompactionState,
     count_tokens,
     micro_compact,
     snip_tool_results,
 )
 from microagent.session.budget import Budget
 from microagent.session.runner import SessionRunner
-from tests.unit.fake_llm import FakeLLMClient, text_response, tool_response
 
 
 pytestmark = pytest.mark.benchmark

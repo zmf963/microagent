@@ -443,7 +443,6 @@ async def _run_streaming(
     async def _stream():
         nonlocal _status
         text_buffer: list[str] = []
-        pending_tool: tuple[str, dict] | None = None
         thinking_started = False
 
         async for event in agent.runner.run_turn(messages):
@@ -485,7 +484,6 @@ async def _run_streaming(
                     padding=(0, 1),
                     expand=False,
                 ))
-                pending_tool = (event.name, event.arguments)
                 _status = console.status("[dim]⠋ Running…[/]", spinner="dots")
                 _status.start()
 
@@ -502,7 +500,6 @@ async def _run_streaming(
                     padding=(0, 1),
                     expand=False,
                 ))
-                pending_tool = None
 
             elif isinstance(event, ToolProgressDelta):
                 if _status:

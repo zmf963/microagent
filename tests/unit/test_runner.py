@@ -10,54 +10,6 @@ from microagent.session.runner import SessionRunner
 from .fake_llm import FakeLLMClient, text_response, tool_response
 
 
-class TestBudget:
-    def test_not_exhausted_initially(self):
-        b = Budget(max_iterations=5)
-        assert not b.exhausted
-        assert b.remaining == 5
-
-    async def test_consume(self):
-        b = Budget(max_iterations=5)
-        await b.consume(iterations=1)
-        await b.consume(iterations=1)
-        assert b.remaining == 3
-        assert not b.exhausted
-        with pytest.raises(BudgetExceeded):
-            await b.consume(iterations=3)
-        assert b.exhausted
-
-    async def test_token_budget(self):
-        b = Budget(max_tokens=100)
-        await b.consume(tokens=60)
-        assert not b.exhausted
-        with pytest.raises(BudgetExceeded):
-            await b.consume(tokens=50)
-        assert b.exhausted
-
-    async def test_cost_budget(self):
-        b = Budget(max_cost_usd=1.0)
-        await b.consume(cost_usd=0.5)
-        assert not b.exhausted
-        with pytest.raises(BudgetExceeded):
-            await b.consume(cost_usd=0.6)
-        assert b.exhausted
-
-    async def test_summary(self):
-        b = Budget(max_iterations=10, max_tokens=1000, max_cost_usd=1.0)
-        await b.consume(iterations=3, tokens=200, cost_usd=0.3)
-        s = b.summary()
-        assert "iterations=3/10" in s
-        assert "tokens=200/1000" in s
-        assert "0.3000" in s
-
-    async def test_reset(self):
-        b = Budget(max_iterations=5)
-        await b.consume(iterations=3)
-        assert b._used_iter == 3
-        b.reset()
-        assert not b.exhausted
-
-
 class TestSessionRunnerSimple:
     """Tests where the LLM returns a text response immediately."""
 

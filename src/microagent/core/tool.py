@@ -47,11 +47,6 @@ class Tool(Protocol):
 
     async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult: ...
 
-
-# Sentinel to signal streaming completion
-_STREAM_END = object()
-
-
 # ---------------------------------------------------------------------------
 # FunctionTool — wraps a plain async function into a Tool
 # ---------------------------------------------------------------------------

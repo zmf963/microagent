@@ -24,7 +24,6 @@ from ..core.types import Message
 # Limits
 MAX_FILES = 3
 MAX_CHARS_PER_FILE = 3000
-_MAX_PREVIEW_CHARS = 500  # first 500 chars per file in prompt
 
 
 def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
@@ -67,8 +66,6 @@ def _parse_paths_from_string(text: str) -> list[str]:
     """
     if not text:
         return []
-
-    import re
 
     # Anchored paths: /foo/bar, ./foo/bar, ~/foo/bar, C:\foo\bar,
     # and unqualified relative paths: src/main.py, lib/util.go

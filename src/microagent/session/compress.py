@@ -16,9 +16,6 @@ Layer 3 — Structured LLM Summary (one API call):
 
 Layer 4 — Circuit Breaker:
     After 3 consecutive failures, stop compacting (300s cooldown).
-
-Layer 5 — Full Dump:
-    Append raw content of critical files verbatim (last-resort safety net).
 """
 
 from __future__ import annotations
@@ -26,7 +23,6 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..core.types import Message, TextDelta, Usage
@@ -678,46 +674,3 @@ def _ensure_role_alternation(
         result.append(msg)
         prev_role = msg.role
     return tuple(result)
-
-
-# ---------------------------------------------------------------------------
-# Layer 5: Full Dump — append critical raw file content verbatim
-# ---------------------------------------------------------------------------
-
-LAYER5_MAX_FILES = 3
-LAYER5_MAX_CHARS = 8000  # per file
-
-
-def layer5_full_dump(
-    messages: tuple[Message, ...],
-) -> tuple[Message, ...]:
-    """Layer 5 — append raw content of critical files as a fallback dump.
-
-    When L1-L4 compression still leaves insufficient context, this layer
-    reads the most recently referenced files and appends their raw content.
-    This mirrors Claude Code's L5 "full dump" — a high-token-cost safety
-    net that preserves file context when all else fails.
-    """
-    from .attachments import _extract_file_paths
-
-    files = _extract_file_paths(messages)
-    if not files:
-        return messages
-
-    parts: list[str] = []
-    count = 0
-    for fpath in list(files)[:LAYER5_MAX_FILES]:
-        try:
-            content = Path(fpath).expanduser().read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        if len(content) > LAYER5_MAX_CHARS:
-            content = content[:LAYER5_MAX_CHARS] + "\n...[truncated]..."
-        parts.append(f"=== {fpath} ===\n{content}")
-        count += 1
-
-    if not parts:
-        return messages
-
-    dump_msg = Message.user(f"[L5 Full Dump — {count} critical file(s)]\n\n" + "\n\n".join(parts))
-    return messages + (dump_msg,)

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
 
 # Safe id chars: alphanumerics, underscore, dash, dot. Rejects path
 # separators, '..', and anything that could escape a directory.

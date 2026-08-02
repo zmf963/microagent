@@ -7,7 +7,6 @@ import pytest
 
 from microagent.llm.client import LLMConfig, get_context_window, _estimate_cost
 from microagent.llm.templates import get_model_template, MODEL_TEMPLATES, build_system_prompt
-from microagent.tools.builtins.context_ref import parse_file_ref
 from microagent.core.permission import Rule, Decision, PermissionEngine, AskCallback
 from microagent.core.types import ToolCall
 
@@ -101,47 +100,6 @@ class TestAuxiliaryModel:
             auxiliary_model="cheap-model",
         )
         assert config.auxiliary_model == "cheap-model"
-
-
-class TestFileReference:
-    def test_parse_simple_file_ref(self):
-        """@file:path parses to a file path."""
-        result = parse_file_ref("@file:src/main.py")
-        assert result is not None
-        assert result.path == "src/main.py"
-        assert result.line_start is None
-
-    def test_parse_file_ref_with_line(self):
-        """@file:path:42 parses to path + line number."""
-        result = parse_file_ref("@file:src/main.py:42")
-        assert result is not None
-        assert result.path == "src/main.py"
-        assert result.line_start == 42
-
-    def test_parse_file_ref_with_line_range(self):
-        """@file:path:10-20 parses to path + line range."""
-        result = parse_file_ref("@file:src/main.py:10-20")
-        assert result is not None
-        assert result.path == "src/main.py"
-        assert result.line_start == 10
-        assert result.line_end == 20
-
-    def test_parse_non_file_ref_returns_none(self):
-        """Non-@file: strings return None."""
-        assert parse_file_ref("just text") is None
-        assert parse_file_ref("@git:hash") is None
-        assert parse_file_ref("@url:http://x") is None
-
-    async def test_file_ref_reads_content(self, tmp_path):
-        """FileRef.read() returns file content."""
-        from microagent.tools.builtins.context_ref import FileReference
-        test_file = tmp_path / "test.py"
-        test_file.write_text("line1\nline2\nline3\n")
-
-        ref = FileReference(path=str(test_file))
-        content = await ref.read()
-        assert "line1" in content
-        assert "line2" in content
 
 
 class TestPlanBuildMode:

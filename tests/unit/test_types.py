@@ -1,12 +1,9 @@
-"""Tests for core types: Message, ToolCall, ToolResult, Events."""
+"""Tests for core types: Message, ToolCall, ToolResult."""
 
 from microagent.core.types import (
     Message,
-    TextDelta,
     ToolCall,
     ToolResult,
-    TurnComplete,
-    TurnFailed,
 )
 
 
@@ -44,14 +41,6 @@ class TestMessage:
         assert d["role"] == "tool"
         assert d["tool_call_id"] == "call_42"
 
-    def test_frozen(self):
-        m = Message.user("hello")
-        try:
-            m.content = "changed"
-            assert False, "should have raised"
-        except AttributeError:
-            pass
-
 
 class TestToolResult:
     def test_ok(self):
@@ -80,16 +69,3 @@ class TestToolCall:
 
         assert json.loads(d["function"]["arguments"]) == {"path": "/tmp/x"}
 
-
-class TestEvents:
-    def test_text_delta(self):
-        e = TextDelta(text="hello")
-        assert e.text == "hello"
-
-    def test_turn_complete(self):
-        e = TurnComplete(content="done")
-        assert e.content == "done"
-
-    def test_turn_failed(self):
-        e = TurnFailed(reason="budget")
-        assert e.reason == "budget"

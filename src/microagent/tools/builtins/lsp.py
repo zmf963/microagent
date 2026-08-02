@@ -122,7 +122,6 @@ class LSPClient:
         self._stderr_task: asyncio.Task | None = None
         self._initialized = False
         self._open_files: set[str] = set()
-        self._capabilities: dict = {}
 
     async def start(self) -> None:
         """Launch the language server and perform initialize handshake."""
@@ -157,7 +156,6 @@ class LSPClient:
             },
             "workspaceFolders": [{"uri": self._root_uri, "name": Path(self._root_uri.replace("file://", "")).name}],
         })
-        self._capabilities = result.get("capabilities", {})
         self._initialized = True
 
         # Send initialized notification
@@ -168,12 +166,9 @@ class LSPClient:
         uri = Path(filepath).resolve().as_uri()
         if uri in self._open_files:
             return uri
-        try:
-            # Read in a thread — large files (multi-MB) would otherwise stall
-            # the event loop and all concurrent tool calls.
-            text = await asyncio.to_thread(Path(filepath).read_text)
-        except (OSError, UnicodeDecodeError):
-            raise
+        # Read in a thread — large files (multi-MB) would otherwise stall
+        # the event loop and all concurrent tool calls.
+        text = await asyncio.to_thread(Path(filepath).read_text)
         await self._notify("textDocument/didOpen", {
             "textDocument": {
                 "uri": uri,

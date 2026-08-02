@@ -44,7 +44,7 @@ from .memory.provider import Memory, MemoryProvider, SQLiteMemoryProvider
 from .plugin.types import ContextSource, PreLLMHook, ToolHook
 from .session.budget import Budget, BudgetExceeded
 from .session.runner import SessionRunner
-from .skill.curator import Curator, SkillUsage
+from .skill.curator import Curator
 from .skill.loader import ClaudeSkillLoader, CompositeSkillLoader, LoadedSkill, Skill, SkillLoader
 from .subagent.manager import DEFAULT_SUBAGENTS, SubagentManager, SubagentSpec
 from .terminal.backend import DockerTerminal, LocalTerminal, TerminalBackend, TerminalResult
@@ -119,7 +119,6 @@ __all__ = [
     "ClaudeSkillLoader",
     "CompositeSkillLoader",
     "Curator",
-    "SkillUsage",
     # Memory
     "Memory",
     "MemoryProvider",

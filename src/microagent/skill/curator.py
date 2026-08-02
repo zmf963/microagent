@@ -12,19 +12,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
-from dataclasses import dataclass
 from pathlib import Path
-
-
-@dataclass(frozen=True, slots=True)
-class SkillUsage:
-    """Tracked usage stats for a single skill."""
-
-    name: str
-    use_count: int
-    last_activity: float
-    state: str  # "active" | "stale" | "archived"
-    pinned: bool = False
 
 
 class Curator:

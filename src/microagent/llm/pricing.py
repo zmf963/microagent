@@ -86,22 +86,6 @@ def _load_cache() -> None:
         # Do NOT set _cache_loaded=True — allow retry on next call.
 
 
-def _normalize_id(model: str) -> str:
-    """Best-effort normalization of a model id for cache lookup.
-
-    models.dev uses ``provider/model`` ids (e.g. ``openai/gpt-4o``); OpenAI-
-    style API responses use bare ids (e.g. ``gpt-4o``). We try both.
-    """
-    m = model.strip()
-    if not m:
-        return m
-    # If the id already has a provider prefix, use it as-is.
-    if "/" in m:
-        return m
-    # Bare id: try matching the tail against cached "provider/model" keys.
-    return m
-
-
 def _lookup(model: str) -> dict[str, Any] | None:
     """Find a cache entry for `model` (exact then suffix then prefix)."""
     if not model:
@@ -288,8 +272,3 @@ def refresh(timeout: float = 20.0) -> int:
     _cache_loaded = True
     return len(new_cache)
 
-
-def known_models() -> list[str]:
-    """Return the sorted list of model ids in the cache (for debugging)."""
-    _load_cache()
-    return sorted(_cache.keys())

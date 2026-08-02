@@ -70,14 +70,6 @@ class LLMConfig:
     service_tier: str | None = None
     auxiliary_model: str | None = None
 
-    @classmethod
-    def default(cls) -> LLMConfig:
-        return cls(
-            base_url="https://api.openai.com/v1",
-            api_key="",
-            model="gpt-4o",
-        )
-
 
 # ---------------------------------------------------------------------------
 # Stream events produced by LLMClient.stream()
