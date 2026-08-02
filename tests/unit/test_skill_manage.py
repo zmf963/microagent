@@ -144,3 +144,120 @@ class TestSkillManage:
             )
         )
         assert result.is_error
+
+
+class TestSkillManageMore:
+    async def test_create_too_large(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="create", name="big", content="x" * 2_000_000)
+        assert r.is_error
+        assert "too large" in r.content
+
+    async def test_create_missing_fields(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="create", name="", content="")
+        assert r.is_error
+        assert "name and content" in r.content
+
+    async def test_patch_missing_name_or_old(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="patch", name="s", old_string="")
+        assert r.is_error
+
+    async def test_patch_not_found(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="patch", name="nope", old_string="x", new_string="y")
+        assert r.is_error
+        assert "not found" in r.content
+
+    async def test_patch_old_not_found(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        sd = tmp_path / "s1"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("hello world")
+        (sd / ".provenance.json").write_text('{"created_by": "agent"}')
+        r = await sm.skill_manage.fn(action="patch", name="s1", old_string="zzz", new_string="yyy")
+        assert r.is_error
+        assert "not found" in r.content
+
+    async def test_patch_multi_match(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        sd = tmp_path / "s1"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("dup dup dup")
+        (sd / ".provenance.json").write_text('{"created_by": "agent"}')
+        r = await sm.skill_manage.fn(action="patch", name="s1", old_string="dup", new_string="x")
+        assert r.is_error
+        assert "matches 3 times" in r.content
+
+    async def test_list_no_skills_dir(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path / "nonexistent")
+        r = await sm.skill_manage.fn(action="list")
+        assert not r.is_error
+        assert "(no skills)" in r.content
+
+    async def test_list_no_agent_skills(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        sd = tmp_path / "user-skill"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("body")
+        (sd / ".provenance.json").write_text('{"created_by": "user"}')
+        r = await sm.skill_manage.fn(action="list")
+        assert not r.is_error
+        assert "(no agent-created skills)" in r.content
+
+    async def test_delete_not_found(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="delete", name="nope")
+        assert r.is_error
+        assert "not found" in r.content
+
+    async def test_delete_missing_name(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        r = await sm.skill_manage.fn(action="delete", name="")
+        assert r.is_error
+
+    async def test_delete_not_agent_created(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        sd = tmp_path / "user-skill"
+        sd.mkdir()
+        (sd / "SKILL.md").write_text("body")
+        (sd / ".provenance.json").write_text('{"created_by": "user"}')
+        r = await sm.skill_manage.fn(action="delete", name="user-skill")
+        assert r.is_error
+        assert "not created by an agent" in r.content
+
+    async def test_is_agent_created_bad_json(self, tmp_path, monkeypatch):
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        sd = tmp_path / "bad"
+        sd.mkdir()
+        (sd / ".provenance.json").write_text("{bad json")
+        assert sm._is_agent_created("bad") is False
+
+    async def test_touch_curator_usage(self, tmp_path, monkeypatch):
+        import json as _json
+        from microagent.tools.builtins import skill_manage as sm
+        monkeypatch.setattr(sm, "_get_skills_dir", lambda: tmp_path)
+        # First touch creates the file
+        sm._touch_curator_usage("s1")
+        usage_file = tmp_path / ".usage.json"
+        assert usage_file.exists()
+        data = _json.loads(usage_file.read_text())
+        assert data["s1"]["use_count"] == 1
+        assert data["s1"]["state"] == "active"
+        # Second touch increments
+        sm._touch_curator_usage("s1")
+        data = _json.loads(usage_file.read_text())
+        assert data["s1"]["use_count"] == 2

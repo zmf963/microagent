@@ -119,3 +119,94 @@ class TestCurator:
         curator = Curator()
         await curator.run_once(skills_dir, usage_file)
         # Should not crash
+
+
+class TestCuratorMore:
+    async def test_archive_with_existing_dest(self, tmp_path):
+        """Archiving a skill whose .archive dest already exists overwrites it."""
+        skills_dir = tmp_path / "skills"
+        d = skills_dir / "myskill"
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text("body")
+        (d / ".provenance.json").write_text('{"created_by": "agent"}')
+
+        archive = skills_dir / ".archive"
+        archive.mkdir(exist_ok=True)
+        (archive / "myskill").mkdir()
+        (archive / "myskill" / "SKILL.md").write_text("old")
+
+        curator = Curator()
+        curator._archive(d)
+        # The archive dest was replaced
+        assert (archive / "myskill" / "SKILL.md").read_text() == "body"
+
+    async def test_is_agent_created_bad_json(self, tmp_path):
+        d = tmp_path / "s"
+        d.mkdir()
+        (d / ".provenance.json").write_text("{not valid json")
+        assert Curator._is_agent_created(d) is False
+
+    async def test_is_agent_created_missing_file(self, tmp_path):
+        d = tmp_path / "s"
+        d.mkdir()
+        assert Curator._is_agent_created(d) is False
+
+    async def test_is_agent_created_not_agent(self, tmp_path):
+        d = tmp_path / "s"
+        d.mkdir()
+        (d / ".provenance.json").write_text('{"created_by": "user"}')
+        assert Curator._is_agent_created(d) is False
+
+    async def test_load_usage_missing(self, tmp_path):
+        assert Curator._load_usage(tmp_path / "missing.json") == {}
+
+    async def test_load_usage_corrupt(self, tmp_path):
+        f = tmp_path / "usage.json"
+        f.write_text("{corrupt")
+        assert Curator._load_usage(f) == {}
+
+    async def test_load_usage_valid(self, tmp_path):
+        f = tmp_path / "usage.json"
+        f.write_text('{"s1": {"state": "active"}}')
+        assert Curator._load_usage(f) == {"s1": {"state": "active"}}
+
+    async def test_run_once_skips_non_dir_and_hidden(self, tmp_path):
+        """run_once ignores files and hidden dirs in the skills dir."""
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "somefile.txt").write_text("not a dir")
+        (skills_dir / ".hidden").mkdir()
+        usage_file = tmp_path / "usage.json"
+        usage_file.write_text("{}")
+        curator = Curator()
+        await curator.run_once(skills_dir, usage_file)  # must not crash
+
+    async def test_run_once_skips_no_entry_or_pinned(self, tmp_path):
+        """Skills with no usage entry or pinned=True are untouched."""
+        from microagent.skill.curator import Curator
+        skills_dir = tmp_path / "skills"
+        # skill with no usage entry
+        d1 = skills_dir / "noentry"
+        d1.mkdir(parents=True)
+        (d1 / ".provenance.json").write_text('{"created_by": "agent"}')
+        # pinned skill
+        d2 = skills_dir / "pinned"
+        d2.mkdir(parents=True)
+        (d2 / ".provenance.json").write_text('{"created_by": "agent"}')
+
+        now = time.time()
+        usage_file = tmp_path / "usage.json"
+        usage_file.write_text(json.dumps({
+            "pinned": {"state": "active", "pinned": True, "last_activity": now - 100 * 86400},
+        }))
+        curator = Curator(stale_after_days=30, archive_after_days=90)
+        await curator.run_once(skills_dir, usage_file)
+        # both skills remain in place (not archived)
+        assert d1.exists()
+        assert d2.exists()
+
+    async def test_save_usage_writes_file(self, tmp_path):
+        usage_file = tmp_path / "sub" / "usage.json"
+        Curator._save_usage(usage_file, {"s1": {"state": "active"}})
+        assert usage_file.exists()
+        assert json.loads(usage_file.read_text()) == {"s1": {"state": "active"}}
