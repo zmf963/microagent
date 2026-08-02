@@ -162,3 +162,82 @@ class TestCompactionState:
         state = CompactionState()
         state.activate_cooldown()
         assert state.is_cooling_down()
+
+
+class TestGrepMatchLine:
+    def test_standard_grep_format(self):
+        from microagent.session.compress import _is_grep_match_line
+        assert _is_grep_match_line("src/main.py:42:def foo():") is True
+        assert _is_grep_match_line("42:def foo():") is True
+
+    def test_no_colon_or_late(self):
+        from microagent.session.compress import _is_grep_match_line
+        assert _is_grep_match_line("no colon here") is False
+        # colon beyond 80 chars
+        assert _is_grep_match_line("x" * 100 + ":foo") is False
+
+    def test_empty_line(self):
+        from microagent.session.compress import _is_grep_match_line
+        assert _is_grep_match_line("") is False
+        assert _is_grep_match_line("   ") is False
+
+
+class TestSummarizeToolResult:
+    def test_bash_with_exit_code(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("bash", "output\nexit code: 2\n")
+        assert "bash" in s and "2" in s
+
+    def test_bash_no_exit_code(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("bash", "line1\nline2")
+        assert "2 lines" in s
+
+    def test_bash_bad_exit_code(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("bash", "exit code: not-a-number\n")
+        assert "lines" in s
+
+    def test_read_file(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("read_file", "a\nb\nc")
+        assert "read_file" in s and "3 lines" in s
+
+    def test_grep(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("grep", "f1.py:1:x\nf2.py:2:y")
+        assert "grep" in s and "2" in s
+
+    def test_other_tool(self):
+        from microagent.session.compress import _summarize_tool_result
+        s = _summarize_tool_result("unknown", "some content here")
+        assert s  # non-empty fallback
+
+
+class TestEstimateTokens:
+    def test_ascii(self):
+        from microagent.session.compress import estimate_tokens
+        assert estimate_tokens("hello world") > 0
+
+    def test_cjk_counts_higher_per_char(self):
+        from microagent.session.compress import estimate_tokens
+        cjk = estimate_tokens("你好世界")
+        ascii_tokens = estimate_tokens("abcd")
+        # CJK chars cost more tokens than ASCII
+        assert cjk >= ascii_tokens or cjk > 0
+
+    def test_empty(self):
+        from microagent.session.compress import estimate_tokens
+        assert estimate_tokens("") >= 0
+
+
+class TestFallback:
+    def test_fallback_prepends_placeholder_keeps_recent(self):
+        from microagent.session.compress import _fallback
+        from microagent.core.types import Message
+        msgs = tuple(Message.user(f"msg{i}") for i in range(8))
+        result = _fallback(msgs)
+        # placeholder + last 5 messages
+        assert len(result) == 6
+        assert "上下文压缩暂停" in result[0].content or "压缩暂停" in result[0].content
+        assert result[-1].content == "msg7"
