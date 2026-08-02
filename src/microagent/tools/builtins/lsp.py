@@ -180,16 +180,13 @@ class LSPClient:
         self._open_files.add(uri)
         return uri
 
-    async def definition(self, filepath: str, line: int, character: int) -> list[dict]:
-        """Go to definition."""
-        uri = await self.ensure_open(filepath)
-        result = await self._request("textDocument/definition", {
-            "textDocument": {"uri": uri},
-            "position": {"line": line - 1, "character": max(0, character)},
-        })
+    @staticmethod
+    def _format_locations(result: dict | list | None) -> list[dict]:
+        """Convert LSP location dicts to the {uri, range, line, col} shape
+        the tool returns. Shared by definition() and references()."""
         if result is None:
             return []
-        locations: list[dict] = result if isinstance(result, list) else [result]
+        locations = result if isinstance(result, list) else [result]
         return [
             {
                 "uri": str(loc.get("uri", "")),
@@ -201,6 +198,15 @@ class LSPClient:
             if isinstance(loc, dict)
         ]
 
+    async def definition(self, filepath: str, line: int, character: int) -> list[dict]:
+        """Go to definition."""
+        uri = await self.ensure_open(filepath)
+        result = await self._request("textDocument/definition", {
+            "textDocument": {"uri": uri},
+            "position": {"line": line - 1, "character": max(0, character)},
+        })
+        return self._format_locations(result)
+
     async def references(self, filepath: str, line: int, character: int) -> list[dict]:
         """Find all references."""
         uri = await self.ensure_open(filepath)
@@ -209,18 +215,7 @@ class LSPClient:
             "position": {"line": line - 1, "character": max(0, character)},
             "context": {"includeDeclaration": True},
         })
-        if result is None:
-            return []
-        return [
-            {
-                "uri": str(loc.get("uri", "")),
-                "range": loc.get("range", {}),
-                "line": int(loc.get("range", {}).get("start", {}).get("line", 0) + 1),
-                "col": int(loc.get("range", {}).get("start", {}).get("character", 0) + 1),
-            }
-            for loc in result
-            if isinstance(loc, dict)
-        ]
+        return self._format_locations(result)
 
     async def hover(self, filepath: str, line: int, character: int) -> str:
         """Hover info."""

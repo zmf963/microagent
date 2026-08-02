@@ -259,13 +259,7 @@ async def _main():
     db_path = _Path.home() / ".microagent" / "sessions.db"
     store = SQLiteStore(db_path)
     session_id = f"cli-{int(time.time())}"
-    agent = Agent.from_config(
-        config.llm,
-        system_prompt=config.system_prompt,
-        store=store,
-        session_id=session_id,
-        skills_path=config.skills_path,
-    )
+    agent = _make_agent(config, store, session_id)
 
     if positional:
         prompt = " ".join(positional)
@@ -607,6 +601,22 @@ def _print_help():
 # ---------------------------------------------------------------------------
 
 
+def _make_agent(config, store, session_id: str) -> Agent:
+    """Build an Agent from a Config + store + session_id.
+
+    Consolidates the Agent.from_config(...) call that was copy-pasted in 4
+    places (_main, _cmd_new, _cmd_resume, _cmd_compact). Any change to the
+    Agent constructor only needs to be applied here.
+    """
+    return Agent.from_config(
+        config.llm,
+        system_prompt=config.system_prompt,
+        store=store,
+        session_id=session_id,
+        skills_path=config.skills_path,
+    )
+
+
 async def _cmd_new(state: ReplState, arg: str) -> None:
     agent = state.agent
     await agent.close()
@@ -616,13 +626,7 @@ async def _cmd_new(state: ReplState, arg: str) -> None:
     state.messages = []
     state.usage_tracker.reset()
     state.disabled_skills.clear()
-    state.agent = Agent.from_config(
-        config.llm,
-        system_prompt=config.system_prompt,
-        store=store,
-        session_id=state.session_id,
-        skills_path=config.skills_path,
-    )
+    state.agent = _make_agent(config, store, state.session_id)
     console.print(f"[success]✓[/] New session: {state.session_id}")
 
 
@@ -653,13 +657,7 @@ async def _cmd_resume(state: ReplState, arg: str) -> None:
             state.usage_tracker.reset()
             config = state.config
             store = state.store
-            state.agent = Agent.from_config(
-                config.llm,
-                system_prompt=config.system_prompt,
-                store=store,
-                session_id=target,
-                skills_path=config.skills_path,
-            )
+            state.agent = _make_agent(config, store, target)
             console.print(f"[success]✓[/] Resumed: {target} ({len(history)} messages)")
         else:
             console.print(f"[error]✗[/] Session not found: {target}")
@@ -696,13 +694,7 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
     await agent.close()
     config = state.config
     store = state.store
-    state.agent = Agent.from_config(
-        config.llm,
-        system_prompt=config.system_prompt,
-        store=store,
-        session_id=state.session_id,
-        skills_path=config.skills_path,
-    )
+    state.agent = _make_agent(config, store, state.session_id)
     state.agent.runner._compaction_state = state_obj
     after_count = len(messages)
     after_tokens = count_tokens(tuple(messages))

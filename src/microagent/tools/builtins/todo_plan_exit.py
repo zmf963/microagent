@@ -7,13 +7,14 @@ ContextVar, providing isolation between concurrent Agent sessions.
 
 from __future__ import annotations
 
-import contextvars
 from dataclasses import dataclass, field
 from typing import Annotated
 
 from pydantic import Field
 
 from ...core.tool import tool
+from ...core.types import ToolResult
+from .._session_state import session_state
 from ...core.types import ToolResult
 
 # ---------------------------------------------------------------------------
@@ -29,23 +30,9 @@ class SessionState:
     plan: list[str] = field(default_factory=list)
 
 
-_current_state: contextvars.ContextVar[SessionState | None] = contextvars.ContextVar(
-    "todo_plan_current_state", default=None
+_current_state, _get_state = session_state(
+    "todo_plan_current_state", SessionState,
 )
-
-
-def _get_state() -> SessionState:
-    """Get the current session's state.
-
-    When running inside a SessionRunner, the ContextVar is set to the
-    runner's state. When called directly (e.g., in tests without a
-    runner), a temporary state is lazily created and stored.
-    """
-    state = _current_state.get()
-    if state is None:
-        state = SessionState()
-        _current_state.set(state)
-    return state
 
 
 # ---------------------------------------------------------------------------

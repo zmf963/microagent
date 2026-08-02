@@ -8,7 +8,6 @@ providing isolation between concurrent Agent sessions.
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import os
 import signal
 import time
@@ -19,6 +18,7 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+from .._session_state import session_state
 
 # ---------------------------------------------------------------------------
 # Per-session process registry (ContextVar — same pattern as _current_store)
@@ -33,23 +33,9 @@ class ProcRegistry:
     outputs: dict[str, list[str]] = field(default_factory=dict)
 
 
-_current_registry: contextvars.ContextVar[ProcRegistry | None] = contextvars.ContextVar(
-    "process_current_registry", default=None
+_current_registry, _get_registry = session_state(
+    "process_current_registry", ProcRegistry,
 )
-
-
-def _get_registry() -> ProcRegistry:
-    """Get the current session's process registry.
-
-    When running inside a SessionRunner, the ContextVar is set to the
-    runner's registry. When called directly (e.g., in tests without a
-    runner), a temporary registry is lazily created and stored.
-    """
-    reg = _current_registry.get()
-    if reg is None:
-        reg = ProcRegistry()
-        _current_registry.set(reg)
-    return reg
 
 
 def _generate_id() -> str:

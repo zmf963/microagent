@@ -16,7 +16,6 @@ Requires: pip install playwright && playwright install chromium
 from __future__ import annotations
 
 import base64
-import contextvars
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated
 
@@ -25,6 +24,7 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+from .._session_state import session_state
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Page, Playwright
@@ -47,17 +47,9 @@ class BrowserState:
     page: Page | None = None
 
 
-_current_state: contextvars.ContextVar[BrowserState | None] = contextvars.ContextVar(
-    "browser_current_state", default=None
+_current_state, _get_state = session_state(
+    "browser_current_state", BrowserState,
 )
-
-
-def _get_state() -> BrowserState:
-    state = _current_state.get()
-    if state is None:
-        state = BrowserState()
-        _current_state.set(state)
-    return state
 
 
 async def _ensure_browser():

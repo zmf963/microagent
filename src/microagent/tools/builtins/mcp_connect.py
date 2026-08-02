@@ -7,7 +7,6 @@ Active connections are tracked per-session and cleaned up on close.
 
 from __future__ import annotations
 
-import contextvars
 from typing import Annotated
 
 from pydantic import Field
@@ -15,19 +14,10 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 from ...mcp.catalog import BUILTIN_MCP_SERVERS, get_server
+from .._session_state import session_state
 
 # Per-session MCP manager storage (kept alive to prevent GC)
-_current_managers: contextvars.ContextVar[dict[str, object] | None] = (
-    contextvars.ContextVar("mcp_connect_managers", default=None)
-)
-
-
-def _get_managers() -> dict[str, object]:
-    mgr = _current_managers.get()
-    if mgr is None:
-        mgr = {}
-        _current_managers.set(mgr)
-    return mgr
+_current_managers, _get_managers = session_state("mcp_connect_managers", dict)
 
 
 @tool(
