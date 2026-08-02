@@ -14,6 +14,7 @@ yield ToolProgressDelta events for real-time display.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -77,8 +78,9 @@ class SessionRunner:
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
         self._cached_skill_catalog: str = ""  # stable part of system prompt
-        self._loaded_skills: set[str] = set()  # skills persistent across turns
-        self._loaded_skills_order: list[str] = []  # LRU ordering for eviction
+        # OrderedDict preserves insertion order + supports move_to_end/popitem
+        # for LRU eviction. Replaces the prior hand-rolled set+list pair.
+        self._loaded_skills: OrderedDict[str, None] = OrderedDict()
         self._max_loaded_skills: int = 10  # cap to prevent unbounded growth
         self._cached_mode: str = "build"
         # Compaction state — initialized here (not lazily in run_turn) so the
@@ -390,24 +392,20 @@ class SessionRunner:
                         matched = await self.skill_loader.match(last_user.content)
                         for m in matched:
                             key = f"{m.skill.namespace}:{m.skill.name}"
-                            if key not in self._loaded_skills:
-                                # Evict oldest if at capacity (LRU)
-                                while len(self._loaded_skills) >= self._max_loaded_skills and self._loaded_skills_order:
-                                    oldest = self._loaded_skills_order.pop(0)
-                                    self._loaded_skills.discard(oldest)
-                                self._loaded_skills.add(key)
-                                self._loaded_skills_order.append(key)
+                            # LRU via OrderedDict: move_to_end on access,
+                            # popitem(last=False) to evict oldest.
+                            if key in self._loaded_skills:
+                                self._loaded_skills.move_to_end(key)
                             else:
-                                # Refresh LRU position (move to end)
-                                if key in self._loaded_skills_order:
-                                    self._loaded_skills_order.remove(key)
-                                self._loaded_skills_order.append(key)
+                                self._loaded_skills[key] = None
+                                while len(self._loaded_skills) > self._max_loaded_skills:
+                                    self._loaded_skills.popitem(last=False)
 
                         # Inject all loaded skill bodies as context
                         if self._loaded_skills:
                             all_skills = {s.name: s for s in (await self.skill_loader.load())}
                             loaded_bodies = []
-                            for key in list(self._loaded_skills):
+                            for key in self._loaded_skills:
                                 ns, name = key.split(":", 1)
                                 s = all_skills.get(name)
                                 if s is not None:
@@ -508,10 +506,7 @@ class SessionRunner:
                                 self._overflow_retried = True
                                 if usage:
                                     try:
-                                        await self.budget.consume(
-                                            tokens=usage.input_tokens + usage.output_tokens,
-                                            cost_usd=usage.cost_usd,
-                                        )
+                                        await self.budget.consume_usage(usage)
                                     except BudgetExceeded as e:
                                         yield TurnFailed(f"budget exhausted: {e}")
                                         return
@@ -556,10 +551,7 @@ class SessionRunner:
                                 await self.store.append(self.session_id, assistant_msg)
                             if usage:
                                 try:
-                                    await self.budget.consume(
-                                        tokens=usage.input_tokens + usage.output_tokens,
-                                        cost_usd=usage.cost_usd,
-                                    )
+                                    await self.budget.consume_usage(usage)
                                 except BudgetExceeded as e:
                                     yield TurnFailed(f"budget exhausted: {e}")
                                     return
@@ -584,10 +576,7 @@ class SessionRunner:
             if usage:
                 yield usage
                 try:
-                    await self.budget.consume(
-                        tokens=usage.input_tokens + usage.output_tokens,
-                        cost_usd=usage.cost_usd,
-                    )
+                    await self.budget.consume_usage(usage)
                 except BudgetExceeded as e:
                     yield TurnFailed(f"budget exhausted: {e}")
                     return
@@ -698,19 +687,17 @@ class SessionRunner:
                         return
                     call = modified
 
-                # Try streaming, fall back to regular execution
-                try:
-                    async for event in self.registry.execute_stream(call):
-                        if isinstance(event, ToolProgressDelta):
-                            progress_events.append(event)
-                        elif isinstance(event, ToolResult):
-                            result = event
-                            break
-                    else:
-                        result = ToolResult.ok("(no output)")
-                except (TypeError, AttributeError):
-                    # execute_stream not available — fall back to execute
-                    result = await self.registry.execute(call)
+                # Streaming execution — ToolRegistry.execute_stream always
+                # exists (core/tool.py) and has its own non-streaming fallback
+                # internally, so no try/except fallback is needed here.
+                async for event in self.registry.execute_stream(call):
+                    if isinstance(event, ToolProgressDelta):
+                        progress_events.append(event)
+                    elif isinstance(event, ToolResult):
+                        result = event
+                        break
+                else:
+                    result = ToolResult.ok("(no output)")
 
                 for hook in self.tool_hooks:
                     result = await hook.after(call, result, None)

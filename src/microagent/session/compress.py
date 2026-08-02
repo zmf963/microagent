@@ -558,10 +558,7 @@ async def _summarize_and_attach(
         prev = state.previous_summary
         current, usage = await _llm_summarize(summarize_input, llm, previous_summary=prev)
         if budget is not None and usage:
-            await budget.consume(
-                tokens=usage.input_tokens + usage.output_tokens,
-                cost_usd=usage.cost_usd,
-            )
+            await budget.consume_usage(usage)
         # Capture the LLM summary text BEFORE recover_file_attachments
         # prepends attachment-recovery messages to `current`. Otherwise
         # _extract_summary_text(current) reads current[0] which is now an

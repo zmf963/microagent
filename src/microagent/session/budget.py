@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -138,6 +139,22 @@ class Budget:
                     f"self_cost={self._used_cost:.4f}/{self.max_cost_usd}, "
                     f"tree_cost={self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
                 )
+
+    async def consume_usage(self, usage: Any) -> None:
+        """Consume budget from a Usage object (input + output tokens + cost).
+
+        Convenience wrapper for the formula that was copy-pasted 5 times
+        across runner.py and compress.py:
+            await budget.consume(
+                tokens=usage.input_tokens + usage.output_tokens,
+                cost_usd=usage.cost_usd,
+            )
+        Centralizing it prevents drift if the token-accounting formula changes.
+        """
+        await self.consume(
+            tokens=usage.input_tokens + usage.output_tokens,
+            cost_usd=usage.cost_usd,
+        )
 
     def _tree_exhausted(self) -> bool:
         """Whether the root's total (self + all descendants) is over limit."""
