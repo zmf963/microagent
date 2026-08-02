@@ -133,3 +133,132 @@ class TestClaudeSkillLoader:
         # Unrelated Chinese query → must NOT match (no false positive).
         matches = await loader.match("今天天气怎么样")
         assert all(m.skill.name != "zh-skill" for m in matches)
+
+
+class TestCJKHelpers:
+    def test_cjk_aware_ratio_latin(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+        r = _cjk_aware_ratio("test", "testing tools")
+        assert 0 < r <= 1.0
+
+    def test_cjk_aware_ratio_cjk(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+        r = _cjk_aware_ratio("测试", "测试驱动开发")
+        assert r > 0
+
+    def test_cjk_aware_ratio_no_overlap(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+        assert _cjk_aware_ratio("aaa", "bbb") == 0.0
+
+    def test_cjk_aware_ratio_empty(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+        assert _cjk_aware_ratio("", "abc") == 0.0
+        assert _cjk_aware_ratio("abc", "") == 0.0
+
+    def test_lcs_len(self):
+        from microagent.skill.loader import _lcs_len
+        # LCS here = longest common substring (contiguous)
+        assert _lcs_len("abcdef", "abxyzf") == 2  # "ab"
+        assert _lcs_len("hello", "hello") == 5
+        assert _lcs_len("abc", "def") == 0
+
+    def test_bigrams(self):
+        from microagent.skill.loader import _bigrams
+        b = _bigrams("abcd")
+        assert {"ab", "bc", "cd"} <= b
+
+
+class TestParseSkillMd:
+    def test_no_frontmatter(self, tmp_path):
+        from microagent.skill.loader import _parse_skill_md
+        f = tmp_path / "SKILL.md"
+        f.write_text("just body text, no frontmatter")
+        assert _parse_skill_md(f) is None
+
+    def test_malformed_frontmatter_logs(self, tmp_path, caplog):
+        import logging
+        from microagent.skill.loader import _parse_skill_md
+        f = tmp_path / "SKILL.md"
+        # YAML with a mapping error
+        f.write_text("---\nname: x\ndescription: bad: value\n---\nbody\n")
+        with caplog.at_level(logging.WARNING):
+            result = _parse_skill_md(f)
+        assert result is None or result.name == "x"
+        if result is None:
+            assert any("SKILL.md" in r.message for r in caplog.records)
+
+    def test_triggers_as_string(self, tmp_path):
+        from microagent.skill.loader import _parse_skill_md
+        f = tmp_path / "SKILL.md"
+        f.write_text("---\nname: s\ndescription: d\ntriggers: a, b, c\n---\nbody\n")
+        skill = _parse_skill_md(f)
+        assert skill is not None
+        assert skill.name == "s"
+
+    def test_triggers_as_list(self, tmp_path):
+        from microagent.skill.loader import _parse_skill_md
+        f = tmp_path / "SKILL.md"
+        f.write_text("---\nname: s\ndescription: d\ntriggers:\n  - t1\n  - t2\n---\nbody\n")
+        skill = _parse_skill_md(f)
+        assert skill is not None
+        assert skill.triggers == ("t1", "t2")
+
+    def test_default_namespace(self, tmp_path):
+        from microagent.skill.loader import _parse_skill_md
+        f = tmp_path / "SKILL.md"
+        f.write_text("---\nname: s\ndescription: d\n---\nbody\n")
+        skill = _parse_skill_md(f)
+        assert skill.namespace == "claude"
+
+
+class TestCompositeSkillLoader:
+    async def test_match_deduplicates(self):
+        from microagent.skill.loader import (
+            CompositeSkillLoader, Skill, LoadedSkill,
+        )
+
+        class _Backend:
+            def __init__(self, skills):
+                self._s = skills
+            async def load(self):
+                return tuple(s for s, _ in self._s)
+            async def match(self, user_input):
+                return tuple(
+                    LoadedSkill(skill=s, match_reason="r", match_score=score)
+                    for s, score in self._s
+                )
+
+        skill = Skill(name="shared", namespace="ns", description="d", body="b",
+                      triggers=(), source="/tmp/s", mtime=0.0)
+        b1 = _Backend([(skill, 0.9)])
+        b2 = _Backend([(skill, 0.8)])
+        loader = CompositeSkillLoader(backends=(b1, b2))
+        matches = await loader.match("anything")
+        # Deduplicated — the same skill appears once
+        assert len(matches) == 1
+
+    async def test_match_sorts_by_score(self):
+        from microagent.skill.loader import (
+            CompositeSkillLoader, Skill, LoadedSkill,
+        )
+
+        class _Backend:
+            async def load(self):
+                return ()
+            async def match(self, user_input):
+                return tuple(
+                    LoadedSkill(skill=s, match_reason="r", match_score=score)
+                    for s, score in self._skills
+                )
+            def __init__(self, skills):
+                self._skills = skills
+
+        s1 = Skill(name="a", namespace="ns", description="d", body="b", triggers=(),
+                   source="/s", mtime=0.0)
+        s2 = Skill(name="b", namespace="ns", description="d", body="b", triggers=(),
+                   source="/s", mtime=0.0)
+        backend = _Backend([(s1, 0.3), (s2, 0.9)])
+        loader = CompositeSkillLoader(backends=(backend,))
+        matches = await loader.match("x")
+        # highest score first
+        assert matches[0].skill.name == "b"

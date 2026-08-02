@@ -135,3 +135,108 @@ class TestIsReadableFile:
 
     def test_url_not_readable(self):
         assert not _is_readable_file("https://example.com/file.json")
+
+
+class TestExtractFromToolCalls:
+    def test_extracts_paths_from_read_file_tool_call(self, tmp_path):
+        from microagent.session.attachments import _extract_file_paths
+        from microagent.core.types import Message, ToolCall
+        f = tmp_path / "data.txt"
+        f.write_text("x")
+        msg = Message.assistant(
+            text="",
+            tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": str(f)}),),
+        )
+        paths = _extract_file_paths((msg,))
+        assert str(f) in paths
+
+    def test_ignores_other_tool_call_args(self, tmp_path):
+        from microagent.session.attachments import _extract_file_paths
+        from microagent.core.types import Message, ToolCall
+        msg = Message.assistant(
+            text="",
+            tool_calls=(ToolCall(id="c1", name="web_search", arguments={"query": "hello"}),),
+        )
+        assert _extract_file_paths((msg,)) == {}
+
+    def test_content_fallback(self, tmp_path):
+        from microagent.session.attachments import _extract_file_paths
+        from microagent.core.types import Message
+        f = tmp_path / "notes.txt"
+        f.write_text("x")
+        msg = Message.user(f"please read {f} for me")
+        paths = _extract_file_paths((msg,))
+        assert str(f) in paths
+
+
+class TestRecoverFileAttachments:
+    def test_no_messages_returns_compressed(self):
+        from microagent.session.attachments import recover_file_attachments
+        assert recover_file_attachments((), ("x",)) == ("x",)
+
+    def test_no_files_returns_compressed(self):
+        from microagent.session.attachments import recover_file_attachments
+        from microagent.core.types import Message
+        msgs = (Message.user("nothing useful"),)
+        assert recover_file_attachments(msgs, ("compressed",)) == ("compressed",)
+
+    def test_recovers_file_content(self, tmp_path):
+        from microagent.session.attachments import recover_file_attachments
+        from microagent.core.types import Message, ToolCall
+        f = tmp_path / "recover.txt"
+        f.write_text("important file content")
+        msgs = (
+            Message.assistant(
+                text="", tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": str(f)}),)
+            ),
+        )
+        result = recover_file_attachments(msgs, (Message.user("summary"),))
+        # One attachment message appended
+        assert len(result) == 2
+        assert "important file content" in result[1].content
+
+    def test_truncates_large_files(self, tmp_path):
+        from microagent.session.attachments import (
+            recover_file_attachments, MAX_CHARS_PER_FILE,
+        )
+        from microagent.core.types import Message, ToolCall
+        f = tmp_path / "big.txt"
+        f.write_text("x" * (MAX_CHARS_PER_FILE + 1000))
+        msgs = (
+            Message.assistant(
+                text="", tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": str(f)}),)
+            ),
+        )
+        result = recover_file_attachments(msgs, (Message.user("summary"),))
+        assert "truncated" in result[1].content
+
+    def test_unreadable_file_skipped(self, tmp_path):
+        from microagent.session.attachments import recover_file_attachments
+        from microagent.core.types import Message, ToolCall
+        # A path that parses but can't be read
+        msgs = (
+            Message.assistant(
+                text="", tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": "/nonexistent/x.py"}),)
+            ),
+        )
+        result = recover_file_attachments(msgs, (Message.user("summary"),))
+        assert len(result) == 1  # no attachment added
+
+
+class TestIsReadableFileMore:
+    def test_system_paths_skipped(self):
+        from microagent.session.attachments import _is_readable_file
+        assert _is_readable_file("/bin/ls") is False
+        assert _is_readable_file("/proc/cpuinfo") is False
+
+    def test_extensionless_absolute_allowed(self):
+        from microagent.session.attachments import _is_readable_file
+        assert _is_readable_file("/home/user/app/config") is True
+
+    def test_url_rejected(self):
+        from microagent.session.attachments import _is_readable_file
+        assert _is_readable_file("https://example.com/x") is False
+
+    def test_too_long_rejected(self):
+        from microagent.session.attachments import _is_readable_file
+        assert _is_readable_file("/x" * 300) is False
