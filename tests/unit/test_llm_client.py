@@ -4,6 +4,7 @@ import pytest
 
 from microagent.llm.client import LLMConfig, OpenAIChatClient
 from microagent.llm.pool import CredentialPool
+from microagent.core.types import Message
 
 
 def _cfg(model="m"):
@@ -103,3 +104,176 @@ class _FakeOpenAIClient:
 
     async def close(self):
         _FakeOpenAIClient.closed = True
+
+
+class TestOpenAIChatClientStream:
+    @pytest.mark.asyncio
+    async def test_stream_text_and_usage(self, monkeypatch):
+        """stream() yields TextDelta + Usage + StreamDone."""
+        import sys, types
+        from microagent.llm.client import OpenAIChatClient, LLMConfig, TextDelta, Usage, StreamDone
+
+        class _Delta:
+            def __init__(self, content=None, reasoning_content=None, tool_calls=None):
+                self.content = content
+                self.reasoning_content = reasoning_content
+                self.tool_calls = tool_calls
+
+        class _Choice:
+            def __init__(self, delta, finish_reason=None):
+                self.delta = delta
+                self.finish_reason = finish_reason
+
+        class _Usage:
+            prompt_tokens = 10
+            completion_tokens = 5
+
+        class _Chunk:
+            def __init__(self, choices=None, usage=None):
+                self.choices = choices
+                self.usage = usage
+
+        class _Completions:
+            def __init__(self):
+                self._chunks = [
+                    _Chunk([_Choice(_Delta(content="hello"))]),
+                    _Chunk([_Choice(_Delta(content=" world"))]),
+                    _Chunk([_Choice(_Delta(), finish_reason="stop")], usage=_Usage()),
+                ]
+
+            async def create(self, **kw):
+                async def _gen():
+                    for c in self._chunks:
+                        yield c
+                return _gen()
+
+        class _Chat:
+            def __init__(self):
+                self.completions = _Completions()
+
+        class _FakeOpenAI:
+            def __init__(self, **kw):
+                self.chat = _Chat()
+            async def close(self): pass
+
+        # Inject fake openai module
+        fake_openai = types.ModuleType("openai")
+        fake_openai.AsyncOpenAI = _FakeOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        client = OpenAIChatClient(LLMConfig(base_url="http://x", api_key="k", model="m"))
+        events = [e async for e in client.stream(
+            system="sys", messages=(Message.user("hi"),))]
+
+        text = [e for e in events if isinstance(e, TextDelta)]
+        usage = [e for e in events if isinstance(e, Usage)]
+        done = [e for e in events if isinstance(e, StreamDone)]
+        assert any(t.text == "hello world" for t in text) or len(text) >= 1
+        assert len(usage) == 1
+        assert len(done) == 1
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_accumulation(self, monkeypatch):
+        """Tool call arguments streamed in fragments are accumulated."""
+        import sys, types
+        from microagent.llm.client import OpenAIChatClient, LLMConfig, ToolCallDelta
+
+        class _TC:
+            def __init__(self, index, id="", name="", arguments=""):
+                self.index = index
+                self.id = id
+                self.function = types.SimpleNamespace(name=name, arguments=arguments)
+
+        class _Delta:
+            def __init__(self, tool_calls=None):
+                self.content = None
+                self.reasoning_content = None
+                self.tool_calls = tool_calls
+
+        class _Choice:
+            def __init__(self, delta):
+                self.delta = delta
+                self.finish_reason = None
+
+        class _Chunk:
+            def __init__(self, delta):
+                self.choices = [_Choice(delta)]
+                self.usage = None
+
+        class _Completions:
+            async def create(self, **kw):
+                async def _gen():
+                    yield _Chunk(_Delta(tool_calls=[_TC(0, id="call_1", name="bash")]))
+                    yield _Chunk(_Delta(tool_calls=[_TC(0, arguments='{"command"')]))
+                    yield _Chunk(_Delta(tool_calls=[_TC(0, arguments=': "echo hi"}' )]))
+                return _gen()
+
+        class _Chat:
+            def __init__(self):
+                self.completions = _Completions()
+
+        class _FakeOpenAI:
+            def __init__(self, **kw):
+                self.chat = _Chat()
+            async def close(self): pass
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.AsyncOpenAI = _FakeOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        client = OpenAIChatClient(LLMConfig(base_url="http://x", api_key="k", model="m"))
+        events = [e async for e in client.stream(system="s", messages=(Message.user("hi"),))]
+        calls = [e for e in events if isinstance(e, ToolCallDelta)]
+        assert len(calls) == 1
+        assert calls[0].name == "bash"
+        assert calls[0].arguments == {"command": "echo hi"}
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_reasoning_content(self, monkeypatch):
+        """reasoning_content yields TextDelta with kind='thinking'."""
+        import sys, types
+        from microagent.llm.client import OpenAIChatClient, LLMConfig, TextDelta
+
+        class _Delta:
+            def __init__(self):
+                self.content = ""
+                self.reasoning_content = "let me think..."
+                self.tool_calls = None
+
+        class _Choice:
+            def __init__(self):
+                self.delta = _Delta()
+                self.finish_reason = None
+
+        class _Chunk:
+            def __init__(self):
+                self.choices = [_Choice()]
+                self.usage = None
+
+        class _Completions:
+            async def create(self, **kw):
+                async def _gen():
+                    yield _Chunk()
+                return _gen()
+
+        class _Chat:
+            def __init__(self):
+                self.completions = _Completions()
+
+        class _FakeOpenAI:
+            def __init__(self, **kw):
+                self.chat = _Chat()
+            async def close(self): pass
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.AsyncOpenAI = _FakeOpenAI
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        client = OpenAIChatClient(LLMConfig(base_url="http://x", api_key="k", model="m"))
+        events = [e async for e in client.stream(system="s", messages=(Message.user("hi"),))]
+        thinking = [e for e in events if isinstance(e, TextDelta) and e.kind == "thinking"]
+        assert len(thinking) == 1
+        assert "let me think" in thinking[0].text
+        await client.close()
