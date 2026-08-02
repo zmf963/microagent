@@ -44,13 +44,19 @@ class TestUsageTracker:
         assert tracker.turns == 0
 
     def test_summary_string(self):
-        """Summary string contains key metrics."""
+        """Summary string contains key metrics.
+
+        Cost is displayed in CNY (¥) — the internal USD value ($0.05) is
+        converted at display time via currency.format_cost. At the default
+        7.2 rate, $0.05 → ¥0.3600."""
         tracker = _UsageTracker()
         tracker.record(Usage(input_tokens=1000, output_tokens=500, cost_usd=0.05))
         summary = tracker.summary()
         assert "1000" in summary
         assert "500" in summary
-        assert "0.05" in summary or "0.050" in summary
+        # Displays in CNY with ¥ symbol, not raw USD
+        assert "¥" in summary
+        assert "0.3600" in summary  # $0.05 × 7.2
 
 
 class TestSlashCommands:

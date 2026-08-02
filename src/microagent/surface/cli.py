@@ -87,18 +87,20 @@ class _UsageTracker:
         self.turns = 0
 
     def summary(self) -> str:
+        from ..currency import format_cost
         return (
             f"Tokens: {self.total_input} in / {self.total_output} out, "
-            f"Cost: ${self.total_cost:.4f}, Turns: {self.turns}"
+            f"Cost: {format_cost(self.total_cost)}, Turns: {self.turns}"
         )
 
     def status_line(self) -> str:
         """One-line status string, printed on its own line after LLM output."""
+        from ..currency import format_cost
         return (
             "[dim]📊[/] "
             f"[status.tokens]tokens: {self.total_input + self.total_output}[/status.tokens]  "
             "[dim]💰[/] "
-            f"[status.cost]cost: ${self.total_cost:.4f}[/status.cost]  "
+            f"[status.cost]cost: {format_cost(self.total_cost)}[/status.cost]  "
             f"[dim]🔄 turns: {self.turns}[/dim]"
         )
 
@@ -837,7 +839,8 @@ async def _cmd_models(state: ReplState, arg: str) -> None:
     model = arg or state.agent.runner.llm.config.model
     inp, out = _pricing.get_pricing(model)
     ctx = _pricing.get_context_window(model)
-    cost_per_1m = f"${inp:.4f}/1M in  ${out:.4f}/1M out"
+    from ..currency import format_price_per_1m
+    cost_per_1m = f"{format_price_per_1m(inp)} in  {format_price_per_1m(out)} out"
     console.print(
         f"[info]{model}[/info]\n"
         f"  pricing:  {cost_per_1m}\n"
