@@ -60,7 +60,11 @@ microagent/
 │   ├── currency.py          # USD→CNY display conversion (MICROAGENT_CURRENCY_RATE)
 │   └── surface/cli.py       # Rich CLI with /slash commands (/models, /cost, …)
 └── tests/
-    ├── unit/                # unit tests (mock LLM, fast)
+    ├── unit/                # unit tests (mock LLM, fast) — 93 files
+    ├── smoke/               # import + lifecycle sanity checks
+    ├── e2e/                 # full agent turns with tools (FakeLLM)
+    ├── integration/         # real LLM API (MICROAGENT_TEST_* env vars)
+    └── benchmark/           # performance benchmarks (marked, skipped by default)
     └── integration/         # 7 integration tests (real LLM API)
 ```
 
@@ -158,7 +162,8 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 553 tests
+python -m pytest tests/unit/ -q            # 964 unit tests
+python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 993 tests total
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

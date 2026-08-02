@@ -1,6 +1,6 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~10,100 行核心代码 | 34 内置工具 | 553 测试
+> 版本 1.0.0 | Python ≥3.14 | ~10,100 行核心代码 | 34 内置工具 | 993 测试
 
 **MicroAgent 是一个将 AI Agent 的核心循环压缩到 10,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
@@ -14,7 +14,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 
 1. **最小内核** — 核心循环 LLM→Tool→LLM 是唯一必选路径，所有能力通过 Protocol 扩展
 2. **零依赖核心** — 必装仅 6 个（openai、pydantic、anyio、httpx、pyyaml、rich），其余 optional
-3. **TDD 全覆盖** — 527 测试，red-green-refactor 驱动
+3. **TDD 全覆盖** — 993 测试（unit + smoke + e2e + 10 integration），red-green-refactor 驱动
 4. **信息分通道** — 借鉴 Claude Code，压缩走 4 层金字塔
 
 ### 架构全景
@@ -311,18 +311,24 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-552 passed, 1 skipped, 0 failures  —  ~5,300 / 10,100 = 53% test/code ratio
+993 passed, 1 skipped, 0 failures  —  ~12,855 / 10,100 = 127% test/code ratio（unit+smoke+e2e，82% 行覆盖率）
 ```
 
 | 测试文件 | 覆盖 |
 |---------|------|
-| test_runner.py | SessionRunner, Budget |
+| test_runner*.py | SessionRunner, Budget, 中断/溢出/steer/plan 模式 |
 | test_builtins.py | 34 工具注册 |
-| test_compression.py + test_compaction_pyramid.py | 4 层压缩 |
+| test_compaction_pyramid.py + test_compress* | 4 层压缩 + 内部函数 |
 | test_session_persist.py | 会话持久化 |
-| test_process.py | 进程管理 |
-| test_browser.py / test_context7.py / test_vision.py | 各工具 |
+| test_process.py | 进程管理（start/poll/wait/write/kill） |
+| test_browser*.py | Playwright 工具（mock） |
+| test_lsp*.py | LSP 客户端（fake server）+ 辅助函数 |
+| test_mcp*.py | MCP client/connect（mock SDK） |
+| test_cli*.py | CLI 命令处理 + 渲染 + 辅助函数 |
+| test_smoke.py | 导入 + 生命周期 |
+| test_e2e.py | 完整 agent turn（工具/预算/持久化） |
 | test_config.py / test_permission.py | 配置/权限 |
+| test_ssh_terminal.py / test_terminal_backend.py | 终端后端（mock paramiko） |
 | test_credential_pool.py / test_memory_extractor.py | LLM 层 |
 
 ---
@@ -353,7 +359,7 @@ system_prompt: "你是一个Python专家。"
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 697 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
 | CLI 代码量 | 855 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 527（52% 覆盖比） | ~17,000 | 闭源 |
+| 测试数量 | 993（82% 行覆盖率） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
@@ -494,7 +500,7 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | Python 版本 | 3.14+ | 3.11+ | N/A (Node.js) |
 | 类型系统 | ✅ 完整类型标注 + `slots=True` + `frozen=True` | ✅ 大规模类型系统 | ✅ TypeScript |
-| 测试策略 | ✅ TDD, 574 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
+| 测试策略 | ✅ TDD, 993 测试（unit+smoke+e2e+integration） | ✅ ~17k 测试 + CI parity | N/A |
 | 测试隔离 | ✅ 子进程 per test file | ✅ 子进程 per test file | N/A |
 | 构建系统 | hatchling | setuptools + uv | npm/esbuild |
 | 依赖管理 | `>=floor,<next_major` 上限 | 同上 + SHA pinning | npm lock |
