@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-560%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-573%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~10,200 LOC**, **34 built-in tools**, **63 public API symbols**, **561 unit tests**.
+**~10,300 LOC**, **34 built-in tools**, **63 public API symbols**, **574 unit tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -54,7 +54,15 @@ microagent "What is Python?"
 microagent
 >>> list files in current directory
 >>> write a hello.py script
+>>> /models              # show current model pricing
+>>> /models gpt-4o-mini  # look up any model's price
+>>> /cost                # session token + cost summary
 >>> /exit
+```
+
+Cost is displayed in CNY (¥) by default. Override the exchange rate:
+```bash
+export MICROAGENT_CURRENCY_RATE=7.35  # CNY per 1 USD (default 7.20)
 ```
 
 ---
@@ -234,6 +242,11 @@ child = root.spawn(max_iterations=10, max_cost_usd=1.0)
 # Child consumption reports to all ancestors
 child.consume(iterations=2, tokens=1500, cost_usd=0.05)
 print(f"Root remaining cost: ${root.remaining_cost:.2f}")  # $9.95
+
+# Note: budget limits and cost tracking are internally in USD.
+# Use microagent.currency.format_cost() for CNY (¥) display conversion.
+from microagent.currency import format_cost
+print(f"Remaining: {format_cost(root.remaining_cost)}")  # ¥71.64
 
 # Root exhaustion cancels all descendants
 root.consume(iterations=50, cost_usd=10.0)  # raises BudgetExceeded
@@ -434,7 +447,7 @@ await scheduler.stop()
 ```bash
 # Unit tests (no network, ~2s)
 python -m pytest tests/unit/ -q
-# 560 passed, 1 skipped
+# 573 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
@@ -446,6 +459,7 @@ python -m pytest tests/integration/ -v -m integration
 ## Key Features
 
 - **OpenAI-compatible LLM** — any `/v1/chat/completions` endpoint
+- **Accurate cost tracking** — models.dev pricing cache (364 models), CNY (¥) display, `/models` command
 - **Tree-shaped budget** — `spawn()` with shared cancel_event, descendants tracking
 - **Self-improving loop** — `skill_manage` tool + `Curator` lifecycle (Hermes-style)
 - **Dual-track testing** — `FakeLLMClient` (unit) + real API (integration)

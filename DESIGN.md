@@ -1,6 +1,6 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~10,200 行核心代码 | 34 内置工具 | 561 测试
+> 版本 1.0.0 | Python ≥3.14 | ~10,300 行核心代码 | 34 内置工具 | 574 测试
 
 **MicroAgent 是一个将 AI Agent 的核心循环压缩到 10,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
@@ -169,9 +169,19 @@ class LLMConfig:
 ### 模型感知
 
 ```python
-get_context_window("oc-d4f") → 200_000      # 12 模型窗口表
-_estimate_cost("gpt-4o", 1000, 500) → $0.0075  # 11 模型定价
+get_context_window("oc-d4f") → 1_048_576     # deepseek-v4-flash, models.dev 缓存
+_estimate_cost("gpt-4o", 1000, 500) → $0.0075  # 364 模型定价缓存
+get_pricing("tx-d4f") → (0.126, 0.252)        # 别名 → deepseek-v4-flash
 ```
+
+定价数据来自 [models.dev](https://models.dev/api.json)，本地缓存 364 个模型的价格 +
+上下文窗口（`llm/pricing.py` + `models_cache.json`）。网关别名（tx-d4f →
+deepseek-v4-flash, tx-d4p → deepseek-v4-pro）通过 `_ALIAS_TO_CANONICAL` 映射表解析。
+`/models refresh` 命令重新下载最新数据。
+
+**费用显示**：内部以 USD 核算（Budget、models.dev 缓存保持 USD），仅在显示层转 CNY。
+`currency.py` 的 `format_cost()` / `format_price_per_1m()` 输出 `¥` 符号，汇率可通过
+`MICROAGENT_CURRENCY_RATE` 环境变量调整（默认 7.20）。
 
 ---
 
@@ -301,7 +311,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-560 passed, 1 skipped, 0 failures  —  ~5,400 / 10,200 = 53% test/code ratio
+573 passed, 1 skipped, 0 failures  —  ~5,500 / 10,300 = 53% test/code ratio
 ```
 
 | 测试文件 | 覆盖 |
@@ -338,7 +348,7 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~10,200 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心代码量 | ~10,300 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
 | 核心循环模块 | 654 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 697 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
@@ -484,7 +494,7 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | Python 版本 | 3.14+ | 3.11+ | N/A (Node.js) |
 | 类型系统 | ✅ 完整类型标注 + `slots=True` + `frozen=True` | ✅ 大规模类型系统 | ✅ TypeScript |
-| 测试策略 | ✅ TDD, 561 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
+| 测试策略 | ✅ TDD, 574 单元测试 | ✅ ~17k 测试 + CI parity | N/A |
 | 测试隔离 | ✅ 子进程 per test file | ✅ 子进程 per test file | N/A |
 | 构建系统 | hatchling | setuptools + uv | npm/esbuild |
 | 依赖管理 | `>=floor,<next_major` 上限 | 同上 + SHA pinning | npm lock |
@@ -521,4 +531,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~10,200 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~10,300 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。

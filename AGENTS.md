@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~10,200 LOC, 34 tools, 561 tests).
+MicroAgent is an embeddable AI agent core library (~10,300 LOC, 34 tools, 574 tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
@@ -29,7 +29,10 @@ microagent/
 │   │   ├── store.py         # Store Protocol, SQLiteStore (WAL), InMemoryStore
 │   │   └── event.py         # EventBus
 │   ├── llm/
-│   │   ├── client.py        # LLMConfig, OpenAIChatClient, pricing, context windows
+│   │   ├── client.py        # LLMConfig, OpenAIChatClient (delegates pricing)
+│   │   ├── pricing.py       # models.dev cache (364 models), alias resolution
+│   │   ├── models_cache.json # pricing seed file (shipped, offline-capable)
+│   │   ├── templates.py     # Model-specific system prompt templates
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
 │   │   ├── runner.py        # SessionRunner — the core loop (~654 LOC)
@@ -54,9 +57,10 @@ microagent/
 │   ├── terminal/            # LocalTerminal, DockerTerminal (+ SSH)
 │   ├── mcp/                 # MCP stdio client
 │   ├── cron/                # APScheduler cron integration
-│   └── surface/cli.py       # ANSI streaming CLI with /slash commands
+│   ├── currency.py          # USD→CNY display conversion (MICROAGENT_CURRENCY_RATE)
+│   └── surface/cli.py       # Rich CLI with /slash commands (/models, /cost, …)
 └── tests/
-    ├── unit/                # 287 unit tests (mock LLM)
+    ├── unit/                # unit tests (mock LLM, fast)
     └── integration/         # 7 integration tests (real LLM API)
 ```
 
@@ -154,7 +158,7 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 561 tests
+python -m pytest tests/unit/ -q            # 574 tests
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \
@@ -196,5 +200,6 @@ Keep commits small and focused. One logical change per commit.
 | CLI improvements | `surface/cli.py` |
 | Session persistence | `core/store.py` + `session/runner.py` |
 | New Protocol | `plugin/types.py` |
-| Pricing/context window | `llm/client.py` (tables at top of file) |
+| Pricing/context window | `llm/pricing.py` (models.dev cache) + `llm/models_cache.json` (seed) |
+| Currency display (CNY) | `currency.py` + `MICROAGENT_CURRENCY_RATE` env var |
 | Public API | `__init__.py` |
