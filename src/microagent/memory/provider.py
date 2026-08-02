@@ -8,6 +8,7 @@ provides full-text search with zero external dependencies.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from ..core.types import Message
+
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Memory dataclass
@@ -112,9 +115,15 @@ class SQLiteMemoryProvider:
         # special chars (", AND, OR, NOT, *, (, NEAR) raises OperationalError.
         # Treat FTS5 syntax errors as "no match" and fall back to a LIKE scan
         # so a hostile/invalid query degrades gracefully instead of crashing.
+        # Note: OperationalError is also raised for DB-level failures (locked,
+        # malformed, closed connection). The LIKE fallback reuses the same
+        # connection, so a permanent error propagates from the fallback too;
+        # but we log here so a transient error that happens to succeed on the
+        # fallback isn't silently reported as "no match".
         try:
             return self._fts_search(query, k)
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as e:
+            _logger.debug("FTS5 search fell back to LIKE for %r: %s", query, e)
             return self._like_search(query, k)
 
     def _fts_search(self, query: str, k: int) -> tuple[Memory, ...]:
@@ -131,14 +140,20 @@ class SQLiteMemoryProvider:
         return self._rows_to_memories(rows)
 
     def _like_search(self, query: str, k: int) -> tuple[Memory, ...]:
-        """LIKE-based fallback — no FTS5 grammar, safe for any input."""
-        like = f"%{query}%"
+        """LIKE-based fallback — no FTS5 grammar, safe for any input.
+
+        Escapes LIKE wildcards (% and _) so a query like '50%' matches the
+        literal substring rather than acting as a wildcard and matching
+        nearly everything.
+        """
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         rows = self._conn.execute(
             "SELECT m.id, m.content, m.category, m.created_at, "
             "       0.0 AS relevance_score, "
             "       m.session_id, m.visibility, m.metadata "
             "FROM memories m "
-            "WHERE m.content LIKE ? "
+            "WHERE m.content LIKE ? ESCAPE '\\' "
             "LIMIT ?",
             (like, k),
         ).fetchall()

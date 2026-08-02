@@ -61,7 +61,10 @@ class Agent:
             for p in skills_path.split(":"):
                 p = p.strip()
                 if p:
-                    search_paths.append(Path(p))
+                    # Expand ~ so '~/.claude/skills' in skills_path resolves.
+                    # (The loader's str→Path path also expands, but agent.py
+                    # converts to Path here, so expand here to cover ~.)
+                    search_paths.append(Path(p).expanduser())
 
         skill_loader = ClaudeSkillLoader(search_paths=tuple(search_paths)) if search_paths else None
 

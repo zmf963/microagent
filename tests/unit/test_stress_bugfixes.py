@@ -141,26 +141,52 @@ def test_output_store_accepts_path_base_dir():
 # === Bug 4: stale _steer_pending leak =====================================
 
 @pytest.mark.asyncio
-async def test_steer_pending_cleared_at_run_turn_entry():
-    """A steer() call made while no turn was active used to leak into the
-    next unrelated turn — _steer_pending was set but no turn consumed it,
-    so the NEXT turn (which had no tool calls) inherited the stale steer,
-    and the turn AFTER that one picked it up."""
+async def test_steer_pending_persists_across_text_turn():
+    """A steer set before a pure-text turn must persist to the next turn.
+
+    Per the documented contract (steer() docstring + test_steer_pure_text_
+    response_waits): 'If the current iteration has no tool calls (pure text
+    response), the steer waits until the next turn.' A text-only turn can't
+    consume a steer (it needs a tool_result), so _steer_pending must remain
+    set. An earlier attempt to clear it at run_turn entry (commit a438b7f)
+    broke this contract and was reverted."""
     runner = SessionRunner(
-        llm=FakeLLMClient([text_response("ok")]),
+        llm=FakeLLMClient([text_response("ok"), text_response("ok")]),
         registry=ToolRegistry(_default_builtins()),
-        budget=Budget.root(),
+        budget=Budget.root(max_iterations=2),
     )
-    # Steer with no turn running
-    await runner.steer("stale steer text")
-    assert runner._steer_pending == "stale steer text"
-    # Run a text-only turn (no tool calls to consume the steer)
+    await runner.steer("pending steer")
+    assert runner._steer_pending == "pending steer"
+    # Text-only turn — no tool calls, so the steer can't be consumed
     msgs = [Message.user("hi")]
     async for _ in runner.run_turn(msgs):
         pass
-    # After the turn, _steer_pending must be cleared (was leaking through)
+    # The steer must persist (documented wait-for-next-turn contract)
+    assert runner._steer_pending == "pending steer", (
+        "steer must persist across a pure-text turn (documented contract)"
+    )
+    await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_steer_pending_consumed_by_tool_turn():
+    """A pending steer IS consumed when a turn runs tool calls."""
+    from microagent.core.types import ToolResultDelta
+    runner = SessionRunner(
+        llm=FakeLLMClient([
+            tool_response([("c1", "bash", {"command": "echo hi"})]),
+            text_response("done"),
+        ]),
+        registry=ToolRegistry(_default_builtins()),
+        budget=Budget.root(),
+    )
+    await runner.steer("consume me")
+    msgs = [Message.user("run echo")]
+    async for ev in runner.run_turn(msgs):
+        pass
+    # After a tool-turn, the steer was consumed
     assert runner._steer_pending is None, (
-        f"stale steer leaked: {runner._steer_pending!r}"
+        f"steer should be consumed by a tool turn, still {runner._steer_pending!r}"
     )
     await runner.close()
 

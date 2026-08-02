@@ -43,8 +43,9 @@ class ToolOutputStore:
         else:
             # Accept str or Path — natural Python idiom is to pass a string.
             # Without conversion, str / str raises TypeError on the first
-            # path join. Verified by stress test.
-            self.base_dir = Path(base_dir)
+            # path join. Verified by stress test. Also expand ~ for symmetry
+            # with the skill loader's str→Path handling.
+            self.base_dir = Path(base_dir).expanduser()
         self.max_bytes = max_bytes
         self.max_lines = max_lines
         self.preview_chars = preview_chars

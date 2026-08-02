@@ -284,12 +284,12 @@ class SessionRunner:
 
         self._overflow_retried = False
         self._interrupt_requested = False
-        # Clear any stale steer text from a prior turn. Without this, a
-        # steer() call made while no turn was active (e.g. via Agent.steer()'s
-        # asyncio.run fallback) leaks into the next unrelated turn's first
-        # tool result. Verified by stress test: _steer_pending stayed set
-        # across a text-only turn.
-        self._steer_pending = None
+        # NOTE: _steer_pending is intentionally NOT cleared here. A steer
+        # arriving during a pure-text turn is documented to "wait until the
+        # next turn" (steer() docstring + test_steer_pure_text_response_waits).
+        # Clearing it at entry would discard a legitimately-pending steer.
+        # A previously-applied entry-clear (commit a438b7f) was reverted for
+        # this reason — it broke the documented persistence contract.
         # Reset anti-jitter counter once per user turn (not per loop
         # iteration). Previously this lived inside the while loop, so the
         # counter was reset on every tool-call iteration — it could never

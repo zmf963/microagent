@@ -67,6 +67,25 @@ async def test_memory_recall_like_fallback_finds_matches():
     prov.close()
 
 
+@pytest.mark.asyncio
+async def test_memory_recall_like_fallback_escapes_wildcards():
+    """The LIKE fallback must escape % and _ wildcards so a query like '50%'
+    matches the literal substring, not nearly everything."""
+    from microagent.memory.provider import SQLiteMemoryProvider, Memory
+
+    prov = SQLiteMemoryProvider(tempfile.mktemp(suffix=".db"))
+    await prov.batch_write((
+        Memory(id="m1", content="the price is 50% off", category="fact", created_at=time.time()),
+        Memory(id="m2", content="a 100 percent discount", category="fact", created_at=time.time()),
+    ))
+    # '50%' is FTS5-invalid (trailing %) → falls back to LIKE. The % must be
+    # escaped so it matches only '50%' literally, not every row containing '50'.
+    hits = await prov.recall("50%", k=5)
+    assert len(hits) == 1, f"expected exactly the '50%' row, got {len(hits)}: {[h.content for h in hits]}"
+    assert hits[0].content == "the price is 50% off"
+    prov.close()
+
+
 def test_skill_loader_accepts_str_paths():
     """ClaudeSkillLoader(search_paths=('~/skills',)) with str entries used to
     crash on str.exists(). Now converts to Path."""
