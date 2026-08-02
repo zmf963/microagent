@@ -126,6 +126,8 @@ def get_pricing(model: str) -> tuple[float, float]:
     tracking never silently zeros out (which would let an expensive model
     burn through the budget unreported).
     """
+    if not model:
+        return _FALLBACK_PRICE
     _load_cache()
     # Gateway aliases (tx-d4f etc.) resolve to their canonical models.dev
     # id so pricing tracks the real upstream model. Case-insensitive
@@ -156,6 +158,8 @@ def get_pricing(model: str) -> tuple[float, float]:
 
 def get_context_window(model: str) -> int:
     """Return the context window (tokens) for `model`, prefix-matched."""
+    if not model:
+        return _FALLBACK_CONTEXT
     _load_cache()
     canonical = _ALIAS_TO_CANONICAL.get(model.lower())
     if canonical is not None:

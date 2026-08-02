@@ -39,8 +39,12 @@ class ToolOutputStore:
         retention_days: int = RETENTION_DAYS,
     ):
         if base_dir is None:
-            base_dir = Path.home() / ".microagent" / "tool_outputs"
-        self.base_dir = base_dir
+            self.base_dir = Path.home() / ".microagent" / "tool_outputs"
+        else:
+            # Accept str or Path — natural Python idiom is to pass a string.
+            # Without conversion, str / str raises TypeError on the first
+            # path join. Verified by stress test.
+            self.base_dir = Path(base_dir)
         self.max_bytes = max_bytes
         self.max_lines = max_lines
         self.preview_chars = preview_chars

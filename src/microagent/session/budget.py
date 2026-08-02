@@ -114,7 +114,16 @@ class Budget:
 
         Thread-safe: uses asyncio.Lock to serialize concurrent updates from
         subagents that share the same ancestor chain.
+
+        Negative values are clamped to zero — without this, a malicious or
+        buggy caller passing ``cost_usd=-10.0`` would make ``remaining_cost``
+        EXPAND beyond the original limit (e.g. $5 limit → $15 remaining),
+        letting the agent spend 3× its budget. ``estimate_cost`` already
+        clamps its inputs; consume() must too since it's a public API.
         """
+        iterations = max(0, iterations)
+        tokens = max(0, tokens)
+        cost_usd = max(0.0, cost_usd)
         async with self._lock:
             if self._cancel_event is not None and self._cancel_event.is_set():
                 raise BudgetExceeded("budget cancelled by root")

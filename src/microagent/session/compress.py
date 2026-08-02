@@ -30,6 +30,14 @@ from ..core.types import Message, TextDelta, Usage
 if TYPE_CHECKING:
     from .budget import Budget
 
+# BudgetExceeded is referenced in except clauses at runtime (in
+# _summarize_and_attach and compact_conversation), so it MUST be a real
+# runtime import, not under TYPE_CHECKING. Previously it was only imported
+# locally inside compact_conversation's try block, leaving _summarize_and_attach
+# referencing an undefined name — any LLM error during compression raised
+# NameError instead of triggering the circuit breaker.
+from .budget import BudgetExceeded
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -498,8 +506,6 @@ async def compact_conversation(
     state._is_compaction_call = True
 
     try:
-        from .budget import BudgetExceeded
-
         # Manual /compact: clear cooldown, skip to LLM
         if force:
             state._cooldown_until = 0.0
