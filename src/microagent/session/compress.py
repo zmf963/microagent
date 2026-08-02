@@ -480,7 +480,6 @@ async def compact_conversation(
     state: CompactionState | None = None,
     force: bool = False,
     budget: Budget | None = None,
-    strict_role_alternation: bool = False,
 ) -> tuple[Message, ...]:
     """Run the 4-layer compression pipeline.
 
@@ -504,34 +503,9 @@ async def compact_conversation(
         # Manual /compact: clear cooldown, skip to LLM
         if force:
             state._cooldown_until = 0.0
-            try:
-                prev = state.previous_summary
-                current, usage = await _llm_summarize(messages, llm, previous_summary=prev)
-                if budget is not None and usage:
-                    await budget.consume(
-                        tokens=usage.input_tokens + usage.output_tokens,
-                        cost_usd=usage.cost_usd,
-                    )
-                # Capture the LLM summary text BEFORE recover_file_attachments
-                # prepends attachment-recovery messages to `current`. Otherwise
-                # _extract_summary_text(current) reads current[0] which is now
-                # an attachment message, not the summary — breaking incremental
-                # mode (next compaction does a full summary, discarding prior
-                # context + burning a full LLM call).
-                state.previous_summary = _extract_summary_text(current)
-                # Recover recent file attachments after summary
-                from .attachments import recover_file_attachments
-
-                current = recover_file_attachments(messages, current)
-                state.record_success()
-                return current
-            except BudgetExceeded:
-                raise
-            except Exception:
-                state.record_failure()
-                if state.is_circuit_broken():
-                    state.activate_cooldown()
-                return _fallback(messages)
+            return await _summarize_and_attach(
+                messages, messages, llm, state, budget, messages,
+            )
 
         # Auto: circuit breaker
         if state.is_circuit_broken() or state.is_cooling_down():
@@ -552,32 +526,59 @@ async def compact_conversation(
         # Layer 3: LLM Summary (incremental if previous summary exists)
         layer3_threshold = context_window - AUTOCOMPACT_BUFFER
         if count_tokens(current) > layer3_threshold:
-            try:
-                prev = state.previous_summary
-                current, usage = await _llm_summarize(current, llm, previous_summary=prev)
-                if budget is not None and usage:
-                    await budget.consume(
-                        tokens=usage.input_tokens + usage.output_tokens,
-                        cost_usd=usage.cost_usd,
-                    )
-                # Capture summary BEFORE attachment recovery (see force path).
-                state.previous_summary = _extract_summary_text(current)
-                # Recover recent file attachments after summary
-                from .attachments import recover_file_attachments
+            current = await _summarize_and_attach(
+                current, messages, llm, state, budget, current,
+            )
 
-                current = recover_file_attachments(messages, current)
-                state.record_success()
-            except BudgetExceeded:
-                raise
-            except Exception:
-                state.record_failure()
-                if state.is_circuit_broken():
-                    state.activate_cooldown()
-                return _fallback(current)
-
-        return _ensure_role_alternation(current, strict=strict_role_alternation)
+        return current
     finally:
         state._is_compaction_call = False
+
+
+async def _summarize_and_attach(
+    summarize_input: tuple[Message, ...],
+    recovery_source: tuple[Message, ...],
+    llm: object,
+    state: CompactionState,
+    budget: Budget | None,
+    fallback_input: tuple[Message, ...],
+) -> tuple[Message, ...]:
+    """Shared L3 body: summarize → consume budget → capture previous_summary →
+    recover file attachments → record success.
+
+    Used by both the force path and the auto-L3 path to avoid divergence
+    (a previous bug fixed in one path was missed in the other).
+
+    `summarize_input` is what the LLM summarizes (force: original messages;
+    auto: post-L1/L2 current). `recovery_source` is passed to
+    recover_file_attachments. `fallback_input` is returned on non-budget
+    exceptions (force: original messages; auto: post-L1/L2 current).
+    """
+    try:
+        prev = state.previous_summary
+        current, usage = await _llm_summarize(summarize_input, llm, previous_summary=prev)
+        if budget is not None and usage:
+            await budget.consume(
+                tokens=usage.input_tokens + usage.output_tokens,
+                cost_usd=usage.cost_usd,
+            )
+        # Capture the LLM summary text BEFORE recover_file_attachments
+        # prepends attachment-recovery messages to `current`. Otherwise
+        # _extract_summary_text(current) reads current[0] which is now an
+        # attachment message, not the summary — breaking incremental mode.
+        state.previous_summary = _extract_summary_text(current)
+        from .attachments import recover_file_attachments
+
+        current = recover_file_attachments(recovery_source, current)
+        state.record_success()
+        return current
+    except BudgetExceeded:
+        raise
+    except Exception:
+        state.record_failure()
+        if state.is_circuit_broken():
+            state.activate_cooldown()
+        return _fallback(fallback_input)
 
 
 def _extract_summary_text(compressed: tuple[Message, ...]) -> str:
@@ -643,34 +644,3 @@ def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:
     )
     # Keep last 5 messages for continuity
     return (placeholder,) + messages[-5:]
-
-
-def _ensure_role_alternation(
-    messages: tuple[Message, ...],
-    *,
-    strict: bool = False,
-) -> tuple[Message, ...]:
-    """Ensure no adjacent same-role messages (user/assistant).
-
-    When strict=False, return messages unchanged.
-    When strict=True, insert empty messages between adjacent same-role pairs.
-    Tool messages are skipped (they follow tool_call pairing rules).
-    """
-    if not strict:
-        return messages
-
-    result: list[Message] = []
-    prev_role: str | None = None
-    for msg in messages:
-        if msg.role == "tool":
-            result.append(msg)
-            continue
-        if prev_role is not None and msg.role == prev_role:
-            # Insert empty message of the opposite role
-            if msg.role == "user":
-                result.append(Message.assistant(""))
-            else:
-                result.append(Message.user(""))
-        result.append(msg)
-        prev_role = msg.role
-    return tuple(result)

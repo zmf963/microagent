@@ -81,6 +81,11 @@ class SessionRunner:
         self._loaded_skills_order: list[str] = []  # LRU ordering for eviction
         self._max_loaded_skills: int = 10  # cap to prevent unbounded growth
         self._cached_mode: str = "build"
+        # Compaction state — initialized here (not lazily in run_turn) so the
+        # hasattr checks and lazy-init branches in the loop are unnecessary.
+        from .compress import CompactionState
+
+        self._compaction_state: CompactionState = CompactionState()
         self._extractor = None
         self._overflow_retried = False
         self._steer_pending: str | None = None
@@ -282,8 +287,7 @@ class SessionRunner:
         # counter was reset on every tool-call iteration — it could never
         # reach the skip threshold, and ineffective compression retried
         # every iteration, burning LLM tokens / budget.
-        if hasattr(self, "_compaction_state"):
-            self._compaction_state.reset_for_new_turn()
+        self._compaction_state.reset_for_new_turn()
 
         while not self.budget.exhausted:
             if self._interrupt_requested:
@@ -307,10 +311,7 @@ class SessionRunner:
                 _threshold = int(_window * 0.6)
 
             if len(messages) > 10:
-                from .compress import CompactionState, compact_conversation, count_tokens
-
-                if not hasattr(self, "_compaction_state"):
-                    self._compaction_state = CompactionState()
+                from .compress import compact_conversation, count_tokens
 
                 # Anti-jitter: skip if 2 consecutive ineffective compressions
                 if self._compaction_state.should_skip_compression():
@@ -515,10 +516,8 @@ class SessionRunner:
                                         yield TurnFailed(f"budget exhausted: {e}")
                                         return
                                 # Force compaction to reduce context
-                                from .compress import CompactionState, compact_conversation
+                                from .compress import compact_conversation
 
-                                if not hasattr(self, "_compaction_state"):
-                                    self._compaction_state = CompactionState()
                                 try:
                                     messages_list = await compact_conversation(
                                         tuple(messages),
