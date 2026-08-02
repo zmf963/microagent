@@ -208,7 +208,13 @@ class ClaudeSkillLoader:
     """
 
     def __init__(self, search_paths: tuple[Path, ...]):
-        self._paths = search_paths
+        # Accept str or Path entries — the natural Python idiom is to pass a
+        # string ("~/.claude/skills"). Without conversion, str.exists() raises
+        # AttributeError. Same class of bug as ToolOutputStore base_dir.
+        self._paths: tuple[Path, ...] = tuple(
+            Path(p).expanduser() if isinstance(p, str) else p
+            for p in search_paths
+        )
 
     async def load(self) -> tuple[Skill, ...]:
         skills: list[Skill] = []

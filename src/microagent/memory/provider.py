@@ -108,6 +108,16 @@ class SQLiteMemoryProvider:
         pass
 
     async def recall(self, query: str, k: int = 5) -> tuple[Memory, ...]:
+        # FTS5 MATCH uses a query-language grammar; raw user input containing
+        # special chars (", AND, OR, NOT, *, (, NEAR) raises OperationalError.
+        # Treat FTS5 syntax errors as "no match" and fall back to a LIKE scan
+        # so a hostile/invalid query degrades gracefully instead of crashing.
+        try:
+            return self._fts_search(query, k)
+        except sqlite3.OperationalError:
+            return self._like_search(query, k)
+
+    def _fts_search(self, query: str, k: int) -> tuple[Memory, ...]:
         rows = self._conn.execute(
             "SELECT m.id, m.content, m.category, m.created_at, "
             "       -bm25(memories_fts) AS relevance_score, "
@@ -118,6 +128,24 @@ class SQLiteMemoryProvider:
             "ORDER BY relevance_score DESC LIMIT ?",
             (query, k),
         ).fetchall()
+        return self._rows_to_memories(rows)
+
+    def _like_search(self, query: str, k: int) -> tuple[Memory, ...]:
+        """LIKE-based fallback — no FTS5 grammar, safe for any input."""
+        like = f"%{query}%"
+        rows = self._conn.execute(
+            "SELECT m.id, m.content, m.category, m.created_at, "
+            "       0.0 AS relevance_score, "
+            "       m.session_id, m.visibility, m.metadata "
+            "FROM memories m "
+            "WHERE m.content LIKE ? "
+            "LIMIT ?",
+            (like, k),
+        ).fetchall()
+        return self._rows_to_memories(rows)
+
+    @staticmethod
+    def _rows_to_memories(rows) -> tuple[Memory, ...]:
         return tuple(
             Memory(
                 id=r[0],
