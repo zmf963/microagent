@@ -217,3 +217,51 @@ async def test_compaction_with_tool_calls(tmp_path):
     # Compressed result should mention the steps
     summary_text = " ".join(m.content for m in compressed if m.role == "user")
     assert "compact_test_step" in summary_text or "echo" in summary_text.lower()
+
+
+@pytest.mark.integration
+async def test_streaming_events_and_usage():
+    """Streaming produces TextDelta events and a Usage event with cost."""
+    agent = Agent.from_config(_get_config(), max_iterations=3)
+    from microagent.core.types import TextDelta, Usage, TurnComplete
+    events = []
+    async for ev in agent.runner.run_turn([Message.user("Say 'stream_ok' in one word.")]):
+        events.append(ev)
+    assert any(isinstance(e, TextDelta) for e in events), "expected TextDelta streaming"
+    assert any(isinstance(e, Usage) for e in events), "expected Usage event"
+    assert any(isinstance(e, TurnComplete) for e in events), "expected TurnComplete"
+    await agent.close()
+
+
+@pytest.mark.integration
+async def test_cost_is_tracked_in_cny():
+    """The CLI usage tracker records cost; format_cost shows CNY."""
+    from microagent.surface.cli import _UsageTracker
+    from microagent.currency import format_cost
+    agent = Agent.from_config(_get_config(), max_iterations=3)
+    tracker = _UsageTracker()
+    async for ev in agent.runner.run_turn([Message.user("Say 'cost_ok'.")]):
+        if isinstance(ev, Usage):
+            tracker.record(ev)
+    # Cost should be non-negative; format_cost converts to ¥
+    assert tracker.total_cost >= 0
+    s = format_cost(tracker.total_cost)
+    assert s.startswith("¥")
+    await agent.close()
+
+
+@pytest.mark.integration
+async def test_web_search_tool():
+    """LLM calls web_search and returns real results."""
+    agent = Agent.from_config(
+        _get_config(),
+        system_prompt=(
+            "You are a test assistant. When asked to search, use the "
+            "web_search tool and report the top result titles."
+        ),
+        max_iterations=5,
+    )
+    messages = [Message.user("Search the web for 'python programming language' and list 2 result titles.")]
+    result = await agent.arun(messages)
+    assert result.strip(), "expected a non-empty search result summary"
+    await agent.close()

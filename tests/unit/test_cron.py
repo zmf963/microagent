@@ -100,3 +100,129 @@ class TestCronScheduler:
         )
         scheduler = CronScheduler(agent=agent, store=store)
         assert scheduler.store is store
+
+
+class TestTryAcquireLock:
+    def test_acquire_and_release(self, tmp_path):
+        from microagent.cron.scheduler import _try_acquire_lock, _release_lock
+        lock = tmp_path / "test.lock"
+        fd = _try_acquire_lock(lock, return_fd=True)
+        assert fd is not None
+        # Second acquire (non-blocking) while held must fail
+        second = _try_acquire_lock(lock, return_fd=True)
+        assert second is None
+        _release_lock(fd)
+        # After release, can re-acquire
+        fd3 = _try_acquire_lock(lock, return_fd=True)
+        assert fd3 is not None
+        _release_lock(fd3)
+
+    def test_check_only_mode(self, tmp_path):
+        from microagent.cron.scheduler import _try_acquire_lock
+        lock = tmp_path / "check.lock"
+        result = _try_acquire_lock(lock, return_fd=False)
+        assert result is True  # acquired and released immediately
+
+    def test_creates_parent_dirs(self, tmp_path):
+        from microagent.cron.scheduler import _try_acquire_lock
+        lock = tmp_path / "nested" / "dir" / "lock.lock"
+        fd = _try_acquire_lock(lock, return_fd=True)
+        assert fd is not None
+        from microagent.cron.scheduler import _release_lock
+        _release_lock(fd)
+
+
+class TestSaveCronOutput:
+    def test_saves_markdown(self, tmp_path):
+        from microagent.cron.scheduler import _save_cron_output
+        path = _save_cron_output(tmp_path, "job1", "my prompt", "my response")
+        import os
+        assert os.path.exists(path)
+        content = open(path).read()
+        assert "# Cron Job: job1" in content
+        assert "my prompt" in content
+        assert "my response" in content
+
+
+class TestExecuteJob:
+    async def test_new_strategy(self, monkeypatch, tmp_path):
+        from microagent.cron.scheduler import CronScheduler, CronJob, _save_cron_output
+        from microagent.core.types import Message
+
+        class FakeAgent:
+            async def arun(self, messages):
+                assert isinstance(messages, list)
+                assert messages[0].role == "user"
+                assert messages[0].content == "the prompt"
+                return "result text"
+
+        scheduler = CronScheduler(agent=FakeAgent())
+        job = CronJob(name="j", schedule="interval:60", prompt="the prompt")
+        # monkeypatch home dir for output persistence
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        await scheduler._execute_job(job)
+
+    async def test_resume_last_strategy(self, monkeypatch, tmp_path):
+        from microagent.cron.scheduler import CronScheduler, CronJob
+        from microagent.core.store import InMemoryStore
+        from microagent.core.types import Message
+
+        store = InMemoryStore()
+        await store.append("last-sess", Message.user("old q"))
+        await store.append("last-sess", Message.assistant("old a"))
+
+        class FakeAgent:
+            async def arun(self, messages):
+                # Should include old history + job prompt
+                roles = [m.role for m in messages]
+                assert "user" in roles
+                # history preserved
+                assert any(m.content == "old q" for m in messages)
+                assert any(m.content == "the prompt" for m in messages)
+                return "resumed result"
+
+        # Need list_sessions on the store — InMemoryStore may not have it
+        # Use a fake store that mimics the interface
+        class FakeStore:
+            async def list_sessions(self):
+                return ["last-sess"]
+            async def load_history(self, sid):
+                return [Message.user("old q"), Message.assistant("old a")]
+
+        scheduler = CronScheduler(agent=FakeAgent(), store=FakeStore())
+        job = CronJob(name="r", schedule="interval:30", prompt="the prompt", session_strategy="resume:last")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        await scheduler._execute_job(job)
+
+    async def test_resume_with_no_sessions(self):
+        from microagent.cron.scheduler import CronScheduler, CronJob
+
+        class FakeStore:
+            async def list_sessions(self):
+                return []
+            async def load_history(self, sid):
+                return []
+
+        class FakeAgent:
+            async def arun(self, messages):
+                assert len(messages) == 1
+                assert messages[0].content == "prompt"
+                return "ok"
+
+        scheduler = CronScheduler(agent=FakeAgent(), store=FakeStore())
+        job = CronJob(name="e", schedule="interval:10", prompt="prompt", session_strategy="resume:last")
+        await scheduler._execute_job(job)
+
+    async def test_agent_error_is_logged(self, caplog):
+        import logging
+        from microagent.cron.scheduler import CronScheduler, CronJob
+
+        class BoomAgent:
+            async def arun(self, messages):
+                raise RuntimeError("boom")
+
+        scheduler = CronScheduler(agent=BoomAgent())
+        job = CronJob(name="boom", schedule="interval:10", prompt="x")
+        with caplog.at_level(logging.ERROR):
+            await scheduler._execute_job(job)
+        assert any("failed" in r.message for r in caplog.records)

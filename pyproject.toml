@@ -65,6 +65,9 @@ asyncio_mode = "auto"
 markers = [
     "integration: tests that hit a real LLM API (set MICROAGENT_TEST_* env vars)",
     "benchmark: performance benchmark tests",
+    "e2e: end-to-end tests driving a full agent turn with tools",
+    "smoke: fast import + lifecycle sanity checks",
+    "cli: CLI surface / slash-command tests",
 ]
 testpaths = ["tests"]
 
@@ -100,6 +103,7 @@ docstring-code-format = true
 
 [tool.coverage.run]
 source = ["src/microagent"]
+branch = true
 omit = ["tests/*"]
 
 [tool.coverage.report]
