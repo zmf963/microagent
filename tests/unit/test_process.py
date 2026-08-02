@@ -187,3 +187,75 @@ class TestProcessSessionIsolation:
                 arguments={"action": "kill", "session_id": sid_a},
             )
         )
+
+
+class TestProcessWaitWriteCleanup:
+    async def test_wait_action(self, proc_tool):
+        """wait waits for process exit and returns output."""
+        from microagent.tools.builtins.process import process, _get_registry
+        reg = _get_registry()
+        sid = (await process.fn(action="start", command="echo wait_output")).content.strip()
+        r = await process.fn(action="wait", session_id=sid, timeout=10)
+        assert not r.is_error
+        assert "wait_output" in r.content
+
+    async def test_wait_timeout(self, proc_tool):
+        """wait times out for a long-running process."""
+        from microagent.tools.builtins.process import process, _get_registry
+        reg = _get_registry()
+        sid = (await process.fn(action="start", command="sleep 30")).content.strip()
+        r = await process.fn(action="wait", session_id=sid, timeout=0.5)
+        assert r.is_error
+        assert "timed out" in r.content.lower()
+        await process.fn(action="kill", session_id=sid)
+
+    async def test_write_action(self, proc_tool):
+        """write sends data to process stdin (requires stdin=PIPE)."""
+        from microagent.tools.builtins.process import process, _get_registry
+        reg = _get_registry()
+        # cat echoes stdin back
+        sid = (await process.fn(action="start", command="cat")).content.strip()
+        r = await process.fn(action="write", session_id=sid, data="hello stdin")
+        assert not r.is_error
+        assert "written" in r.content
+        await process.fn(action="kill", session_id=sid)
+
+    async def test_write_no_data(self, proc_tool):
+        from microagent.tools.builtins.process import process
+        sid = (await process.fn(action="start", command="cat")).content.strip()
+        r = await process.fn(action="write", session_id=sid, data="")
+        assert r.is_error
+        assert "data is required" in r.content
+        await process.fn(action="kill", session_id=sid)
+
+    async def test_write_nonexistent_process(self, proc_tool):
+        from microagent.tools.builtins.process import process
+        r = await process.fn(action="write", session_id="nope", data="x")
+        assert r.is_error
+        assert "process not found" in r.content
+
+    async def test_poll_with_partial_output(self, proc_tool):
+        """poll returns running status + any output captured so far."""
+        from microagent.tools.builtins.process import process
+        sid = (await process.fn(action="start", command="echo partial_here && sleep 5")).content.strip()
+        # Give it time to emit the echo
+        import asyncio
+        await asyncio.sleep(0.5)
+        r = await process.fn(action="poll", session_id=sid)
+        assert "(running)" in r.content or "partial_here" in r.content
+        await process.fn(action="kill", session_id=sid)
+
+    async def test_log_action(self, proc_tool):
+        from microagent.tools.builtins.process import process
+        sid = (await process.fn(action="start", command="echo log_me")).content.strip()
+        # Force output capture via poll
+        await process.fn(action="poll", session_id=sid)
+        r = await process.fn(action="log", session_id=sid)
+        assert "log_me" in r.content or "(no output" in r.content
+        await process.fn(action="kill", session_id=sid)
+
+    async def test_start_missing_command(self, proc_tool):
+        from microagent.tools.builtins.process import process
+        r = await process.fn(action="start", command="")
+        assert r.is_error
+        assert "command is required" in r.content

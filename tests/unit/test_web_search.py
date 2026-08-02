@@ -38,3 +38,69 @@ class TestWebSearch:
 
         results = _parse_ddg_lite("", max_results=5)
         assert results == []
+
+
+class TestWebSearchHTTP:
+    async def test_search_error(self, monkeypatch):
+        """Network error → error result."""
+        import httpx
+        from microagent.tools.builtins.web_search import web_search
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: (_ for _ in ()).throw(ConnectionError("down")))
+        r = await web_search.fn(query="python")
+        assert r.is_error
+        assert "search failed" in r.content
+
+    async def test_http_status_error(self, monkeypatch):
+        import httpx
+        from microagent.tools.builtins.web_search import web_search
+        class _BadResp:
+            def raise_for_status(self):
+                raise httpx.HTTPStatusError("bad", request=None, response=httpx.Response(500))
+            @property
+            def text(self): return ""
+        class _Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, *a, **k): return _BadResp()
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+        r = await web_search.fn(query="x")
+        assert r.is_error
+
+    async def test_success_with_results(self, monkeypatch):
+        import httpx
+        from microagent.tools.builtins.web_search import web_search
+        html = """
+        <a href="https://example.com/p1">First Result</a>
+        <td class="result-snippet">snippet one</td>
+        <a href="https://example.com/p2">Second Result</a>
+        <td class="result-snippet">snippet two</td>
+        """
+        class _Resp:
+            def raise_for_status(self): pass
+            @property
+            def text(self): return html
+        class _Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, *a, **k): return _Resp()
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+        r = await web_search.fn(query="python", max_results=5)
+        assert not r.is_error
+        assert "First Result" in r.content
+        assert "example.com" in r.content
+
+    async def test_success_no_results(self, monkeypatch):
+        import httpx
+        from microagent.tools.builtins.web_search import web_search
+        class _Resp:
+            def raise_for_status(self): pass
+            @property
+            def text(self): return "<html>nothing here</html>"
+        class _Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, *a, **k): return _Resp()
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+        r = await web_search.fn(query="nonexistent")
+        assert not r.is_error
+        assert "(no results)" in r.content

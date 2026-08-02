@@ -179,3 +179,43 @@ class TestRefresh:
             # resolves tx-d4f → deepseek-v4-flash which is no longer present).
             pricing._cache.clear()
             pricing._cache_loaded = False
+
+
+class TestPricingMorePaths:
+    def test_longest_prefix_match(self):
+        """A dated/suffixed model resolves to its base prefix's pricing."""
+        from microagent.llm.pricing import get_pricing
+        # openai/gpt-4o-2024-08-06 → openai/gpt-4o via prefix
+        p = get_pricing("openai/gpt-4o-2024-08-06")
+        assert p[0] > 0
+
+    def test_bare_id_suffix_match(self):
+        from microagent.llm.pricing import get_pricing
+        # 'gpt-4o' matches 'openai/gpt-4o'
+        assert get_pricing("gpt-4o") == get_pricing("openai/gpt-4o")
+
+    def test_refresh_failure_keeps_cache(self, monkeypatch, tmp_path):
+        """refresh() with all fetches failing keeps existing cache."""
+        from microagent.llm import pricing
+        pricing._load_cache()
+        before = len(pricing._cache)
+        def _fail(*a, **k): raise OSError("net down")
+        monkeypatch.setattr(pricing.urllib.request, "urlopen", _fail)
+        n = pricing.refresh()
+        assert n == before
+        assert len(pricing._cache) == before
+
+    def test_alias_to_canonical(self):
+        from microagent.llm.pricing import get_pricing
+        # tx-d4f → deepseek/deepseek-v4-flash (paid, not $0)
+        p = get_pricing("tx-d4f")
+        assert p[0] > 0 and p[1] > 0
+
+    def test_estimate_cost_huge_numbers(self):
+        from microagent.llm.pricing import estimate_cost
+        cost = estimate_cost("openai/gpt-4o", 10**12, 10**12)
+        assert cost > 0
+
+    def test_get_context_window_matches_prefix(self):
+        from microagent.llm.pricing import get_context_window
+        assert get_context_window("openai/gpt-4o-2024-08-06") == 128_000
