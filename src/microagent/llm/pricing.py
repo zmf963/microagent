@@ -58,7 +58,12 @@ _cache_loaded = False
 
 
 def _load_cache() -> None:
-    """Populate _cache from the on-disk seed file (idempotent)."""
+    """Populate _cache from the on-disk seed file.
+
+    On failure, leaves _cache_loaded=False so the next call retries — a
+    single transient OSError (file locked) or a corrupted seed shouldn't
+    permanently disable pricing for the process lifetime.
+    """
     global _cache_loaded
     if _cache_loaded:
         return
@@ -67,9 +72,10 @@ def _load_cache() -> None:
         models = data.get("models", data) if isinstance(data, dict) else data
         if isinstance(models, dict):
             _cache.update(models)
+        _cache_loaded = True
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("Could not load models cache %s: %r", _CACHE_FILE, e)
-    _cache_loaded = True
+        # Do NOT set _cache_loaded=True — allow retry on next call.
 
 
 def _normalize_id(model: str) -> str:
@@ -130,8 +136,9 @@ def get_pricing(model: str) -> tuple[float, float]:
     """
     _load_cache()
     # Local overrides take precedence (gateway aliases aren't in models.dev).
-    if model in _LOCAL_OVERRIDES:
-        return _LOCAL_OVERRIDES[model][:2]
+    # Case-insensitive: config files / env vars often use uppercase ("TX-D4F").
+    if model.lower() in _LOCAL_OVERRIDES:
+        return _LOCAL_OVERRIDES[model.lower()][:2]
     entry = _lookup(model)
     if entry is not None:
         try:
@@ -147,8 +154,8 @@ def get_pricing(model: str) -> tuple[float, float]:
 def get_context_window(model: str) -> int:
     """Return the context window (tokens) for `model`, prefix-matched."""
     _load_cache()
-    if model in _LOCAL_OVERRIDES:
-        return _LOCAL_OVERRIDES[model][2]
+    if model.lower() in _LOCAL_OVERRIDES:
+        return _LOCAL_OVERRIDES[model.lower()][2]
     entry = _lookup(model)
     if entry is not None:
         ctx = entry.get("context_length")
@@ -158,8 +165,16 @@ def get_context_window(model: str) -> int:
 
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimate USD cost from token counts and model pricing."""
+    """Estimate USD cost from token counts and model pricing.
+
+    Token counts are clamped to non-negative: some proxies emit negative
+    deltas (cached-token adjustments) which would otherwise produce a
+    negative cost and silently *decrement* the Budget's consumed total,
+    letting the agent exceed its real budget.
+    """
     in_price, out_price = get_pricing(model)
+    input_tokens = max(0, int(input_tokens or 0))
+    output_tokens = max(0, int(output_tokens or 0))
     return (
         input_tokens / 1_000_000 * in_price
         + output_tokens / 1_000_000 * out_price
@@ -216,14 +231,31 @@ def refresh(timeout: float = 20.0) -> int:
             "context_length": ctx if isinstance(ctx, int) and ctx > 0 else None,
         }
 
-    # Persist (best-effort) so the refresh survives a restart.
+    # Persist atomically (temp + os.replace) so a crash mid-write can't
+    # corrupt the shipped seed file (which would brick pricing for every
+    # future process — same pattern already fixed in curator.py).
     try:
+        import os as _os
+        import tempfile as _tf
+
         payload = {
             "_source": f"refreshed from {url}",
             "_note": "prices in USD per 1M tokens; context_length in tokens",
             "models": new_cache,
         }
-        _CACHE_FILE.write_text(json.dumps(payload, indent=2))
+        fd, tmp_path = _tf.mkstemp(
+            dir=str(_CACHE_FILE.parent), suffix=".tmp", prefix=".models_"
+        )
+        try:
+            with _os.fdopen(fd, "w") as f:
+                f.write(json.dumps(payload, indent=2))
+            _os.replace(tmp_path, str(_CACHE_FILE))
+        except Exception:
+            try:
+                _os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except OSError as e:
         logger.warning("Could not persist refreshed cache: %r", e)
 

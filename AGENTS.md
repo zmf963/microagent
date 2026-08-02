@@ -4,7 +4,7 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~10,100 LOC, 34 tools, 548 tests).
+MicroAgent is an embeddable AI agent core library (~10,200 LOC, 34 tools, 561 tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
@@ -154,7 +154,7 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 548 tests
+python -m pytest tests/unit/ -q            # 561 tests
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

@@ -516,11 +516,17 @@ async def compact_conversation(
                         tokens=usage.input_tokens + usage.output_tokens,
                         cost_usd=usage.cost_usd,
                     )
+                # Capture the LLM summary text BEFORE recover_file_attachments
+                # prepends attachment-recovery messages to `current`. Otherwise
+                # _extract_summary_text(current) reads current[0] which is now
+                # an attachment message, not the summary — breaking incremental
+                # mode (next compaction does a full summary, discarding prior
+                # context + burning a full LLM call).
+                state.previous_summary = _extract_summary_text(current)
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
 
                 current = recover_file_attachments(messages, current)
-                state.previous_summary = _extract_summary_text(current)
                 state.record_success()
                 return current
             except BudgetExceeded:
@@ -558,11 +564,12 @@ async def compact_conversation(
                         tokens=usage.input_tokens + usage.output_tokens,
                         cost_usd=usage.cost_usd,
                     )
+                # Capture summary BEFORE attachment recovery (see force path).
+                state.previous_summary = _extract_summary_text(current)
                 # Recover recent file attachments after summary
                 from .attachments import recover_file_attachments
 
                 current = recover_file_attachments(messages, current)
-                state.previous_summary = _extract_summary_text(current)
                 state.record_success()
             except BudgetExceeded:
                 raise

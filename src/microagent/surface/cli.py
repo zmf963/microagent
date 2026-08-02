@@ -684,10 +684,12 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
     before_tokens = count_tokens(tuple(messages))
     agent = state.agent
     state_obj = getattr(agent.runner, "_compaction_state", CompactionState())
+    from ..llm.client import get_context_window
+    model_ctx = get_context_window(agent.runner.llm.config.model)
     compressed = await compact_conversation(
         tuple(messages),
         agent.runner.llm,
-        context_window=before_tokens + 8000,
+        context_window=model_ctx,
         state=state_obj,
         force=True,
     )

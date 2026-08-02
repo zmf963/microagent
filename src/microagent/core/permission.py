@@ -86,6 +86,13 @@ class PermissionEngine:
                 continue
             if not self._args_match(call.arguments, rule.arguments_constraint):
                 continue
+            # ScriptRule delegates to its external script (the rule.decision
+            # field is a placeholder). Without this branch, a ScriptRule in
+            # the rules list would unconditionally ALLOW matching calls —
+            # the script that was supposed to deny sensitive operations
+            # never ran. Security bypass.
+            if isinstance(rule, ScriptRule):
+                return await rule.evaluate(call)
             if rule.decision is Decision.ASK and self.ask_callback:
                 user_decision = await self.ask_callback(call, rule)
                 return PermissionDecision(user_decision, rule.reason)
@@ -184,6 +191,7 @@ class ScriptRule:
             except TimeoutError:
                 with contextlib.suppress(Exception):
                     proc.kill()
+                    await proc.wait()  # reap the zombie
                 return PermissionDecision(Decision.DENY, "external script timeout")
             if proc.returncode != 0:
                 return PermissionDecision(

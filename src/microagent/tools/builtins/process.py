@@ -88,8 +88,12 @@ async def process(
                 # start_new_session=True creates a new process group so
                 # kill() can signal the whole group (not just /bin/sh),
                 # preventing orphaned grandchildren.
+                # stdin=PIPE is required so the `write` action can send
+                # input to the process (without it, p.stdin is None and
+                # write always errors "process has no stdin").
                 p = await asyncio.create_subprocess_shell(
                     command,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,

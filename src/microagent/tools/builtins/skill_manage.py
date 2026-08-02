@@ -116,8 +116,11 @@ async def skill_manage(
         count = text.count(old_string)
         if count == 0:
             return ToolResult.error(f"old_string not found in skill '{name}'")
-        if count > 1 and new_string:
-            # Multiple matches without replace_all — require unique match
+        # Require a unique match unless caller explicitly opts into
+        # multi-replace. Previously the guard was `count > 1 and new_string`
+        # — an empty new_string (deletion) bypassed it, silently removing
+        # ALL occurrences when the user intended one.
+        if count > 1:
             return ToolResult.error(
                 f"old_string matches {count} times in skill '{name}'. "
                 f"Make old_string more specific to target exactly one occurrence."

@@ -169,7 +169,9 @@ class LSPClient:
         if uri in self._open_files:
             return uri
         try:
-            text = Path(filepath).read_text()
+            # Read in a thread — large files (multi-MB) would otherwise stall
+            # the event loop and all concurrent tool calls.
+            text = await asyncio.to_thread(Path(filepath).read_text)
         except (OSError, UnicodeDecodeError):
             raise
         await self._notify("textDocument/didOpen", {
@@ -371,8 +373,12 @@ class LSPClient:
                 chunk = await self._proc.stderr.read(4096)
                 if not chunk:
                     break
-        except (asyncio.CancelledError, Exception):
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # Inconsistent with _read_loop which logs — surface the cause
+            # for diagnosability instead of silent pass.
+            logger.debug("LSP stderr drain ended: %r", e)
 
     async def _read_loop(self) -> None:
         """Read JSON-RPC responses from stdout, dispatch to pending futures."""

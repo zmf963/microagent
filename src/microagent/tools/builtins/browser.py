@@ -436,14 +436,21 @@ async def browser_vision(
             }""")
             await page.wait_for_timeout(200)
 
-        screenshot = await page.screenshot(type="png", full_page=False)
-        b64 = base64.b64encode(screenshot).decode()
-
-        if annotate:
-            # Clean up labels
-            await page.evaluate(
-                "() => document.querySelectorAll('.microagent-label').forEach(el => el.remove())"
-            )
+        try:
+            screenshot = await page.screenshot(type="png", full_page=False)
+            b64 = base64.b64encode(screenshot).decode()
+        finally:
+            # Clean up labels even if screenshot throws (page closed,
+            # navigation interrupted, OOM rendering huge page). Without
+            # finally, the numbered red overlays persist on the page and
+            # pollute every subsequent snapshot/vision call.
+            if annotate:
+                try:
+                    await page.evaluate(
+                        "() => document.querySelectorAll('.microagent-label').forEach(el => el.remove())"
+                    )
+                except Exception:
+                    pass  # page may already be gone
 
         # Return as data URL so vision-capable models can see it
         return ToolResult.ok(

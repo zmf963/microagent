@@ -69,11 +69,12 @@ async def mcp_connect(
             "mcp_connect: no active session runner."
         )
 
-    # Stable id for dedup (hash is per-process salted — use sha256 instead
-    # for cross-run stability and collision resistance).
+    # Stable id for dedup. Hash the joined command string (was hashing the
+    # tuple directly → TypeError on every raw: connect, swallowed as
+    # "MCP connection failed"). raw: connections have never worked until now.
     import hashlib
     if name.startswith("raw:"):
-        mgr_id = "raw_" + hashlib.sha256(command).hexdigest()[:16]
+        mgr_id = "raw_" + hashlib.sha256(" ".join(command).encode()).hexdigest()[:16]
     else:
         mgr_id = name
 

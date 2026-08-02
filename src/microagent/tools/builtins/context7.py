@@ -37,17 +37,26 @@ async def context7(
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
+            # Stream the body so a malicious/buggy endpoint returning a huge
+            # JSON payload can't OOM the agent before _parse_results truncates.
+            max_bytes = 2 * 1024 * 1024  # 2 MB ceiling
+            chunks: list[bytes] = []
+            total = 0
+            async with client.stream(
+                "POST",
                 "https://context7.com/api/query",
-                json={
-                    "query": query,
-                    "library": library,
-                    "n": max_results,
-                },
+                json={"query": query, "library": library, "n": max_results},
                 headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            ) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    if total >= max_bytes:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+            data = httpx.Response(
+                status_code=200, content=b"".join(chunks)
+            ).json()
     except Exception as e:
         return ToolResult.error(f"context7 query failed: {e!r}")
 

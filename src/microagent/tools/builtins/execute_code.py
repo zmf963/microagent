@@ -31,6 +31,8 @@ async def execute_code(
     if not code.strip():
         return ToolResult.error("code is required")
 
+    MAX_OUTPUT = 100_000  # 100 KB cap — matches bash.py
+
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -50,6 +52,11 @@ async def execute_code(
             return ToolResult.error(f"execution timed out after {timeout}s")
 
         output = stdout.decode("utf-8", errors="replace").strip()
+        if len(output) > MAX_OUTPUT:
+            output = (
+                output[:MAX_OUTPUT]
+                + f"\n[truncated: {len(output) - MAX_OUTPUT} bytes beyond {MAX_OUTPUT} limit]"
+            )
         if proc.returncode != 0:
             return ToolResult.error(
                 f"exit code {proc.returncode}\n{output}"
