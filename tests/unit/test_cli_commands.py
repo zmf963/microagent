@@ -240,3 +240,56 @@ def test_make_agent_returns_agent(state):
     agent = cli._make_agent(state.config, state.store, "new-session")
     assert agent is not None
     assert agent.runner.session_id == "new-session"
+
+
+class TestCLIHelpers:
+    def test_short_args_simple(self):
+        assert cli._short_args({"a": "1", "b": "hello world"}) == '1 "hello world"'
+
+    def test_short_args_long_value(self):
+        long = "x" * 100
+        s = cli._short_args({"a": long})
+        assert len(s) <= 61  # truncated to 60
+        assert s.endswith("...")
+
+    def test_short_args_empty(self):
+        assert cli._short_args({}) == ""
+
+    def test_short_args_non_string_values(self):
+        assert cli._short_args({"n": 42, "b": True}) == "42 True"
+
+    def test_summarize_cleans_newlines(self):
+        assert cli._summarize("line1\nline2") == "line1 line2"
+
+    def test_summarize_truncates_long(self):
+        long = "x" * 100
+        s = cli._summarize(long)
+        assert len(s) <= 70
+        assert s.endswith("...")
+
+    def test_summarize_short(self):
+        assert cli._summarize("short") == "short"
+
+    def test_render_content_plain(self):
+        """Plain content renders as Markdown without error."""
+        buf = io.StringIO()
+        orig = cli.console
+        cli.console = cli.Console(file=buf, force_terminal=False, width=80)
+        try:
+            cli._render_content("hello **world**")
+        finally:
+            cli.console = orig
+        assert "hello" in buf.getvalue()
+
+    def test_render_content_with_code(self):
+        buf = io.StringIO()
+        orig = cli.console
+        cli.console = cli.Console(file=buf, force_terminal=False, width=80)
+        try:
+            cli._render_content("text before\n```python\nprint('hi')\n```\ntext after")
+        finally:
+            cli.console = orig
+        out = buf.getvalue()
+        assert "text before" in out
+        assert "text after" in out
+        assert "print" in out  # code content rendered
