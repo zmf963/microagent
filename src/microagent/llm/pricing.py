@@ -38,15 +38,23 @@ _REMOTE_MIRROR = (
     "https://raw.githubusercontent.com/anomalyco/models.dev/dev/models.json"
 )
 
-# Local overrides for models that models.dev doesn't track: self-hosted /
-# gateway-aliased deployments that are free (a local 9router gateway
-# serving DeepSeek-V4-Flash under compact aliases). Values are
-# (input_per_1m, output_per_1m, context_length). Without these, the
-# aliases would fall through to the $0.50/1M fallback and over-charge.
-_LOCAL_OVERRIDES: dict[str, tuple[float, float, int]] = {
-    "tx-d4f": (0.0, 0.0, 200_000),
-    "oc-d4f": (0.0, 0.0, 200_000),
-    "tx-d4p": (0.0, 0.0, 200_000),
+# Gateway alias → canonical models.dev model id. Local LLM gateways
+# (9router at :20128) expose DeepSeek-V4 variants under compact aliases
+# that don't match the models.dev "deepseek/deepseek-v4-*" ids, so cache
+# lookup falls through to the $0.50/1M fallback. Map each alias to its
+# real canonical id (verified against the gateway's own /model response):
+#   tx-d4f → deepseek-v4-flash  ($0.126/$0.252 per 1M, 1M ctx)
+#   oc-d4f → deepseek-v4-flash  (OpenCode gateway alias, same model)
+#   tx-d4p → deepseek-v4-pro    ($0.435/$0.87 per 1M, 1M ctx)
+# Resolved via the normal cache lookup (deepseek/deepseek-v4-flash etc.),
+# so pricing stays accurate when models.dev updates — no hardcoded numbers.
+#
+# NOTE: these aliases are NOT free. They route to paid upstream models
+# through the gateway; cost must be tracked like any other paid call.
+_ALIAS_TO_CANONICAL: dict[str, str] = {
+    "tx-d4f": "deepseek/deepseek-v4-flash",
+    "oc-d4f": "deepseek/deepseek-v4-flash",
+    "tx-d4p": "deepseek/deepseek-v4-pro",
 }
 
 _FALLBACK_PRICE = (0.50, 0.50)
@@ -135,10 +143,21 @@ def get_pricing(model: str) -> tuple[float, float]:
     burn through the budget unreported).
     """
     _load_cache()
-    # Local overrides take precedence (gateway aliases aren't in models.dev).
-    # Case-insensitive: config files / env vars often use uppercase ("TX-D4F").
-    if model.lower() in _LOCAL_OVERRIDES:
-        return _LOCAL_OVERRIDES[model.lower()][:2]
+    # Gateway aliases (tx-d4f etc.) resolve to their canonical models.dev
+    # id so pricing tracks the real upstream model. Case-insensitive
+    # (config files / env vars often use "TX-D4F").
+    canonical = _ALIAS_TO_CANONICAL.get(model.lower())
+    if canonical is not None:
+        entry = _lookup(canonical)
+        if entry is not None:
+            try:
+                return (
+                    float(entry.get("input_per_1m", _FALLBACK_PRICE[0])),
+                    float(entry.get("output_per_1m", _FALLBACK_PRICE[1])),
+                )
+            except (TypeError, ValueError):
+                pass
+        return _FALLBACK_PRICE
     entry = _lookup(model)
     if entry is not None:
         try:
@@ -154,8 +173,14 @@ def get_pricing(model: str) -> tuple[float, float]:
 def get_context_window(model: str) -> int:
     """Return the context window (tokens) for `model`, prefix-matched."""
     _load_cache()
-    if model.lower() in _LOCAL_OVERRIDES:
-        return _LOCAL_OVERRIDES[model.lower()][2]
+    canonical = _ALIAS_TO_CANONICAL.get(model.lower())
+    if canonical is not None:
+        entry = _lookup(canonical)
+        if entry is not None:
+            ctx = entry.get("context_length")
+            if isinstance(ctx, int) and ctx > 0:
+                return ctx
+        return _FALLBACK_CONTEXT
     entry = _lookup(model)
     if entry is not None:
         ctx = entry.get("context_length")

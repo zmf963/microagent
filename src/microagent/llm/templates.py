@@ -40,13 +40,19 @@ MODEL_TEMPLATES: dict[str, str] = {
 }
 
 # Gateway alias → canonical model-family prefix. Local gateways expose
-# DeepSeek-V4 under compact aliases (tx-d4f, oc-d4f, tx-d4p) that do not
-# match the "deepseek-v4" prefix, so template lookup would fall through to
-# the generic default. Map them to the flash template.
+# DeepSeek-V4 variants under compact aliases that don't match the
+# "deepseek-v4*" prefixes the template table uses, so lookup would fall
+# through to the generic default. Verified against the gateway's own
+# /model response:
+#   tx-d4f → deepseek-v4-flash  (fast/low-latency variant)
+#   oc-d4f → deepseek-v4-flash  (OpenCode gateway alias)
+#   tx-d4p → deepseek-v4-pro    (the pro variant — NOT flash)
+# (Previously tx-d4p was mapped to flash, which gave pro callers the
+# wrong system-prompt guidance.)
 _ALIAS_TO_MODEL: dict[str, str] = {
     "tx-d4f": "deepseek-v4-flash",
     "oc-d4f": "deepseek-v4-flash",
-    "tx-d4p": "deepseek-v4-flash",
+    "tx-d4p": "deepseek-v4-pro",
 }
 
 

@@ -52,22 +52,34 @@ class TestPricingLookup:
         assert out == pytest.approx(0.50)
 
 
-class TestLocalOverrides:
-    """Gateway aliases (tx-d4f etc.) aren't in models.dev (free local
-    deployments). They must resolve to $0 so the Budget doesn't over-charge
-    for a self-hosted model."""
+class TestGatewayAliases:
+    """Gateway aliases (tx-d4f etc.) route to real paid upstream models
+    through the 9router gateway — they are NOT free. Each must resolve to
+    its canonical models.dev model so pricing tracks the real cost.
 
-    def test_tx_d4f_is_free(self):
-        assert pricing.get_pricing("tx-d4f") == (0.0, 0.0)
+    Verified against the gateway's own /model response:
+      tx-d4f → deepseek-v4-flash  ($0.126/$0.252 per 1M, 1M ctx)
+      oc-d4f → deepseek-v4-flash
+      tx-d4p → deepseek-v4-pro    ($0.435/$0.87 per 1M, 1M ctx)
+    """
 
-    def test_oc_d4f_is_free(self):
-        assert pricing.get_pricing("oc-d4f") == (0.0, 0.0)
+    def test_tx_d4f_pricing_matches_flash(self):
+        # tx-d4f routes to deepseek-v4-flash — same price as the canonical
+        inp, out = pricing.get_pricing("tx-d4f")
+        canonical = pricing.get_pricing("deepseek/deepseek-v4-flash")
+        assert (inp, out) == canonical
+        assert inp > 0 and out > 0  # NOT free
 
-    def test_tx_d4p_is_free(self):
-        assert pricing.get_pricing("tx-d4p") == (0.0, 0.0)
+    def test_oc_d4f_pricing_matches_flash(self):
+        assert pricing.get_pricing("oc-d4f") == pricing.get_pricing("deepseek/deepseek-v4-flash")
 
-    def test_tx_d4f_context_is_200k(self):
-        assert pricing.get_context_window("tx-d4f") == 200_000
+    def test_tx_d4p_pricing_matches_pro(self):
+        # tx-d4p routes to deepseek-v4-PRO (not flash) — different price
+        assert pricing.get_pricing("tx-d4p") == pricing.get_pricing("deepseek/deepseek-v4-pro")
+
+    def test_tx_d4f_context_is_1m(self):
+        # deepseek-v4-flash has a 1M context window (was wrongly 200K)
+        assert pricing.get_context_window("tx-d4f") == 1_048_576
 
 
 class TestContextWindow:
@@ -94,9 +106,10 @@ class TestEstimateCost:
         cost = pricing.estimate_cost("openai/gpt-4o", 1_000_000, 1_000_000)
         assert cost == pytest.approx(12.50, abs=0.01)
 
-    def test_d4f_is_free(self):
+    def test_d4f_aliases_have_real_cost(self):
+        # NOT free — routes to paid upstream models
         cost = pricing.estimate_cost("tx-d4f", 100_000, 50_000)
-        assert cost == 0.0
+        assert cost > 0
 
 
 class TestRefresh:
@@ -150,11 +163,19 @@ class TestRefresh:
         monkeypatch.setattr(pricing, "_CACHE_FILE", tmp_path / "cache.json")
         monkeypatch.setattr(pricing.urllib.request, "urlopen", _fake_urlopen)
 
-        result = pricing.refresh()
-        assert result == 1
-        assert "fake/fakemodel" in pricing._cache
-        inp, out = pricing.get_pricing("fake/fakemodel")
-        # 0.001/token = $1000/1M
-        assert inp == pytest.approx(1000.0)
-        assert out == pytest.approx(2000.0)
-        assert pricing.get_context_window("fake/fakemodel") == 999_999
+        try:
+            result = pricing.refresh()
+            assert result == 1
+            assert "fake/fakemodel" in pricing._cache
+            inp, out = pricing.get_pricing("fake/fakemodel")
+            # 0.001/token = $1000/1M
+            assert inp == pytest.approx(1000.0)
+            assert out == pytest.approx(2000.0)
+            assert pricing.get_context_window("fake/fakemodel") == 999_999
+        finally:
+            # refresh() replaced the module-level _cache with the fake data
+            # and set _cache_loaded=True. Without resetting, later tests in
+            # the session inherit the polluted cache (e.g. test_v05_features
+            # resolves tx-d4f → deepseek-v4-flash which is no longer present).
+            pricing._cache.clear()
+            pricing._cache_loaded = False

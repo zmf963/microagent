@@ -53,11 +53,19 @@ class TestModelTemplates:
         assert flash != v4
         assert "Flash" in flash
 
-    def test_gateway_aliases_map_to_flash_template(self):
-        """tx-d4f / oc-d4f / tx-d4p resolve to the flash template."""
-        for alias in ("tx-d4f", "oc-d4f", "tx-d4p"):
+    def test_gateway_aliases_map_to_correct_template(self):
+        """tx-d4f / oc-d4f → flash; tx-d4p → pro (generic v4).
+
+        Verified against the gateway's own /model response: tx-d4p routes
+        to deepseek-v4-PRO, not flash. Previously all three were mapped to
+        flash, giving pro callers the wrong system-prompt guidance."""
+        # flash aliases
+        for alias in ("tx-d4f", "oc-d4f"):
             tpl = get_model_template(alias)
-            assert "Flash" in tpl, f"{alias} did not resolve to flash template"
+            assert "Flash" in tpl, f"{alias} should resolve to flash template"
+        # pro alias → generic v4 template (not flash)
+        assert "Flash" not in get_model_template("tx-d4p")
+        assert "DeepSeek-V4" in get_model_template("tx-d4p")
         # Case-insensitive
         assert "Flash" in get_model_template("TX-D4F")
 
@@ -68,12 +76,15 @@ class TestModelTemplates:
         assert "Flash" in out
 
     def test_tx_d4f_context_window(self):
-        """tx-d4f reports the d4f-family 200K window, not the 128K default."""
-        assert get_context_window("tx-d4f") == 200_000
+        """tx-d4f routes to deepseek-v4-flash (1M context, not the 128K default)."""
+        assert get_context_window("tx-d4f") == 1_048_576
 
-    def test_tx_d4f_zero_cost(self):
-        """tx-d4f is a local-gateway model with no per-token cost."""
-        assert _estimate_cost("tx-d4f", 1000, 500) == 0.0
+    def test_tx_d4f_has_real_cost(self):
+        """tx-d4f routes to deepseek-v4-flash — a PAID model, not free.
+
+        Previously hardcoded as $0 (treated as a free self-hosted model),
+        which silently zeroed out Budget tracking for every tx-d4f turn."""
+        assert _estimate_cost("tx-d4f", 1000, 500) > 0
 
 
 class TestAuxiliaryModel:

@@ -2,22 +2,23 @@
 
 import pytest
 
-from microagent.llm.pricing import get_pricing, estimate_cost
+from microagent.llm.pricing import get_pricing, estimate_cost, get_context_window
 
 
 class TestPricingCaseInsensitive:
-    """_LOCAL_OVERRIDES was case-sensitive — 'TX-D4F' configured in a TOML/env
-    got billed at $0.50/1M instead of $0.0, silently inflating Budget."""
+    """Alias resolution must be case-insensitive: 'TX-D4F' configured in a
+    TOML/env must resolve to the same canonical model as 'tx-d4f'.
+    Previously _LOCAL_OVERRIDES was case-sensitive and fell through to the
+    $0.50/1M fallback for uppercase ids."""
 
-    def test_uppercase_tx_d4f_is_free(self):
-        assert get_pricing("TX-D4F") == (0.0, 0.0)
+    def test_uppercase_tx_d4f_matches_lowercase(self):
+        assert get_pricing("TX-D4F") == get_pricing("tx-d4f")
 
-    def test_mixed_case_oc_d4f_is_free(self):
-        assert get_pricing("OC-D4f") == (0.0, 0.0)
+    def test_mixed_case_oc_d4f_matches_lowercase(self):
+        assert get_pricing("OC-D4f") == get_pricing("oc-d4f")
 
     def test_case_insensitive_context_window(self):
-        from microagent.llm.pricing import get_context_window
-        assert get_context_window("TX-D4F") == 200_000
+        assert get_context_window("TX-D4F") == get_context_window("tx-d4f")
 
 
 class TestEstimateCostClampsNegative:
