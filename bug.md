@@ -112,3 +112,61 @@
 > `compress.py` 256-276 行，索引 i 单调递增，循环必然退出；实际行为是"全保护时静默
 > 返回原样 + O(n²) 白扫"，严重度 🔴→🟡。3.5（死循环风险）同因关闭。其余 🟡/🔵 项
 > （2.6/2.7/3.1/3.2/3.3/3.4/4.1/4.2）在后续 commit 中处理。
+
+---
+
+## 六、2026-08-03 第四轮疯狂测试（边界/错误路径 · 探针 A-D）
+
+> 方法：临时探针脚本（/tmp）直接调用真实工具函数与真实 SessionRunner，聚焦边界条件。
+> 基线：pytest `tests/ -q --ignore=tests/benchmark` → 1036 passed, 11 skipped。
+
+### 🔴 严重
+
+**6.1 LLM API 异常逃逸 `run_turn` / `Agent.arun`，不会变成 TurnFailed** ✅ **已修复 (a25a895)**
+- **修复**：runner 流循环包 try/except；未产生任何用户可见输出时重试一次（走外层 turn 循环），
+  重试仍失败或已有部分内容流出 → `TurnFailed("LLM error: ...")`，Agent.arun 返回 `[error: ...]`。
+  CancelledError 不捕获，interrupt 语义不变。测试：TestLLMStreamErrors 4 个（test_runner_errors.py）。
+- **文件**：`src/microagent/llm/client.py`（stream `raise`）+ `src/microagent/session/runner.py:546`
+- **现象**：`_create_with_backoff` 对非重试错误（400、无重试的 401/403、退避耗尽）直接 `raise`；
+  runner 的 `async for event in self.llm.stream(...)` **无 try/except 包裹**，异常一路冒出 run_turn
+  和 Agent.arun → 调用方收到裸异常（探针实测 `RuntimeError("boom")` 逃逸）。
+- **影响**：LLM API 网络故障/限额/坏请求 → 整个对话调用崩溃，而不是可恢复的 `TurnFailed`。
+  真实场景：网关超时、key 失效、模型不存在，全部表现为未捕获异常。
+- **验证**：ExplodingLLM 驱动 run_turn → 异常直接冒出（探针 C-1）。
+
+### 🟡 应修复
+
+**6.2 `edit_file` 二进制文件抛 UnicodeDecodeError 逃逸**
+- **文件**：`src/microagent/tools/builtins/edit_file.py`
+- **现象**：`p.read_text()` 对二进制文件抛 `UnicodeDecodeError`，无 try/except（FunctionTool.execute
+  只兜 TypeError）。runner `_settle` 的泛化 except 会兜成错误结果，但直连 execute 崩溃、且错误信息不友好。
+- **附带**：`edit_file` 无文件大小上限（read_file 50MB / grep 10MB 均有保护），大文件整读 OOM 风险。
+
+**6.3 `vision_analyze` 无大小限制 + 目录路径抛 IsADirectoryError**
+- **文件**：`src/microagent/tools/builtins/vision_analyze.py`
+- **现象**：100MB 图片被 base64 成 ~139MB 塞进 ToolResult.content（探针验证 len=139,810,201）
+  → ToolOutputStore 落盘 + token 爆炸；目录路径 `_encode_image` 的 `p.read_bytes()` 抛
+  `IsADirectoryError` 逃逸。read_file/web_fetch 均有大小保护，此工具没有。
+
+**6.4 `SQLiteStore.load_history` 对损坏数据行抛 JSONDecodeError** ✅ **已修复 (d8d90ee)**
+- **修复**：`_load` 改为逐行 try/except 跳过坏行（与 session_summaries 同模式）；全坏返回 []。
+  测试：TestSQLiteStore 新增 2 个（中间行损坏跳过 / 全坏返回空）。
+- **文件**：`src/microagent/core/store.py`
+- **现象**：单行 data JSON 损坏（手改库/中断写入）→ `load_history` 整库抛 `JSONDecodeError`，
+  该 session 无法加载（resume 崩溃）。对比：`session_summaries` 有每行 try/except，load_history 没有。
+
+**6.5 `SQLiteMemoryProvider.recall("")` 返回全部记忆**
+- **文件**：`src/microagent/memory/provider.py`
+- **现象**：空查询 `MATCH ''` 在 FTS5 中匹配所有行 → 泄漏全部记忆进上下文（探针 D 验证）。
+  调用方用空/空白查询时发出所有内容。
+
+### 🔵 可选
+
+**6.6 `write_file backup` 静默覆盖已有 `.bak`**（文件 write_file.py）：
+第二次 backup 覆盖旧备份，无提示。**`git` 白名单允许 `--amend`**（git.py）：
+`-m 'x' --amend` 可通过，本地重写历史的语义。**`bash` >100KB 输出截断标记的
+"[truncated: N bytes beyond]" 统计约为 0**（收集阶段已截断，数字失真——纯修剪指标）。
+
+**6.7 `Budget.spawn()` 父耗尽时产出 max_iterations=0 子预算**（budget.py）：
+`min(max(1, rem//3), rem)` 在 rem=0 时为 0 → 子代理立即 BudgetExceeded（死预算）。
+父预算耗尽时这是合理的"没得给"，但值得文档标注。
