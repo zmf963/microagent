@@ -88,3 +88,21 @@ class TestBudgetTree:
         await child.consume(iterations=5)
         # root.remaining_iterations = 30 - 0(self) - 5(descendants) = 25
         assert root.remaining_iterations == 25
+
+
+class TestBudgetErrorMessage:
+    async def test_message_reports_all_metrics(self):
+        """BudgetExceeded message must report iterations/tokens/cost so the
+        triggering metric is identifiable. Previously it only reported cost,
+        which was misleading when iterations exhausted the budget."""
+        from microagent.session.budget import Budget, BudgetExceeded
+        b = Budget.root(max_iterations=2, max_cost_usd=1000.0)
+        try:
+            for _ in range(3):
+                await b.consume(iterations=1)
+            raise AssertionError("should have raised")
+        except BudgetExceeded as e:
+            msg = str(e)
+            assert "iterations=2/2" in msg
+            assert "cost" in msg
+            assert "tokens" in msg

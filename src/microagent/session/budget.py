@@ -145,8 +145,10 @@ class Budget:
                     self._cancel_event.set()  # notify entire tree
                 raise BudgetExceeded(
                     "budget exhausted: "
-                    f"self_cost={self._used_cost:.4f}/{self.max_cost_usd}, "
-                    f"tree_cost={self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
+                    f"iterations={self._used_iter}/{self.max_iterations}, "
+                    f"tokens={self._used_tokens}/{self.max_tokens}, "
+                    f"cost=${self._used_cost:.4f}/{self.max_cost_usd}, "
+                    f"tree_cost=${self._tree_cost_used():.4f}/{self._root_max_cost():.4f}"
                 )
 
     async def consume_usage(self, usage: Any) -> None:
