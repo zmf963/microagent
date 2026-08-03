@@ -380,37 +380,39 @@ class SessionRunner:
                 _window = get_context_window(self.llm.config.model)
                 _threshold = int(_window * 0.6)
 
-            if len(messages) > 10:
-                from .compress import compact_conversation, count_tokens
+            from .compress import compact_conversation, count_tokens
 
-                # Anti-jitter: skip if 2 consecutive ineffective compressions
-                if self._compaction_state.should_skip_compression():
-                    pass  # skip auto-compression
-                else:
-                    before_tokens = count_tokens(tuple(messages))
-                    if before_tokens > _threshold:
-                        try:
-                            # Use auxiliary model for compression if configured
-                            compress_llm = self.llm
-                            if self.llm.config.auxiliary_model:
-                                compress_llm = self.llm.for_model(self.llm.config.auxiliary_model)
-                            messages_list = await compact_conversation(
-                                tuple(messages),
-                                compress_llm,
-                                context_window=_threshold + 8000,
-                                state=self._compaction_state,
-                                budget=self.budget,
-                            )
-                            messages[:] = list(messages_list)
-                            # Track compression effectiveness (anti-jitter)
-                            after_tokens = count_tokens(tuple(messages))
-                            if before_tokens > 0 and (before_tokens - after_tokens) / before_tokens < 0.1:
-                                self._compaction_state.record_ineffective()
-                            else:
-                                self._compaction_state.record_success()
-                        except BudgetExceeded as e:
-                            yield TurnFailed(f"budget exhausted during compaction: {e}")
-                            return
+            # Anti-jitter: skip if 2 consecutive ineffective compressions.
+            # The gate is purely token-based — a message-count gate
+            # (len > 10) let a 3-message conversation with huge content
+            # blow past the threshold without ever compacting.
+            if self._compaction_state.should_skip_compression():
+                pass  # skip auto-compression
+            else:
+                before_tokens = count_tokens(tuple(messages))
+                if before_tokens > _threshold:
+                    try:
+                        # Use auxiliary model for compression if configured
+                        compress_llm = self.llm
+                        if self.llm.config.auxiliary_model:
+                            compress_llm = self.llm.for_model(self.llm.config.auxiliary_model)
+                        messages_list = await compact_conversation(
+                            tuple(messages),
+                            compress_llm,
+                            context_window=_threshold + 8000,
+                            state=self._compaction_state,
+                            budget=self.budget,
+                        )
+                        messages[:] = list(messages_list)
+                        # Track compression effectiveness (anti-jitter)
+                        after_tokens = count_tokens(tuple(messages))
+                        if before_tokens > 0 and (before_tokens - after_tokens) / before_tokens < 0.1:
+                            self._compaction_state.record_ineffective()
+                        else:
+                            self._compaction_state.record_success()
+                    except BudgetExceeded as e:
+                        yield TurnFailed(f"budget exhausted during compaction: {e}")
+                        return
 
             system = self.system_prompt
 

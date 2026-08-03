@@ -64,3 +64,42 @@ class TestCompressHistory:
         result = snip_tool_results(messages, max_tokens=15)
         # User/assistant messages are preserved
         assert result[-1].role == "assistant"
+
+
+class TestAutoCompressionGate:
+    async def test_few_messages_over_threshold_still_compacts(self):
+        """The auto-compression gate was `len(messages) > 10` — a 3-message
+        conversation with huge content never compacted no matter how far
+        over the token threshold it went. The gate must be token-based."""
+        from microagent.core.tool import ToolRegistry
+        from microagent.session.budget import Budget
+        from microagent.session.runner import SessionRunner
+        from tests.unit.fake_llm import FakeLLMClient, text_response
+
+        # 3 messages, ~30K chars each ≈ way over a 100-token threshold.
+        big = "lorem ipsum dolor sit amet " * 1200
+        llm = FakeLLMClient([
+            text_response("compressed summary of earlier discussion"),
+            text_response("final answer"),
+        ])
+        runner = SessionRunner(
+            llm=llm,
+            registry=ToolRegistry([]),
+            budget=Budget(max_iterations=5),
+            compression_threshold=100,
+        )
+        messages = [
+            Message.user(big),
+            Message.assistant(big),
+            Message.user("now answer briefly"),
+        ]
+        events = []
+        async for e in runner.run_turn(messages):
+            events.append(e)
+
+        # Compaction must have happened: the first LLM call is the L3
+        # summary request (its prompt asks for conversation compression),
+        # and the in-memory history was replaced by the summary.
+        assert len(llm.calls) >= 2, "compaction summary call never happened"
+        total_after = sum(len(m.content or "") for m in messages)
+        assert total_after < len(big) * 2, "messages were not compacted"
