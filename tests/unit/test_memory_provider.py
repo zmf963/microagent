@@ -55,6 +55,22 @@ class TestProviderWrite:
         results = await provider.recall("zzz", k=5)
         assert len(results) == 0
 
+    async def test_recall_empty_query_returns_nothing(self, provider):
+        """FTS5 MATCH '' matches every row — an empty/blank query would
+        leak ALL memories into context. Must return () instead."""
+        await provider.batch_write(
+            (
+                Memory(id="a", content="secret one", category="fact", created_at=1.0),
+                Memory(id="b", content="secret two", category="fact", created_at=2.0),
+            )
+        )
+        assert await provider.recall("", k=5) == ()
+        assert await provider.recall("   ", k=5) == ()
+        assert await provider.recall("\n\t", k=5) == ()
+        # Non-empty queries still work
+        results = await provider.recall("secret", k=5)
+        assert len(results) == 2
+
     async def test_recall_limit(self, provider):
         mems = tuple(
             Memory(id=f"m{i}", content=f"item {i}", category="fact", created_at=float(i))

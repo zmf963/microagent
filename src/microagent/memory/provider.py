@@ -111,6 +111,10 @@ class SQLiteMemoryProvider:
         pass
 
     async def recall(self, query: str, k: int = 5) -> tuple[Memory, ...]:
+        # Empty/blank query: FTS5 MATCH '' (and LIKE '%%') matches EVERY
+        # row, which would leak all memories into context. Return nothing.
+        if not query.strip():
+            return ()
         # FTS5 MATCH uses a query-language grammar; raw user input containing
         # special chars (", AND, OR, NOT, *, (, NEAR) raises OperationalError.
         # Treat FTS5 syntax errors as "no match" and fall back to a LIKE scan
