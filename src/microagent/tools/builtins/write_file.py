@@ -34,11 +34,16 @@ async def write_file(
         # Create backup if requested and file exists.
         # Use read_bytes/write_bytes so binary files don't crash on
         # UnicodeDecodeError (read_text assumes UTF-8).
+        overwrote_bak = False
         if backup and p.exists():
             bak = p.with_suffix(p.suffix + ".bak")
+            overwrote_bak = bak.exists()
             bak.write_bytes(p.read_bytes())
 
         p.write_text(content)
-        return ToolResult.ok(f"wrote {content_bytes_len} bytes to {p}")
+        msg = f"wrote {content_bytes_len} bytes to {p}"
+        if overwrote_bak:
+            msg += " (overwrote existing backup)"
+        return ToolResult.ok(msg)
     except Exception as e:
         return ToolResult.error(f"failed to write: {e!r}")

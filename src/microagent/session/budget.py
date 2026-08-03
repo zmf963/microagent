@@ -49,7 +49,15 @@ class Budget:
         max_tokens: int | None = None,
         max_cost_usd: float | None = None,
     ) -> Budget:
-        """Spawn a child budget. Defaults to 1/3 of parent remaining."""
+        """Spawn a child budget. Defaults to 1/3 of parent remaining.
+
+        Edge case: if the parent is already exhausted on some dimension
+        (remaining == 0), that dimension of the child is capped at 0 —
+        the child is born dead and raises BudgetExceeded on first consume.
+        This is intentional "nothing left to give" semantics; callers
+        creating sub-agents should check budget.exhausted first if a
+        guaranteed-usable child is required.
+        """
         rem_cost = self.remaining_cost
         rem_tok = self.remaining_tokens
         rem_iter = self.remaining_iterations

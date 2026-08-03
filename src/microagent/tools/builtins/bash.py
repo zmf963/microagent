@@ -69,6 +69,10 @@ async def bash(
         await proc.wait()
         output = b"".join(chunks).decode("utf-8", errors="replace")
         if len(output) > MAX_OUTPUT:
+            # NOTE: the "N bytes beyond" figure only counts bytes that
+            # survived collection — the reader loop may already have dropped
+            # chunks once MAX_OUTPUT was exceeded, so N ≈ 0 on huge outputs.
+            # Treat it as a hint, not an exact measurement.
             output = (
                 output[:MAX_OUTPUT]
                 + f"\n[truncated: {len(output) - MAX_OUTPUT} bytes beyond {MAX_OUTPUT} limit]"

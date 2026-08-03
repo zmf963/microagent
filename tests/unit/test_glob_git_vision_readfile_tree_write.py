@@ -293,6 +293,19 @@ class TestWriteFile:
         assert p.read_text() == "changed"
 
     @pytest.mark.asyncio
+    async def test_write_backup_overwrite_is_disclosed(self, tmp_path):
+        """Second backup=True silently replaces the previous .bak — the
+        result message must disclose that an existing backup was overwritten."""
+        from microagent.tools.builtins.write_file import write_file
+        p = tmp_path / "f.txt"
+        p.write_text("v1")
+        r1 = await write_file.fn(path=str(p), content="v2", backup=True)
+        assert "overwrote existing backup" not in r1.content
+        p.write_text("v2")
+        r2 = await write_file.fn(path=str(p), content="v3", backup=True)
+        assert "overwrote existing backup" in r2.content
+
+    @pytest.mark.asyncio
     async def test_write_too_large(self, tmp_path):
         from microagent.tools.builtins.write_file import write_file
         big = "x" * 11_000_000  # > 10MB limit
