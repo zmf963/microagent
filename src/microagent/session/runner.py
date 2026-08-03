@@ -111,15 +111,16 @@ class SessionRunner:
         # subprocess (npx/uvx/...) for the lifetime of the Python process.
         self._mcp_managers: dict[str, object] = {}
 
-        if store is not None:
-            from ..tools.builtins import session_search as _ss
+        # Bind unconditionally — including None. Conditional binding leaks
+        # the previous runner's values: two runners created in the same
+        # context share it, so runner B (no store/loader) would otherwise
+        # inherit runner A's ContextVar entries (session_search returning
+        # another session's history).
+        from ..tools.builtins import session_search as _ss
+        from ..tools.builtins import skills_list as _sl_mod
 
-            _ss._current_store.set(store)
-
-        if self.skill_loader is not None:
-            from ..tools.builtins import skills_list as _sl_mod
-
-            _sl_mod._set_loader(self.skill_loader)
+        _ss._current_store.set(store)
+        _sl_mod._set_loader(self.skill_loader)
 
         # Expose the per-session MCP manager dict to mcp_connect via ContextVar
         # so it populates *this* runner's dict (which close() will iterate).
@@ -762,21 +763,19 @@ class SessionRunner:
                 # SessionRunners were created in the same context (the common
                 # pattern), the second __init__ overwrites the first's values
                 # in the shared context. _settle runs inside each task's own
-                # copy, so setting here ensures isolation. Previously
-                # _current_store and _current_loader were missed (set only
-                # in __init__), causing session_search and skills_list to
-                # cross-contaminate between concurrent sessions.
+                # copy, so setting here ensures isolation. Bind store and
+                # loader unconditionally (including None) — conditional
+                # binding lets a runner without them inherit a sibling
+                # runner's values from the shared creation context.
                 _proc_module._current_registry.set(self._proc_registry)
                 _tpe_module._current_state.set(self._session_state)
                 _br_module._current_state.set(self._browser_state)
                 _lsp_module._current_state.set(self._lsp_state)
                 _task_module._current_runner.set(self)
                 _mcp_module._current_managers.set(self._mcp_managers)
-                if self.store is not None:
-                    from ..tools.builtins import session_search as _ss
-                    _ss._current_store.set(self.store)
-                if self.skill_loader is not None:
-                    _sl_mod._set_loader(self.skill_loader)
+                from ..tools.builtins import session_search as _ss
+                _ss._current_store.set(self.store)
+                _sl_mod._set_loader(self.skill_loader)
 
                 modified = call
                 for hook in self.tool_hooks:

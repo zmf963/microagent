@@ -147,3 +147,43 @@ async def _fake_search_no_results(store, query, k=5):
 
 async def _fake_search_results(store, query, k=5):
     return [Message.user("what is python"), Message.assistant("python is great")]
+
+
+class TestContextVarIsolation:
+    @pytest.mark.asyncio
+    async def test_runner_without_store_does_not_inherit_sibling_store(self):
+        """Creating runner A (with store) then runner B (no store) in the
+        same context must not leak A's store into B's session_search."""
+        from microagent.core.store import InMemoryStore
+        from microagent.core.tool import ToolRegistry, _default_builtins
+        from microagent.core.types import ToolResultDelta
+        from microagent.session.budget import Budget
+        from microagent.session.runner import SessionRunner
+        from tests.unit.fake_llm import FakeLLMClient, text_response, tool_response
+
+        runner_a = SessionRunner(
+            llm=FakeLLMClient([text_response("a")]),
+            registry=ToolRegistry([]),
+            budget=Budget.root(),
+            store=InMemoryStore(),
+            session_id="a",
+        )
+        runner_b = SessionRunner(
+            llm=FakeLLMClient([
+                tool_response([("c1", "session_search", {"query": "hello"})]),
+                text_response("b done"),
+            ]),
+            registry=ToolRegistry(_default_builtins()),
+            budget=Budget.root(),
+        )  # no store — must NOT see runner A's
+
+        events = []
+        async for e in runner_b.run_turn([Message.user("go")]):
+            events.append(e)
+        results = [e for e in events if isinstance(e, ToolResultDelta)]
+        assert len(results) == 1
+        assert "not available" in results[0].content, (
+            f"runner B inherited runner A's store: {results[0].content!r}"
+        )
+        await runner_a.close()
+        await runner_b.close()
