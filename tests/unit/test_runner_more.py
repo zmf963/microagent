@@ -134,6 +134,105 @@ class TestPlanMode:
         assert "browser_navigate" not in avail_plan
         await runner.close()
 
+    @pytest.mark.asyncio
+    async def test_plan_mode_denies_write_tool_at_execution(self, tmp_path):
+        """Even if the LLM emits a write tool call in plan mode (e.g. it
+        ignored the filtered tool list), the runner must deny it at
+        execution time — the read-only guarantee is not cosmetic."""
+        from microagent.core.types import ToolResultDelta
+
+        target = tmp_path / "pwned.txt"
+        fake = FakeLLMClient([
+            tool_response([("c1", "write_file", {"path": str(target), "content": "x"})]),
+            text_response("done"),
+        ])
+        runner = SessionRunner(
+            llm=fake, registry=ToolRegistry(_default_builtins()),
+            budget=Budget.root(),
+        )
+        runner.mode = "plan"
+        events = []
+        async for e in runner.run_turn([Message.user("write something")]):
+            events.append(e)
+        results = [e for e in events if isinstance(e, ToolResultDelta)]
+        assert len(results) == 1
+        assert results[0].is_error
+        assert "denied" in results[0].content.lower()
+        assert not target.exists(), "write_file executed in plan mode"
+        await runner.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cmd", [
+        "rm -rf /tmp/x",
+        "mv a b",
+        "mkdir -p /tmp/newdir",
+        "touch /tmp/f",
+        "chmod 755 x",
+        "echo hi > /tmp/f",
+        "echo hi >> /tmp/f",
+        "git commit -m x",
+        "git push",
+        "git reset --hard",
+        "git checkout other",
+        "sed -i s/a/b/ f",
+        "kill 1234",
+        "pip install requests",
+        "npm uninstall express",
+    ])
+    async def test_plan_mode_denies_destructive_bash(self, cmd):
+        """Destructive/write bash commands are denied at execution time."""
+        from microagent.core.types import ToolResultDelta
+
+        fake = FakeLLMClient([
+            tool_response([("c1", "bash", {"command": cmd})]),
+            text_response("done"),
+        ])
+        runner = SessionRunner(
+            llm=fake, registry=ToolRegistry(_default_builtins()),
+            budget=Budget.root(),
+        )
+        runner.mode = "plan"
+        events = []
+        async for e in runner.run_turn([Message.user("run it")]):
+            events.append(e)
+        results = [e for e in events if isinstance(e, ToolResultDelta)]
+        assert len(results) == 1
+        assert results[0].is_error, f"{cmd!r} was not denied"
+        assert "denied" in results[0].content.lower()
+        await runner.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cmd", [
+        "ls -la",
+        "cat pyproject.toml",
+        "grep -rn foo src/",
+        "git status",
+        "git log --oneline -5",
+        "git diff HEAD",
+        "wc -l pyproject.toml",
+        "echo 'a>b'",  # '>' inside quotes is data, not redirection
+    ])
+    async def test_plan_mode_allows_readonly_bash(self, cmd):
+        """Read-only bash commands still execute in plan mode."""
+        from microagent.core.types import ToolResultDelta
+
+        fake = FakeLLMClient([
+            tool_response([("c1", "bash", {"command": cmd})]),
+            text_response("done"),
+        ])
+        runner = SessionRunner(
+            llm=fake, registry=ToolRegistry(_default_builtins()),
+            budget=Budget.root(),
+        )
+        runner.mode = "plan"
+        events = []
+        async for e in runner.run_turn([Message.user("run it")]):
+            events.append(e)
+        results = [e for e in events if isinstance(e, ToolResultDelta)]
+        assert len(results) == 1
+        assert not results[0].is_error, f"{cmd!r} was wrongly denied"
+        await runner.close()
+
 
 class TestOverflowRecovery:
     @pytest.mark.asyncio

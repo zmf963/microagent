@@ -214,13 +214,35 @@ class SessionRunner:
 
     # Tools blocked in plan mode (read-only mode).
     # bash is NOT in this set — plan mode allows read-only shell commands
-    # (ls, cat, grep, find, git, etc.). Destructive commands are blocked
-    # by the plan-mode system prompt instructing the LLM not to execute
-    # modifications, not by tool filtering.
+    # (ls, cat, grep, find, git, etc.); destructive bash commands are
+    # denied at execution time by _plan_bash_violation().
     _PLAN_BLOCKED_TOOLS = frozenset({
         "write_file", "edit_file", "execute_code", "process",
         "browser_click", "browser_type", "browser_navigate",
         "browser_back", "browser_scroll", "browser_press",
+    })
+
+    # First-token blocklist for plan-mode bash. Heuristic, not a sandbox:
+    # it stops the common write/destructive verbs. A determined command
+    # can still mutate state (e.g. `python -c ...`); full confinement
+    # would require OS-level sandboxing, which is out of scope here.
+    _PLAN_BASH_DESTRUCTIVE = frozenset({
+        "rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "dd",
+        "mkfs", "kill", "pkill", "killall", "shutdown", "reboot", "halt",
+        "tee", "truncate", "install", "ln", "mkdir", "touch",
+    })
+
+    # git subcommands that mutate the repo or index.
+    _PLAN_BASH_GIT_WRITE = frozenset({
+        "add", "commit", "push", "reset", "checkout", "switch", "restore",
+        "rebase", "merge", "cherry-pick", "revert", "apply", "clean",
+        "rm", "mv", "tag", "stash", "branch", "am", "format-patch",
+    })
+
+    # Package-manager write subcommands (installing/uninstalling changes
+    # the environment; `pip list` / `npm ls` stay allowed).
+    _PLAN_BASH_PKG_WRITE = frozenset({
+        "install", "uninstall", "remove", "add", "upgrade", "update",
     })
 
     _PLAN_SYSTEM_PROMPT = (
@@ -241,6 +263,45 @@ class SessionRunner:
         "   text '/build' on its own line so the user can switch to build mode\n"
         "   to execute your plan."
     )
+
+    @classmethod
+    def _plan_bash_violation(cls, command: str) -> str | None:
+        """Return a denial reason if a plan-mode bash command looks
+        write/destructive, else None (allowed).
+
+        Heuristic: each pipeline/list segment is shlex-split; the first
+        token is checked against the destructive verb set, git/package
+        write subcommands, and `sed -i`. Output redirection (>, >>)
+        outside quotes is also denied. Quoted '>' (e.g. echo 'a>b') is
+        treated as data. Known limitations: `echo a>b` unquoted and
+        arbitrary interpreters (`python -c ...`) are not caught.
+        """
+        import re
+        import shlex
+
+        for segment in re.split(r";|\|\||&&|\|", command):
+            segment = segment.strip()
+            if not segment:
+                continue
+            try:
+                tokens = shlex.split(segment, posix=True)
+            except ValueError:
+                tokens = segment.split()
+            if not tokens:
+                continue
+            if any(t in (">", ">>") or t.startswith(">") for t in tokens):
+                return "output redirection is not allowed in plan mode"
+            verb = tokens[0].rsplit("/", 1)[-1]
+            if verb in cls._PLAN_BASH_DESTRUCTIVE:
+                return f"'{verb}' modifies the system — not allowed in plan mode"
+            if verb == "git" and len(tokens) > 1 and tokens[1] in cls._PLAN_BASH_GIT_WRITE:
+                return f"'git {tokens[1]}' modifies the repository — not allowed in plan mode"
+            if verb == "sed" and any(t.startswith("-i") for t in tokens[1:]):
+                return "'sed -i' edits files in place — not allowed in plan mode"
+            if verb in ("pip", "pip3", "uv", "npm", "pnpm", "yarn", "brew", "apt", "apt-get") \
+                    and len(tokens) > 1 and tokens[1] in cls._PLAN_BASH_PKG_WRITE:
+                return f"'{verb} {tokens[1]}' modifies the environment — not allowed in plan mode"
+        return None
 
     def _process_tool_output(self, tool_call_id: str, result) -> Any:
         """Apply ToolOutputStore size management to tool results."""
@@ -705,6 +766,24 @@ class SessionRunner:
                         results[idx] = ToolResult.denied("blocked by tool hook")
                         return
                     call = modified
+
+                # Plan-mode hard guard at the execution layer. The tool
+                # list sent to the LLM is already filtered, but a model
+                # can still emit a write tool call (fine-tuned habits,
+                # prompt injection) — enforce the read-only guarantee here.
+                if self.mode == "plan":
+                    if call.name in self._PLAN_BLOCKED_TOOLS:
+                        results[idx] = ToolResult.denied(
+                            f"plan mode: '{call.name}' is a write tool and is blocked"
+                        )
+                        return
+                    if call.name == "bash":
+                        reason = self._plan_bash_violation(
+                            str(call.arguments.get("command", ""))
+                        )
+                        if reason is not None:
+                            results[idx] = ToolResult.denied(f"plan mode: {reason}")
+                            return
 
                 # Streaming execution — ToolRegistry.execute_stream always
                 # exists (core/tool.py) and has its own non-streaming fallback
