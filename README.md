@@ -2,7 +2,7 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1036%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1042%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
 **~10,400 LOC**, **34 built-in tools**, **62 public API symbols**, **1037 unit+smoke+e2e tests, 10 integration tests**.
@@ -490,7 +490,7 @@ python -m pytest tests/e2e/ -q            # 20 e2e tests
 
 # All fast tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
-# 1036 passed, 1 skipped
+# 1042 passed, 11 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \

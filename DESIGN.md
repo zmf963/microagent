@@ -97,7 +97,7 @@ class Usage:
 - `ToolCallDelta(id, name, arguments)` — 完整工具调用
 - `ToolResultDelta(id, name, content, is_error)` — 工具结果摘要
 - `TurnComplete(content)` — 对话轮次结束
-- `TurnFailed(reason)` — 预算耗尽/错误
+- `TurnFailed(reason)` — 预算耗尽/错误（含 LLM 流异常：未产生任何输出时自动重试一次，重试仍失败或已有部分内容流出 → `TurnFailed("LLM error: ...")`；interrupt 的 CancelledError 不受影响）
 
 ---
 
@@ -223,7 +223,7 @@ while not budget.exhausted:
 ```python
 store = SQLiteStore("~/.microagent/sessions.db")  # WAL 模式
 await store.append(session_id, message)            # JSON 序列化
-await store.load_history(session_id)               # → list[Message]
+await store.load_history(session_id)               # → list[Message]（逐行容错：损坏行跳过，全坏返回 []）
 await store.list_sessions()                        # → list[str]
 ```
 
@@ -311,7 +311,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-1036 passed, 1 skipped, 0 failures  —  ~13,030 / 10,419 = 125% test/code ratio（unit+smoke+e2e，82% 行覆盖率）
+1042 passed, 11 skipped, 0 failures  —  ~13,620 / 10,449 = 130% test/code ratio（unit+smoke+e2e，82% 行覆盖率）
 ```
 
 | 测试文件 | 覆盖 |

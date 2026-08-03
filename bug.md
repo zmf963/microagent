@@ -118,7 +118,7 @@
 ## 六、2026-08-03 第四轮疯狂测试（边界/错误路径 · 探针 A-D）
 
 > 方法：临时探针脚本（/tmp）直接调用真实工具函数与真实 SessionRunner，聚焦边界条件。
-> 基线：pytest `tests/ -q --ignore=tests/benchmark` → 1036 passed, 11 skipped。
+> 基线：pytest `tests/ -q --ignore=tests/benchmark` → 1036 passed, 11 skipped（修复后 1042 passed）。
 
 ### 🔴 严重
 
