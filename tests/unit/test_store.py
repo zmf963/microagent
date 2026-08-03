@@ -44,6 +44,59 @@ class TestSQLiteStore:
         assert history[0].content == "hello"
         store.close()
 
+    async def test_load_history_skips_corrupt_rows(self, tmp_path):
+        """A corrupt row must not kill the whole session history.
+
+        Mirrors the per-row try/except already used by session_summaries:
+        one bad JSON blob (disk corruption, partial write) should be
+        skipped, not crash CLI resume / cron / SessionRunner.load_history.
+        """
+        import sqlite3
+
+        from microagent.core.store import _serialize_message
+
+        db_path = tmp_path / "corrupt.db"
+        store = SQLiteStore(db_path)
+        await store.append("s1", Message.user("good1"))
+        await store.append("s1", Message.user("bad-row"))
+        await store.append("s1", Message.user("good2"))
+        store.close()
+
+        # Corrupt the second row in place (simulates disk corruption /
+        # interrupted write on an existing row)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE messages SET data = '{not-valid-json{{{' WHERE session_id = 's1' AND seq = 2"
+        )
+        conn.commit()
+        conn.close()
+
+        store2 = SQLiteStore(db_path)
+        history = await store2.load_history("s1")
+        contents = [m.content for m in history]
+        assert "good1" in contents and "good2" in contents
+        assert len(history) == 2
+        store2.close()
+
+    async def test_load_history_all_corrupt_returns_empty(self, tmp_path):
+        """If every row is corrupt, load_history returns [] not an exception."""
+        import sqlite3
+
+        db_path = tmp_path / "allbad.db"
+        store = SQLiteStore(db_path)
+        await store.append("s1", Message.user("seed"))  # creates the table
+        store.close()
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE messages SET data = 'garbage'")
+        conn.commit()
+        conn.close()
+
+        store2 = SQLiteStore(db_path)
+        history = await store2.load_history("s1")
+        assert history == []
+        store2.close()
+
     async def test_persistence_across_connections(self, tmp_path):
         db_path = tmp_path / "persist.db"
         store1 = SQLiteStore(db_path)

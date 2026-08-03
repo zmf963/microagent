@@ -159,7 +159,16 @@ class SQLiteStore:
                 "SELECT data FROM messages WHERE session_id = ? ORDER BY seq",
                 (session_id,),
             ).fetchall()
-            return [_deserialize_message(r[0]) for r in rows]
+            # Per-row tolerance, mirroring session_summaries: one corrupt
+            # JSON blob (disk corruption, interrupted write) must not kill
+            # the whole session resume path (CLI / cron / runner).
+            out: list[Message] = []
+            for r in rows:
+                try:
+                    out.append(_deserialize_message(r[0]))
+                except Exception:
+                    continue
+            return out
 
         async with self._lock:
             return await asyncio.to_thread(_load)
