@@ -58,3 +58,48 @@ class TestSessionResume:
             if isinstance(ev, TurnComplete):
                 result = ev.content
         assert result == "I'm still here."
+
+
+class TestCancellationStoreIntegrity:
+    async def test_hard_cancel_leaves_no_orphaned_tool_calls(self):
+        """Cancelling mid-tool-execution must persist error results for
+        every pending tool_call — otherwise the store holds an assistant
+        message with tool_calls but no matching tool results, and the
+        OpenAI API rejects the resumed session."""
+        import asyncio
+
+        import pytest
+
+        from microagent.core.tool import tool
+        from microagent.core.types import ToolResult
+        from tests.unit.fake_llm import tool_response
+
+        @tool("slow_tool", description="Sleeps for a long time.")
+        async def slow_tool() -> ToolResult:
+            await asyncio.sleep(30)
+            return ToolResult.ok("done")
+
+        store = InMemoryStore()
+        llm = FakeLLMClient([
+            tool_response([("c1", "slow_tool", {}), ("c2", "slow_tool", {})]),
+        ])
+        runner = SessionRunner(llm=llm, registry=ToolRegistry([slow_tool]), store=store)
+        messages = [Message.user("go")]
+
+        async def consume():
+            async for _ in runner.run_turn(messages):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.3)  # let tools start executing
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        history = await store.load_history(runner.session_id)
+        assistant = next(m for m in history if m.tool_calls)
+        answered = {m.tool_call_id for m in history if m.role == "tool"}
+        expected = {tc.id for tc in assistant.tool_calls}
+        assert expected <= answered, (
+            f"orphaned tool_calls after cancel: {expected - answered}"
+        )

@@ -678,7 +678,26 @@ class SessionRunner:
                 return
 
             # --- 4. Execute tool calls with streaming ---
-            results, progress_events = await self._run_tool_calls(tool_calls)
+            try:
+                results, progress_events = await self._run_tool_calls(tool_calls)
+            except BaseException:
+                # Hard cancel (task.cancel / Ctrl-C) mid-execution: the
+                # assistant message with these tool_calls is already
+                # persisted, so persist an error result for every tool
+                # call that never settled. Without this the store holds
+                # orphaned tool_calls and the OpenAI API rejects the
+                # resumed session ("messages must contain tool results
+                # for all tool calls"). Tool results are only persisted
+                # after _run_tool_calls returns, so none are missing.
+                for tc in tool_calls:
+                    msg = Message.tool_result(
+                        ToolResult.error("interrupted: tool execution cancelled"),
+                        tool_call_id=tc.id,
+                    )
+                    messages.append(msg)
+                    if self.store is not None:
+                        await self.store.append(self.session_id, msg)
+                raise
 
             # Yield progress events before results (real-time UX)
             for pe in progress_events:
