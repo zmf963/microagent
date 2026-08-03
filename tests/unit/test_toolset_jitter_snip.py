@@ -38,6 +38,22 @@ class TestToolsetLayering:
         assert "web_search" in tools
         assert "browser_navigate" not in tools
 
+    def test_all_builtins_in_some_toolset(self):
+        """Every registered builtin tool belongs to at least one toolset
+        layer — otherwise it's unreachable via toolset configuration
+        (file_tree and git drifted out of every layer)."""
+        # The @tool global registry also collects test-defined tools —
+        # filter to actual builtin modules.
+        names = {
+            t.name
+            for t in _default_builtins()
+            if getattr(t, "fn", None) is not None
+            and t.fn.__module__.startswith("microagent.tools.builtins")
+        }
+        covered = set().union(*TOOLSETS.values())
+        missing = names - covered
+        assert not missing, f"registered tools in no toolset: {missing}"
+
     def test_resolve_all_layers(self):
         """resolve_toolset with all layers returns everything."""
         tools = resolve_toolset("core,extended,scene")

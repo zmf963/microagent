@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-993%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1036%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~10,100 LOC**, **34 built-in tools**, **62 public API symbols**, **993 unit+smoke+e2e tests, 10 integration tests**.
+**~10,400 LOC**, **34 built-in tools**, **62 public API symbols**, **1037 unit+smoke+e2e tests, 10 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -480,7 +480,7 @@ await scheduler.stop()
 
 ```bash
 # Unit tests (mock LLM, no network)
-python -m pytest tests/unit/ -q          # 964 unit tests
+python -m pytest tests/unit/ -q          # 1017 unit tests
 
 # Smoke tests (fast import + lifecycle sanity)
 python -m pytest tests/smoke/ -q          # 9 smoke tests
@@ -490,7 +490,7 @@ python -m pytest tests/e2e/ -q            # 20 e2e tests
 
 # All fast tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
-# 993 passed, 1 skipped
+# 1036 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
@@ -516,7 +516,7 @@ python -m coverage report                                # ~82% line coverage
 - **Skills dual ecosystem** — Claude Code SKILL.md format + composite loader with CJK-aware fuzzy matching
 - **Permission engine** — fnmatch rules + ScriptRule + ASK callback (library extension point, requires manual wiring)
 - **Extension points** — 3 Protocols (PreLLMHook, ToolHook, ContextSource) + EventBus (zero overhead when unused)
-- **Dual-track testing** — `FakeLLMClient` (553 unit tests) + real API (integration)
+- **Dual-track testing** — `FakeLLMClient` (1017 unit tests) + real API (integration)
 
 ## License
 

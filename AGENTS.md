@@ -4,13 +4,13 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~10,100 LOC, 34 tools, 553 tests).
+MicroAgent is an embeddable AI agent core library (~10,400 LOC, 34 tools, 1017 unit tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
 The single most important principle: **the core is a narrow waist; capability
 lives in tools and extension points, not in the core loop.** SessionRunner
-(~654 LOC) is the sole execution path. Everything else — memory, skills,
+(~848 LOC) is the sole execution path. Everything else — memory, skills,
 compression, permissions, subagents — plugs in through Protocols.
 
 ## Project Structure
@@ -35,7 +35,7 @@ microagent/
 │   │   ├── templates.py     # Model-specific system prompt templates
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
-│   │   ├── runner.py        # SessionRunner — the core loop (~654 LOC)
+│   │   ├── runner.py        # SessionRunner — the core loop (~848 LOC)
 │   │   ├── compress.py      # 4-layer compression pyramid
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
@@ -60,7 +60,7 @@ microagent/
 │   ├── currency.py          # USD→CNY display conversion (MICROAGENT_CURRENCY_RATE)
 │   └── surface/cli.py       # Rich CLI with /slash commands (/models, /cost, …)
 └── tests/
-    ├── unit/                # unit tests (mock LLM, fast) — 93 files
+    ├── unit/                # unit tests (mock LLM, fast) — 91 files
     ├── smoke/               # import + lifecycle sanity checks
     ├── e2e/                 # full agent turns with tools (FakeLLM)
     ├── integration/         # real LLM API (MICROAGENT_TEST_* env vars)
@@ -72,7 +72,7 @@ microagent/
 
 ### 1. The core loop is sacred
 
-`SessionRunner.run_turn()` is the only execution path. It is ~654 LOC and
+`SessionRunner.run_turn()` is the only execution path. It is ~848 LOC and
 every line traces to the core contract:
 
 ```
@@ -162,8 +162,8 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 964 unit tests
-python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 993 tests total
+python -m pytest tests/unit/ -q            # 1017 unit tests
+python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 1037 tests total
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

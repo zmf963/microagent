@@ -357,6 +357,8 @@ TOOLSETS: dict[str, frozenset[str]] = {
         "question",
         "lsp",
         "mcp_connect",
+        "git",
+        "file_tree",
     }),
     "scene": frozenset({
         "browser_navigate",
