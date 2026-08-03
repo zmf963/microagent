@@ -106,25 +106,43 @@ async def search_sessions(
     """Search all stored sessions using FTS5 with BM25 ranking.
 
     Falls back to LIKE if FTS5 is not available.
+
+    All SQLite I/O runs under ``store._lock`` via ``asyncio.to_thread`` —
+    the same discipline as every SQLiteStore method. Previously this ran
+    raw sync sqlite3 on the event loop thread: it blocked the loop for
+    the duration of the query and raced with concurrent append() writes
+    on the same connection.
     """
     if not isinstance(store, SQLiteStore):
         return ()
 
-    ensure_fts5(store)
+    import asyncio
+
     fts_query = _build_fts_query(query)
 
-    try:
-        # FTS5 with ranking — higher rank = better match
-        rows = store._conn.execute(
-            """SELECT data, rank FROM messages_fts
-               WHERE messages_fts MATCH ?
-               ORDER BY rank
-               LIMIT ?""",
-            (fts_query, k),
-        ).fetchall()
-
-        if not rows:
-            return ()
+    def _search() -> tuple[Message, ...]:
+        ensure_fts5(store)
+        try:
+            # FTS5 with ranking — higher rank = better match
+            rows = store._conn.execute(
+                """SELECT data, rank FROM messages_fts
+                   WHERE messages_fts MATCH ?
+                   ORDER BY rank
+                   LIMIT ?""",
+                (fts_query, k),
+            ).fetchall()
+        except Exception:
+            # FTS5 unavailable — fallback to LIKE
+            safe_query = query.replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{safe_query}%"
+            rows = [
+                (data, None)
+                for (data,) in store._conn.execute(
+                    "SELECT data FROM messages WHERE data LIKE ? ESCAPE '\\' "
+                    "ORDER BY id DESC LIMIT ?",
+                    (pattern, k),
+                ).fetchall()
+            ]
 
         results = []
         for data, _rank in rows:
@@ -140,25 +158,5 @@ async def search_sessions(
                 continue
         return tuple(results)
 
-    except Exception:
-        # FTS5 unavailable — fallback to LIKE
-        safe_query = query.replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{safe_query}%"
-        rows = store._conn.execute(
-            "SELECT data FROM messages WHERE data LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
-            (pattern, k),
-        ).fetchall()
-
-        results = []
-        for (data,) in rows:
-            try:
-                obj = json.loads(data)
-                results.append(
-                    Message(
-                        role=obj.get("role", "user"),
-                        content=obj.get("content", ""),
-                    )
-                )
-            except (json.JSONDecodeError, KeyError):
-                continue
-        return tuple(results)
+    async with store._lock:
+        return await asyncio.to_thread(_search)

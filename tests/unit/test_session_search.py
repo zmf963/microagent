@@ -73,3 +73,21 @@ class TestSearchSessions:
         # Force the LIKE fallback by breaking FTS5
         results = await search_sessions(store, "special", k=1)
         assert len(results) >= 1
+
+    async def test_search_respects_store_lock(self, store):
+        """search_sessions runs raw sync sqlite3 on store._conn — it must
+        go through store._lock + to_thread like every other SQLiteStore
+        method, or it races with concurrent append() writes and blocks
+        the event loop."""
+        import asyncio
+
+        await self._seed(store)
+        await store._lock.acquire()
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(search_sessions(store, "docker"), timeout=0.3)
+        finally:
+            store._lock.release()
+        # With the lock free, the search completes.
+        results = await search_sessions(store, "docker", k=3)
+        assert len(results) >= 1
