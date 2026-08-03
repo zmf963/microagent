@@ -67,8 +67,24 @@ class FunctionTool:
     parameters: dict[str, Any]
     description: str
 
+    def _bad_arguments_error(self, call: ToolCall, e: TypeError) -> ToolResult:
+        """Build a diagnostic ToolResult for malformed tool-call arguments.
+
+        When the LLM emits broken argument JSON, client.py falls back to
+        ``{"_raw": <unparsed text>}`` — surfacing a snippet of it here
+        makes the failure diagnosable from the tool result alone.
+        """
+        raw = call.arguments.get("_raw")
+        hint = f" (raw arguments: {str(raw)[:200]!r})" if raw is not None else ""
+        return ToolResult.error(
+            f"{self.name}: invalid arguments {sorted(call.arguments)}: {e}{hint}"
+        )
+
     async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult:
-        result = await self.fn(**call.arguments)
+        try:
+            result = await self.fn(**call.arguments)
+        except TypeError as e:
+            return self._bad_arguments_error(call, e)
         if isinstance(result, ToolResult):
             return result
         return ToolResult.ok(str(result))
@@ -81,7 +97,11 @@ class FunctionTool:
         Falls back to non-streaming execute() if the function doesn't
         return an async generator.
         """
-        result_or_iter = self.fn(**call.arguments)
+        try:
+            result_or_iter = self.fn(**call.arguments)
+        except TypeError as e:
+            yield self._bad_arguments_error(call, e)
+            return
         if inspect.isasyncgen(result_or_iter):
             # Async generator — stream each chunk
             collected: list[str] = []

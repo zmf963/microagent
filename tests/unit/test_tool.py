@@ -94,3 +94,45 @@ class TestToolRegistry:
         result = await registry.execute(call)
         assert result.is_error
         assert "unknown tool" in result.content
+
+
+class TestBadArguments:
+    """When the LLM emits malformed tool-call argument JSON, client.py
+    falls back to {"_raw": ...}; calling fn(**{"_raw": ...}) raises
+    TypeError for any tool whose signature lacks a _raw parameter.
+    That must become a ToolResult.error, not an exception."""
+
+    async def test_raw_arguments_become_error_result(self):
+        @tool("needs_path", description="needs a path")
+        async def needs_path(path: Annotated[str, Field(description="p")]) -> ToolResult:
+            return ToolResult.ok(path)
+
+        registry = ToolRegistry([needs_path])
+        call = ToolCall(id="c1", name="needs_path", arguments={"_raw": '{"path": "a.txt'})
+        result = await registry.execute(call)
+        assert result.is_error
+        assert "_raw" in result.content  # raw snippet surfaced for diagnosis
+
+    async def test_missing_required_arg_becomes_error_result(self):
+        @tool("needs_path2", description="needs a path")
+        async def needs_path2(path: Annotated[str, Field(description="p")]) -> ToolResult:
+            return ToolResult.ok(path)
+
+        registry = ToolRegistry([needs_path2])
+        call = ToolCall(id="c1", name="needs_path2", arguments={})
+        result = await registry.execute(call)
+        assert result.is_error
+        assert "needs_path2" in result.content
+
+    async def test_raw_arguments_streaming_becomes_error_result(self):
+        @tool("needs_path3", description="needs a path")
+        async def needs_path3(path: Annotated[str, Field(description="p")]) -> ToolResult:
+            return ToolResult.ok(path)
+
+        registry = ToolRegistry([needs_path3])
+        call = ToolCall(id="c1", name="needs_path3", arguments={"_raw": "garbage"})
+        events = [e async for e in registry.execute_stream(call)]
+        results = [e for e in events if isinstance(e, ToolResult)]
+        assert len(results) == 1
+        assert results[0].is_error
+        assert "_raw" in results[0].content
