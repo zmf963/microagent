@@ -50,6 +50,29 @@ async def test_edit_file_rejects_empty_old_string_no_replace_all(tmp_path):
     result = await _fn(edit_file, path=str(f), old_string="", new_string="X")
     assert result.is_error
 
+@pytest.mark.asyncio
+async def test_edit_file_binary_returns_error_not_unicode_error(tmp_path):
+    """Binary file must yield a ToolResult.error, not escape UnicodeDecodeError."""
+    f = tmp_path / "bin.dat"
+    f.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\xff\xfe binary")
+    result = await _fn(edit_file, path=str(f), old_string="x", new_string="y")
+    assert result.is_error
+    assert "binary" in result.content.lower()
+
+@pytest.mark.asyncio
+async def test_edit_file_oversized_returns_error(tmp_path, monkeypatch):
+    """Files above the size cap are rejected before reading (OOM guard),
+    aligned with read_file's 50MB limit."""
+    import microagent.tools.builtins.edit_file as mod
+
+    monkeypatch.setattr(mod, "_MAX_EDIT_BYTES", 100)
+    f = tmp_path / "big.txt"
+    f.write_text("A" * 200 + "needle" + "B" * 200)
+    result = await _fn(edit_file, path=str(f), old_string="needle", new_string="x")
+    assert result.is_error
+    assert "too large" in result.content.lower()
+    # Untouched
+    assert "needle" in f.read_text()
 
 # --- 2.8 git: shlex.split -------------------------------------------------
 

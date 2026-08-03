@@ -11,6 +11,8 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 
+_MAX_EDIT_BYTES = 50 * 1024 * 1024  # 50 MB, aligned with read_file's limit
+
 
 @tool("edit_file", description="Edit a file by replacing old_string with new_string.")
 async def edit_file(
@@ -40,7 +42,20 @@ async def edit_file(
     if not p.exists():
         return ToolResult.error(f"file not found: {path}")
 
-    text = await asyncio.to_thread(p.read_text)
+    # Stat before reading: reject oversized files (OOM guard) and binaries
+    # (read_text would escape UnicodeDecodeError through FunctionTool.execute).
+    try:
+        size = p.stat().st_size
+    except OSError as e:
+        return ToolResult.error(f"cannot stat {path}: {e}")
+    if size > _MAX_EDIT_BYTES:
+        return ToolResult.error(
+            f"file too large: {size:,} bytes exceeds {_MAX_EDIT_BYTES:,} byte limit"
+        )
+    try:
+        text = await asyncio.to_thread(p.read_text)
+    except UnicodeDecodeError:
+        return ToolResult.error(f"binary file, cannot edit: {path}")
     count = text.count(old_string)
 
     if count == 0:
