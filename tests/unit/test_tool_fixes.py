@@ -268,3 +268,30 @@ async def test_bash_timeout_kills_process_group():
     assert result.is_error
     assert "timed out" in result.content.lower()
     assert elapsed < 5.0
+
+# --- execute_code: CancelledError kills subprocess (mirrors 2.17) --------
+
+@pytest.mark.asyncio
+async def test_execute_code_cancellation_kills_subprocess():
+    """Cancelling execute_code mid-run must kill the Python subprocess,
+    not orphan it. Same BaseException contract as bash (2.17)."""
+    from microagent.tools.builtins.execute_code import execute_code
+
+    marker = "ec_cancel_marker_7f3a"
+    task = asyncio.create_task(_fn(
+        execute_code, code=f"import time; print('{marker}'); time.sleep(60)", timeout=120,
+    ))
+    await asyncio.sleep(0.5)  # let the subprocess start
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.2)
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", marker], capture_output=True, text=True, timeout=2
+        )
+        orphans = [p for p in out.stdout.split() if p]
+        assert not orphans, f"execute_code left orphaned subprocess: {orphans}"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # pgrep unavailable — structural coverage is sufficient

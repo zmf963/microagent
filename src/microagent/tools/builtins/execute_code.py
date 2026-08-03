@@ -33,6 +33,7 @@ async def execute_code(
 
     MAX_OUTPUT = 100_000  # 100 KB cap — matches bash.py
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -65,5 +66,16 @@ async def execute_code(
             )
 
         return ToolResult.ok(output if output else "(no output)")
-    except Exception as e:
+    except BaseException as e:
+        # CancelledError (interrupt, budget exhausted, Ctrl-C) is a
+        # BaseException — bare `except Exception` misses it, leaving the
+        # subprocess orphaned. Kill before re-raising (mirrors bash.py).
+        if isinstance(e, asyncio.CancelledError):
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            raise
         return ToolResult.error(f"execution failed: {e!r}")

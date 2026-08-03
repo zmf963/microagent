@@ -51,7 +51,10 @@ async def question(
         import asyncio
 
         print(f"\n❓ {text}")
-        # input() is blocking — run off the event loop thread with timeout
+        # input() is blocking — run off the event loop thread with timeout.
+        # Note: if the tool call is cancelled (interrupt/budget), the await
+        # raises promptly but the input() thread itself cannot be killed —
+        # it lingers until the user presses Enter. Documented limitation.
         answer_future = asyncio.to_thread(input, "> ")
         if timeout > 0:
             answer = (await asyncio.wait_for(answer_future, timeout=timeout)).strip()

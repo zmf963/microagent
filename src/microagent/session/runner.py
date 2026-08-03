@@ -824,6 +824,20 @@ class SessionRunner:
                 results[idx] = ToolResult.error(f"{call.name} failed: {e!r}")
 
         async with anyio.create_task_group() as tg:
+            async def _interrupt_watcher() -> None:
+                # Preemptive interrupt: poll the flag while any tool is
+                # still running and cancel the whole task group when it
+                # flips. Without this, interrupt() only takes effect at
+                # the next LLM stream boundary — a `sleep 60` tool would
+                # ignore it. Exits as soon as every call has settled so
+                # the task group can complete normally.
+                while any(r is None for r in results):
+                    if self._interrupt_requested:
+                        tg.cancel_scope.cancel()
+                        return
+                    await anyio.sleep(0.05)
+
+            tg.start_soon(_interrupt_watcher)
             for idx, call in enumerate(calls):
                 tg.start_soon(_settle, idx, call)
 

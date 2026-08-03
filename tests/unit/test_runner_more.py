@@ -1,6 +1,8 @@
 """Tests for SessionRunner uncovered paths: memory extractor, close
 cleanup, interrupt, plan-mode filtering, steer cascade, overflow recovery."""
 
+import asyncio
+
 import pytest
 
 from microagent.core.tool import ToolRegistry, _default_builtins
@@ -96,6 +98,51 @@ class TestInterrupt:
         assert any(isinstance(e, TurnFailed) for e in events), (
             f"expected TurnFailed after mid-turn interrupt, got {[type(e).__name__ for e in events]}"
         )
+        await runner.close()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_preempts_running_tool(self):
+        """interrupt() during tool execution cancels the running tool
+        promptly (preemptive), not after the tool finishes."""
+        import time
+
+        from microagent.core.types import ToolResultDelta
+
+        fake = FakeLLMClient([
+            tool_response([("c1", "bash", {"command": "sleep 10", "timeout": 30})]),
+            text_response("unreachable"),
+        ])
+        runner = SessionRunner(
+            llm=fake,
+            registry=ToolRegistry(_default_builtins()),
+            budget=Budget.root(),
+        )
+        events = []
+        t0 = time.monotonic()
+
+        async def _run():
+            async for e in runner.run_turn([Message.user("go")]):
+                events.append(e)
+
+        task = asyncio.create_task(_run())
+        await asyncio.sleep(0.3)  # let the bash tool start
+        runner.interrupt()
+        await asyncio.wait_for(task, timeout=5)
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 5.0, f"interrupt not preemptive — took {elapsed:.1f}s"
+        assert any(isinstance(e, TurnFailed) and "interrupted" in e.reason for e in events)
+        # No orphan sleep process left behind (bash kills its proc group)
+        await asyncio.sleep(0.2)
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", "sleep 10"], capture_output=True, text=True, timeout=2
+            )
+            orphans = [p for p in out.stdout.split() if p]
+            assert not orphans, f"interrupt left orphaned 'sleep 10': {orphans}"
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
         await runner.close()
 
 
