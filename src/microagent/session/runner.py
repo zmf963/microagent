@@ -513,8 +513,12 @@ class SessionRunner:
                 elif isinstance(event, StreamDone):
                     usage = event.usage
                     if event.stop_reason == "length":
-                        # Overflow: no content AND no tool calls → compact + retry
-                        if not content_parts and not tool_calls:
+                        # Overflow: no user-visible content → compact + retry.
+                        # Tool calls from a truncated stream have incomplete
+                        # argument JSON by definition — executing them then
+                        # retrying wastes LLM calls, so drop them and treat
+                        # this as an overflow.
+                        if not content_parts:
                             if not self._overflow_retried:
                                 self._overflow_retried = True
                                 if usage:
@@ -570,7 +574,9 @@ class SessionRunner:
                                     return
                             yield TurnFailed("LLM response truncated (max tokens)")
                             return
-                        # Tool calls present, no content — proceed normally (not an overflow)
+                        # Content was streamed but handled above. If neither
+                        # content nor tool_calls exist this is also an
+                        # overflow — covered by the same branch.
 
             if _overflow_retrying:
                 continue  # retry the turn after overflow recovery

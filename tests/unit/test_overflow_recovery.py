@@ -56,6 +56,56 @@ class TestOverflowRecovery:
         assert len(completes) >= 1
         assert "recovered" in completes[0].content
 
+    async def test_overflow_with_partial_tool_calls_triggers_retry(self):
+        """Partial tool_calls + length with no content → compact + retry.
+
+        Tool-call argument JSON from a truncated stream is incomplete and
+        unexecutable; executing it then retrying burns 4+ LLM calls for
+        nothing. Treat it as an overflow: compact and retry instead.
+        """
+        from microagent.core.store import InMemoryStore
+        from microagent.core.types import ToolCallDelta
+
+        overflow_resp = ScriptedResponse(
+            events=[
+                ToolCallDelta(id="c1", name="read_file", arguments={"path": "a"}),
+                Usage(input_tokens=100, output_tokens=20),
+                StreamDone(
+                    usage=Usage(input_tokens=100, output_tokens=20),
+                    stop_reason="length",
+                ),
+            ]
+        )
+        success_resp = text_response("recovered")
+
+        store = InMemoryStore()
+        llm = FakeLLMClient([overflow_resp, success_resp])
+        runner = SessionRunner(
+            llm=llm,
+            registry=ToolRegistry([]),
+            budget=Budget(max_iterations=10),
+            compression_threshold=100,
+            store=store,
+        )
+        messages = [Message.user("hello")]
+        events = []
+        async for event in runner.run_turn(messages):
+            events.append(event)
+
+        completes = [e for e in events if isinstance(e, TurnComplete)]
+        assert len(completes) >= 1
+        assert "recovered" in completes[0].content
+
+        # The truncated tool call must NOT be executed or persisted —
+        # its argument JSON is incomplete by definition.
+        history = await store.load_history(runner.session_id)
+        assert not any(m.tool_calls for m in history), (
+            "truncated tool_call from an overflowed stream was persisted"
+        )
+        assert not any(m.role == "tool" for m in history), (
+            "truncated tool_call from an overflowed stream was executed"
+        )
+
     async def test_overflow_with_content_does_not_retry(self):
         """stop_reason='length' but content was already streamed → fail."""
         overflow_resp = ScriptedResponse(
