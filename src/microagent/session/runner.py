@@ -489,7 +489,14 @@ class SessionRunner:
                     return
 
                 if isinstance(event, TextDelta):
-                    content_parts.append(event.text)
+                    # Only kind="content" counts as the assistant's reply.
+                    # Thinking deltas are yielded for display but must not
+                    # enter content_parts — otherwise reasoning text gets
+                    # persisted into the assistant message, and a
+                    # thinking-only + stop_reason="length" stream would be
+                    # misclassified as truncation instead of overflow.
+                    if event.kind == "content":
+                        content_parts.append(event.text)
                     yield event
                 elif isinstance(event, ToolCallDelta):
                     tc = ToolCall(id=event.id, name=event.name, arguments=event.arguments)
