@@ -345,6 +345,7 @@ class SessionRunner:
                 await self.store.append(self.session_id, last)
 
         self._overflow_retried = False
+        self._stream_retried = False  # one-shot stream-error retry per turn
         self._interrupt_requested = False
         # NOTE: _steer_pending is intentionally NOT cleared here. A steer
         # arriving during a pure-text turn is documented to "wait until the
@@ -542,105 +543,125 @@ class SessionRunner:
             tool_calls: list[ToolCall] = []
             usage: Usage | None = None
             _overflow_retrying = False
+            # Tracks whether any user-visible output (content/thinking/
+            # tool-call deltas) has been yielded from THIS stream attempt —
+            # a retry after partial output would duplicate it on screen.
+            _stream_got_output = False
+            try:
+                async for event in self.llm.stream(
+                    system=system,
+                    messages=tuple(send_messages),
+                    tools=oai_tools,
+                ):
+                    if self._interrupt_requested:
+                        yield TurnFailed("interrupted by user")
+                        return
 
-            async for event in self.llm.stream(
-                system=system,
-                messages=tuple(send_messages),
-                tools=oai_tools,
-            ):
-                if self._interrupt_requested:
-                    yield TurnFailed("interrupted by user")
-                    return
+                    if isinstance(event, TextDelta):
+                        # Only kind="content" counts as the assistant's reply.
+                        # Thinking deltas are yielded for display but must not
+                        # enter content_parts — otherwise reasoning text gets
+                        # persisted into the assistant message, and a
+                        # thinking-only + stop_reason="length" stream would be
+                        # misclassified as truncation instead of overflow.
+                        if event.kind == "content":
+                            content_parts.append(event.text)
+                        _stream_got_output = True
+                        yield event
+                    elif isinstance(event, ToolCallDelta):
+                        tc = ToolCall(id=event.id, name=event.name, arguments=event.arguments)
+                        tool_calls.append(tc)
+                        # Forward to consumers so the CLI's 🔧 tool-call panel
+                        # can render the tool name + args BEFORE execution (the
+                        # ✓ result panel follows once the tool runs). Previously
+                        # this was consumed but not re-yielded, making the panel
+                        # handler dead code — same class as the Usage-swallow bug
+                        # fixed in 6c24b81.
+                        _stream_got_output = True
+                        yield event
+                    elif isinstance(event, Usage):
+                        usage = event
+                    elif isinstance(event, StreamDone):
+                        usage = event.usage
+                        if event.stop_reason == "length":
+                            # Overflow: no user-visible content → compact + retry.
+                            # Tool calls from a truncated stream have incomplete
+                            # argument JSON by definition — executing them then
+                            # retrying wastes LLM calls, so drop them and treat
+                            # this as an overflow.
+                            if not content_parts:
+                                if not self._overflow_retried:
+                                    self._overflow_retried = True
+                                    if usage:
+                                        try:
+                                            await self.budget.consume_usage(usage)
+                                        except BudgetExceeded as e:
+                                            yield TurnFailed(f"budget exhausted: {e}")
+                                            return
+                                    # Force compaction to reduce context
+                                    from .compress import compact_conversation
 
-                if isinstance(event, TextDelta):
-                    # Only kind="content" counts as the assistant's reply.
-                    # Thinking deltas are yielded for display but must not
-                    # enter content_parts — otherwise reasoning text gets
-                    # persisted into the assistant message, and a
-                    # thinking-only + stop_reason="length" stream would be
-                    # misclassified as truncation instead of overflow.
-                    if event.kind == "content":
-                        content_parts.append(event.text)
-                    yield event
-                elif isinstance(event, ToolCallDelta):
-                    tc = ToolCall(id=event.id, name=event.name, arguments=event.arguments)
-                    tool_calls.append(tc)
-                    # Forward to consumers so the CLI's 🔧 tool-call panel
-                    # can render the tool name + args BEFORE execution (the
-                    # ✓ result panel follows once the tool runs). Previously
-                    # this was consumed but not re-yielded, making the panel
-                    # handler dead code — same class as the Usage-swallow bug
-                    # fixed in 6c24b81.
-                    yield event
-                elif isinstance(event, Usage):
-                    usage = event
-                elif isinstance(event, StreamDone):
-                    usage = event.usage
-                    if event.stop_reason == "length":
-                        # Overflow: no user-visible content → compact + retry.
-                        # Tool calls from a truncated stream have incomplete
-                        # argument JSON by definition — executing them then
-                        # retrying wastes LLM calls, so drop them and treat
-                        # this as an overflow.
-                        if not content_parts:
-                            if not self._overflow_retried:
-                                self._overflow_retried = True
+                                    try:
+                                        messages_list = await compact_conversation(
+                                            tuple(messages),
+                                            self.llm,
+                                            context_window=_threshold + 8000,
+                                            state=self._compaction_state,
+                                            force=True,
+                                            budget=self.budget,
+                                        )
+                                        messages[:] = list(messages_list)
+                                    except BudgetExceeded as e:
+                                        yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
+                                        return
+                                    except Exception:
+                                        yield TurnFailed("overflow recovery: compaction failed")
+                                        return
+                                    _overflow_retrying = True
+                                    break  # break out of async for → while loop retries
+                                else:
+                                    # Already retried — fail
+                                    yield TurnFailed("LLM overflow recovery failed after retry")
+                                    return
+
+                            # Content was streamed (truncation) — fail.
+                            # Do NOT persist partial tool_calls: they would be
+                            # orphaned (no matching tool results), and the OpenAI
+                            # API rejects the next turn with "messages must contain
+                            # tool results for all tool calls". Keep only the text.
+                            if content_parts:
+                                assistant_msg = Message.assistant(
+                                    text="".join(content_parts),
+                                    usage=usage,
+                                )
+                                messages.append(assistant_msg)
+                                if self.store is not None:
+                                    await self.store.append(self.session_id, assistant_msg)
                                 if usage:
                                     try:
                                         await self.budget.consume_usage(usage)
                                     except BudgetExceeded as e:
                                         yield TurnFailed(f"budget exhausted: {e}")
                                         return
-                                # Force compaction to reduce context
-                                from .compress import compact_conversation
-
-                                try:
-                                    messages_list = await compact_conversation(
-                                        tuple(messages),
-                                        self.llm,
-                                        context_window=_threshold + 8000,
-                                        state=self._compaction_state,
-                                        force=True,
-                                        budget=self.budget,
-                                    )
-                                    messages[:] = list(messages_list)
-                                except BudgetExceeded as e:
-                                    yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
-                                    return
-                                except Exception:
-                                    yield TurnFailed("overflow recovery: compaction failed")
-                                    return
-                                _overflow_retrying = True
-                                break  # break out of async for → while loop retries
-                            else:
-                                # Already retried — fail
-                                yield TurnFailed("LLM overflow recovery failed after retry")
+                                yield TurnFailed("LLM response truncated (max tokens)")
                                 return
+                            # Content was streamed but handled above. If neither
+                            # content nor tool_calls exist this is also an
+                            # overflow — covered by the same branch.
 
-                        # Content was streamed (truncation) — fail.
-                        # Do NOT persist partial tool_calls: they would be
-                        # orphaned (no matching tool results), and the OpenAI
-                        # API rejects the next turn with "messages must contain
-                        # tool results for all tool calls". Keep only the text.
-                        if content_parts:
-                            assistant_msg = Message.assistant(
-                                text="".join(content_parts),
-                                usage=usage,
-                            )
-                            messages.append(assistant_msg)
-                            if self.store is not None:
-                                await self.store.append(self.session_id, assistant_msg)
-                            if usage:
-                                try:
-                                    await self.budget.consume_usage(usage)
-                                except BudgetExceeded as e:
-                                    yield TurnFailed(f"budget exhausted: {e}")
-                                    return
-                            yield TurnFailed("LLM response truncated (max tokens)")
-                            return
-                        # Content was streamed but handled above. If neither
-                        # content nor tool_calls exist this is also an
-                        # overflow — covered by the same branch.
+            except Exception as e:
+                # LLM stream failed (network drop, gateway 5xx, auth
+                # rejection after credential rotation, ...). Without this
+                # guard the raw exception escapes run_turn and crashes
+                # Agent.arun callers. Retry ONCE only if no user-visible
+                # output was produced yet (retrying after partial content
+                # would duplicate text on screen). CancelledError is not
+                # caught here — it must keep propagating for interrupt.
+                if not self._stream_retried and not _stream_got_output:
+                    self._stream_retried = True
+                    continue  # retry the turn (re-enters the outer loop)
+                yield TurnFailed(f"LLM error: {e!r}")
+                return
 
             if _overflow_retrying:
                 continue  # retry the turn after overflow recovery
