@@ -19,8 +19,17 @@ from ...core.tool import tool
 from ...core.types import ToolResult
 
 
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB raw; base64 inflates ~4/3
+
+
 async def _encode_image(image_url: str) -> str | None:
-    """Convert image to a data: URL. Returns None if file not found."""
+    """Convert image to a data: URL. Returns None if file not found.
+
+    Raises ValueError for directories and oversized files — callers must
+    convert these into ToolResult.error (read_bytes on a directory escapes
+    IsADirectoryError, and an uncapped read lets a 100MB file become a
+    ~139MB data URL inside the ToolResult content).
+    """
     if image_url.startswith("data:"):
         return image_url
     if image_url.startswith(("http://", "https://")):
@@ -29,6 +38,13 @@ async def _encode_image(image_url: str) -> str | None:
     p = Path(image_url)
     if not p.exists():
         return None
+    if not p.is_file():
+        raise ValueError(f"not a file: {image_url}")
+    size = p.stat().st_size
+    if size > _MAX_IMAGE_BYTES:
+        raise ValueError(
+            f"image too large: {size:,} bytes exceeds {_MAX_IMAGE_BYTES:,} byte limit"
+        )
 
     import asyncio
 
@@ -51,7 +67,10 @@ async def vision_analyze(
     if not image_url.strip():
         return ToolResult.error("image_url is required")
 
-    data_url = await _encode_image(image_url)
+    try:
+        data_url = await _encode_image(image_url)
+    except ValueError as e:
+        return ToolResult.error(str(e))
     if data_url is None:
         return ToolResult.error(f"image not found: {image_url}")
 

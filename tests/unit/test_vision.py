@@ -47,3 +47,34 @@ class TestVisionAnalyze:
         data_url = "data:image/png;base64,iVBORw0KGgo="
         result = await _encode_image(data_url)
         assert result == data_url
+
+    async def test_directory_path_returns_error(self, tmp_path):
+        """Directory path must yield ToolResult.error, not escape IsADirectoryError."""
+        registry = ToolRegistry(_default_builtins())
+        call = ToolCall(
+            id="c2",
+            name="vision_analyze",
+            arguments={"image_url": str(tmp_path), "question": "q"},
+        )
+        result = await registry.execute(call)
+        assert result.is_error
+        assert "not a file" in result.content.lower() or "not an image" in result.content.lower()
+
+    async def test_oversized_image_returns_error(self, tmp_path, monkeypatch):
+        """Images above the size cap are rejected before base64 inflation
+        (a 100MB file would become a ~139MB data URL in the ToolResult)."""
+        import microagent.tools.builtins.vision_analyze as mod
+
+        monkeypatch.setattr(mod, "_MAX_IMAGE_BYTES", 100)
+        img = tmp_path / "big.png"
+        img.write_bytes(b"\x89PNG" + b"\x00" * 200)
+
+        registry = ToolRegistry(_default_builtins())
+        call = ToolCall(
+            id="c3",
+            name="vision_analyze",
+            arguments={"image_url": str(img), "question": "q"},
+        )
+        result = await registry.execute(call)
+        assert result.is_error
+        assert "too large" in result.content.lower()
