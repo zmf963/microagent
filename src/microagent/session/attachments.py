@@ -51,9 +51,13 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
             for candidate in _parse_paths_from_string(msg.content):
                 paths[candidate] = max(paths.get(candidate, 0), i)
 
-    # Sort by recency (last seen first), take top MAX_FILES
+    # Sort by recency (last seen first), preferring files that actually
+    # exist on disk: regex false positives (domains like example.com)
+    # only fill slots left over by real files.
     sorted_paths = sorted(paths.items(), key=lambda x: -x[1])
-    return dict(sorted_paths[:MAX_FILES])
+    existing = [(p, i) for p, i in sorted_paths if Path(p).expanduser().exists()]
+    missing = [(p, i) for p, i in sorted_paths if not Path(p).expanduser().exists()]
+    return dict((existing + missing)[:MAX_FILES])
 
 
 def _parse_paths_from_string(text: str) -> list[str]:
@@ -87,11 +91,22 @@ def _parse_paths_from_string(text: str) -> list[str]:
             p = m.group(0).rstrip("./\\")
             if not p or p in seen:
                 continue
+            if _is_version_number(p):
+                continue  # 5.00, 1.2.3, v1.2.3 — not file paths
             if _is_readable_file(p):
                 seen.add(p)
                 result.append(p)
 
     return result
+
+
+_VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)+$")
+
+
+def _is_version_number(candidate: str) -> bool:
+    """Pure dotted-number strings (5.00, 1.2.3, v1.2.3) match the
+    bare-filename regex but are versions, not paths."""
+    return bool(_VERSION_RE.match(candidate))
 
 
 def _is_readable_file(path: str) -> bool:

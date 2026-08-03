@@ -113,6 +113,33 @@ class TestFilePathExtraction:
         files = _extract_file_paths(msgs)
         assert len(files) <= 3
 
+    def test_version_numbers_not_paths(self):
+        """Pure version/number strings (5.00, 1.2.3, v1.2.3) are not file
+        paths — the bare-filename regex matches them, and each one can
+        consume a MAX_FILES slot."""
+        msgs = (
+            Message.user("we upgraded from 5.00 to v1.2.3, see changelog 2.0.1 notes"),
+        )
+        files = _extract_file_paths(msgs)
+        assert "5.00" not in files
+        assert "v1.2.3" not in files
+        assert "1.2.3" not in files
+        assert "2.0.1" not in files
+
+    def test_existing_files_preferred_over_false_positives(self, tmp_path):
+        """When slots are scarce, files that actually exist on disk win
+        over regex false positives like domains."""
+        real = tmp_path / "real_data.txt"
+        real.write_text("x")
+        msgs = (
+            Message.user(f"docs at example.com, also read {real} please"),
+        )
+        files = _extract_file_paths(msgs)
+        assert str(real) in files
+        # The existing file must rank ahead of the non-existent domain
+        keys = list(files.keys())
+        assert keys[0] == str(real)
+
 
 class TestIsReadableFile:
     def test_py_readable(self):
