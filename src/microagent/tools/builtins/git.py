@@ -25,6 +25,14 @@ _GIT_WHITELIST = frozenset({
     "add",
 })
 
+# Flags that smuggle write/history-rewriting semantics through otherwise
+# allowed subcommands: commit --amend rewrites local history;
+# branch -d/-D deletes branches.
+_GIT_FORBIDDEN_FLAGS: dict[str, frozenset[str]] = {
+    "commit": frozenset({"--amend"}),
+    "branch": frozenset({"-d", "-D", "--delete"}),
+}
+
 
 @tool(
     "git",
@@ -50,6 +58,14 @@ async def git(
             cmd_parts.extend(shlex.split(args))
         except ValueError as e:
             return ToolResult.error(f"invalid args (unbalanced quotes?): {e}")
+
+    forbidden = _GIT_FORBIDDEN_FLAGS.get(subcommand)
+    if forbidden:
+        bad = forbidden.intersection(cmd_parts[4:])
+        if bad:
+            return ToolResult.error(
+                f"git {subcommand} flag(s) not allowed: {', '.join(sorted(bad))}"
+            )
 
     try:
         proc = await asyncio.create_subprocess_exec(

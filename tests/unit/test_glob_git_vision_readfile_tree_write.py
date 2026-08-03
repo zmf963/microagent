@@ -61,6 +61,36 @@ class TestGit:
         assert r.is_error
 
     @pytest.mark.asyncio
+    async def test_commit_amend_rejected(self, tmp_path):
+        """--amend rewrites local history; the whitelist is for
+        forward-only operations. Must be rejected before execution."""
+        from microagent.tools.builtins.git import git
+        r = await git.fn(subcommand="commit", repo_path=str(tmp_path), args="--amend -m 'x'")
+        assert r.is_error
+        assert "amend" in r.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_branch_delete_rejected(self, tmp_path):
+        """git branch -D deletes a branch — a write op smuggled through
+        an otherwise read-only subcommand."""
+        import subprocess
+        from microagent.tools.builtins.git import git
+        subprocess.run(["git", "init", str(tmp_path)], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t.com"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+        (tmp_path / "f.txt").write_text("x")
+        await git.fn(subcommand="add", repo_path=str(tmp_path), args=".")
+        await git.fn(subcommand="commit", repo_path=str(tmp_path), args="-m init")
+        subprocess.run(["git", "-C", str(tmp_path), "branch", "feature"], check=True)
+
+        for flag in ("-D", "-d"):
+            r = await git.fn(subcommand="branch", repo_path=str(tmp_path), args=f"{flag} feature")
+            assert r.is_error and "not allowed" in r.content.lower(), (flag, r.content)
+        # Branch must still exist — nothing was deleted
+        r = await git.fn(subcommand="branch", repo_path=str(tmp_path))
+        assert "feature" in r.content
+
+    @pytest.mark.asyncio
     async def test_shlex_split_quoted_args(self, tmp_path):
         import subprocess
         from microagent.tools.builtins.git import git
