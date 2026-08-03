@@ -136,13 +136,15 @@
 
 ### 🟡 应修复
 
-**6.2 `edit_file` 二进制文件抛 UnicodeDecodeError 逃逸**
+**6.2 `edit_file` 二进制文件抛 UnicodeDecodeError 逃逸** ✅ **已修复 (476933e)**
+- **修复**:UnicodeDecodeError → ToolResult.error('binary file');新增 50MB stat 前置上限。测试 2 个(test_tool_fixes.py)。
 - **文件**：`src/microagent/tools/builtins/edit_file.py`
 - **现象**：`p.read_text()` 对二进制文件抛 `UnicodeDecodeError`，无 try/except（FunctionTool.execute
   只兜 TypeError）。runner `_settle` 的泛化 except 会兜成错误结果，但直连 execute 崩溃、且错误信息不友好。
 - **附带**：`edit_file` 无文件大小上限（read_file 50MB / grep 10MB 均有保护），大文件整读 OOM 风险。
 
-**6.3 `vision_analyze` 无大小限制 + 目录路径抛 IsADirectoryError**
+**6.3 `vision_analyze` 无大小限制 + 目录路径抛 IsADirectoryError** ✅ **已修复 (ce735d8)**
+- **修复**:目录 → error('not a file');新增 20MB 原始字节上限(base64 前拦截)。测试 2 个(test_vision.py)。
 - **文件**：`src/microagent/tools/builtins/vision_analyze.py`
 - **现象**：100MB 图片被 base64 成 ~139MB 塞进 ToolResult.content（探针验证 len=139,810,201）
   → ToolOutputStore 落盘 + token 爆炸；目录路径 `_encode_image` 的 `p.read_bytes()` 抛
@@ -155,18 +157,19 @@
 - **现象**：单行 data JSON 损坏（手改库/中断写入）→ `load_history` 整库抛 `JSONDecodeError`，
   该 session 无法加载（resume 崩溃）。对比：`session_summaries` 有每行 try/except，load_history 没有。
 
-**6.5 `SQLiteMemoryProvider.recall("")` 返回全部记忆**
+**6.5 `SQLiteMemoryProvider.recall("")` 返回全部记忆** ✅ **已修复 (96d4fba)**
+- **修复**:recall 入口空白查询直接返回 ()。测试 1 个(test_memory_provider.py)。
 - **文件**：`src/microagent/memory/provider.py`
 - **现象**：空查询 `MATCH ''` 在 FTS5 中匹配所有行 → 泄漏全部记忆进上下文（探针 D 验证）。
   调用方用空/空白查询时发出所有内容。
 
 ### 🔵 可选
 
-**6.6 `write_file backup` 静默覆盖已有 `.bak`**（文件 write_file.py）：
-第二次 backup 覆盖旧备份，无提示。**`git` 白名单允许 `--amend`**（git.py）：
-`-m 'x' --amend` 可通过，本地重写历史的语义。**`bash` >100KB 输出截断标记的
-"[truncated: N bytes beyond]" 统计约为 0**（收集阶段已截断，数字失真——纯修剪指标）。
+**6.6 `write_file backup` 静默覆盖已有 `.bak`** ✅ **已修复 (5e77301, 3f97e2d)**（文件 write_file.py）：
+第二次 backup 覆盖旧备份，无提示 → 修复：结果消息追加 '(overwrote existing backup)'。**`git` 白名单允许 `--amend`**（git.py）：
+`-m 'x' --amend` 可通过，本地重写历史的语义 → 修复：按子命令禁 flag(commit --amend、branch -d/-D/--delete)。**`bash` >100KB 输出截断标记的
+"[truncated: N bytes beyond]" 统计约为 0**（收集阶段已截断，数字失真——纯修剪指标）→ 已加注释说明语义。
 
-**6.7 `Budget.spawn()` 父耗尽时产出 max_iterations=0 子预算**（budget.py）：
+**6.7 `Budget.spawn()` 父耗尽时产出 max_iterations=0 子预算** ✅ **已文档化 (3f97e2d)**（budget.py）：
 `min(max(1, rem//3), rem)` 在 rem=0 时为 0 → 子代理立即 BudgetExceeded（死预算）。
 父预算耗尽时这是合理的"没得给"，但值得文档标注。
