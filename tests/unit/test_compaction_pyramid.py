@@ -241,3 +241,64 @@ class TestFallback:
         assert len(result) == 6
         assert "上下文压缩暂停" in result[0].content or "压缩暂停" in result[0].content
         assert result[-1].content == "msg7"
+
+    def test_fallback_strips_orphaned_tool_calls(self):
+        """The kept tail window can contain an assistant message whose
+        tool_calls' results fell outside the window — the OpenAI API
+        rejects such history. Fallback must strip the orphans."""
+        from microagent.session.compress import _fallback
+
+        tc = ToolCall(id="c9", name="bash", arguments={"command": "ls"})
+        msgs = (
+            Message.user("start"),
+            # tool result for c9 would sit right after the assistant —
+            # i.e. OUTSIDE the 5-message tail window below.
+            Message.assistant(text="", tool_calls=(tc,)),
+            Message.user("u3"),
+            Message.user("u4"),
+            Message.user("u5"),
+            Message.user("u6"),
+        )
+        result = _fallback(msgs)
+        # No assistant message may carry tool_calls lacking a matching
+        # tool result within the kept tail.
+        answered = {m.tool_call_id for m in result if m.role == "tool"}
+        for m in result:
+            for call in m.tool_calls or ():
+                assert call.id in answered, f"orphaned tool_call {call.id} survived _fallback"
+
+    def test_fallback_drops_leading_tool_messages(self):
+        """A tail window starting with role=tool messages (assistant cut
+        away) is invalid for the API — drop them."""
+        from microagent.session.compress import _fallback
+
+        msgs = (
+            Message.user("u1"),
+            Message.user("u2"),
+            Message.tool_result(ToolResult.ok("r1"), tool_call_id="c1"),
+            Message.tool_result(ToolResult.ok("r2"), tool_call_id="c2"),
+            Message.tool_result(ToolResult.ok("r3"), tool_call_id="c3"),
+            Message.user("u6"),
+            Message.user("u7"),
+        )
+        result = _fallback(msgs)
+        kept = result[1:]  # skip placeholder
+        assert kept[0].role != "tool"
+
+
+class TestSnipNoProgress:
+    def test_snip_all_protected_returns_unchanged(self):
+        """When every tool message sits inside the head/tail protected
+        zones, snip cannot make progress — return the input unchanged
+        instead of scanning O(n²) for nothing."""
+        big = "x" * 4000
+        messages = (
+            Message.tool_result(ToolResult.ok(big), tool_call_id="c1"),
+            Message.user("u"),
+            Message.tool_result(ToolResult.ok(big), tool_call_id="c2"),
+        )
+        # keep_recent=2 + protect_first_n=1 → all 3 messages protected
+        result = snip_tool_results(
+            messages, keep_recent=2, max_tokens=1, protect_first_n=1,
+        )
+        assert result == messages

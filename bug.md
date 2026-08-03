@@ -24,12 +24,11 @@
 - **影响**：处理 steer 事件的用户代码无法从顶层导入（需 `from microagent.core.types import SteerEvent`），与其他事件类型（TextDelta/TurnComplete 等均顶层导出）不一致。
 - **修复**：加入 `__init__.py` 导入 + `__all__`。公共 API 符号 62 → 63。
 
-### 1.3 [🟡 待处理] `SQLiteMemoryProvider._insert` 无显式 commit
+### 1.3 [✅ 已修复] `SQLiteMemoryProvider._insert` 无显式 commit
 - **文件**：`src/microagent/memory/provider.py`
 - **现象**：`batch_write()` 的 `_insert()` 只执行 INSERT，无 `commit()`。数据仅在 sqlite3 连接关闭时自动提交（`close()` 触发）。
 - **影响**：**长驻服务**（长时间不 close）中，记忆写入停留在未提交事务。同一连接内可见，但跨进程/异常退出时可能丢失。
-- **验证**：单次 `batch_write → close → 新连接` 数据持久化正常（close 时提交）。
-- **建议**：在 `_insert` 或 `batch_write` 后加 `self._conn.commit()`。
+- **验证**：2026-08-03 复查源码，`_insert` 与 `batch_write` 均已带 `self._conn.commit()`（provider.py:211/241）。已修复。
 
 ---
 
@@ -92,3 +91,24 @@
 - 文件工具/bash 实测（第 6 批）
 
 验证结果：`make test` → **432 passed, 1 skipped**。
+
+---
+
+## 五、2026-08-03 修复轮（第三轮疯狂测试 → C1–C6 修复）
+
+> 该轮发现 15 项（8🔴 5🟡 2🔵），均以 FakeLLMClient 驱动真实 SessionRunner 验证。
+> 以下 6 项 🔴 已修复（每项一个 commit，全程 `pytest tests/ -q` 绿）：
+
+| # | 问题 | 修复 commit |
+|---|------|------------|
+| 2.5 | thinking deltas 混入 `content_parts`：推理文本被持久化进 assistant 消息；thinking-only + length 被误判为截断 | `e300238` |
+| 2.4 | partial tool_calls + `stop_reason=length` 走"正常执行"分支：参数 JSON 必不完整，白烧 4+ LLM 调用 | `2a92a3f` |
+| 2.1 | plan 模式只过滤广告给 LLM 的工具清单，执行层无拦截——write_file/git commit 在 plan 模式照样执行 | `d2a7547`（执行层硬拦截 + bash 只读白名单启发式） |
+| 2.3 | 硬取消（task.cancel）留孤儿 tool_call，OpenAI API 拒绝恢复会话 | `9e4ca8b` |
+| 2.2 | interrupt 非抢占：`sleep 60` 工具期间忽略中断 | `36cfa06`（watcher 取消 task group + execute_code BaseException 杀进程） |
+| 2.8 | `arguments={"_raw": ...}`（LLM JSON 损坏兜底）使工具执行抛 TypeError | `88415aa` |
+
+> 修正记录：初判 2.7「snip 无效 + 无限空转」中"无限空转/死循环"**不成立**——重读
+> `compress.py` 256-276 行，索引 i 单调递增，循环必然退出；实际行为是"全保护时静默
+> 返回原样 + O(n²) 白扫"，严重度 🔴→🟡。3.5（死循环风险）同因关闭。其余 🟡/🔵 项
+> （2.6/2.7/3.1/3.2/3.3/3.4/4.1/4.2）在后续 commit 中处理。

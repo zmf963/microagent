@@ -248,6 +248,18 @@ def snip_tool_results(
 
     result = list(messages)
 
+    # Fast path: if every tool message sits inside the protected zones,
+    # no removal is possible — the scan below would walk the whole list
+    # (recomputing protected sets per iteration, O(n²)) only to return
+    # the input unchanged. L3 (LLM summary) is the right next layer.
+    head_protected = set(range(min(protect_first_n, len(result))))
+    tail_protected = set(range(max(0, len(result) - keep_recent), len(result)))
+    protected = head_protected | tail_protected
+    if not any(
+        m.role == "tool" and idx not in protected for idx, m in enumerate(result)
+    ):
+        return messages
+
     # Pre-compute per-message token counts to avoid O(n²) re-scanning
     msg_tokens = [estimate_tokens(m.content or "") for m in result]
 
@@ -639,11 +651,26 @@ async def _llm_summarize(
 
 
 def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:
-    """Circuit breaker fallback: placeholder text."""
+    """Circuit breaker fallback: placeholder text + last 5 messages.
+
+    The raw tail window can violate OpenAI API invariants: an assistant
+    message whose tool_calls' results were cut away (orphaned tool_call),
+    or leading role=tool messages whose assistant was cut away. Both are
+    rejected on the next turn — clean them here.
+    """
     total = count_tokens(messages)
     placeholder = Message.user(
         f"[上下文压缩暂停：{len(messages)} 条消息，约 {total} tokens。"
         f"请基于最近的对话继续工作。如需早期上下文，请重新描述需求。]"
     )
-    # Keep last 5 messages for continuity
-    return (placeholder,) + messages[-5:]
+    tail = list(messages[-5:])
+    # Leading tool messages whose assistant is outside the window
+    while tail and tail[0].role == "tool":
+        tail.pop(0)
+    # Assistant tool_calls with no matching tool result in the window
+    answered = {m.tool_call_id for m in tail if m.role == "tool"}
+    for m in tail:
+        for tc in m.tool_calls or ():
+            if tc.id not in answered:
+                _fix_orphaned_tool_call(tail, tc.id)
+    return (placeholder,) + tuple(tail)
