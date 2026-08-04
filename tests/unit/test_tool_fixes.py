@@ -162,6 +162,20 @@ async def test_grep_redos_pattern_times_out_not_hangs(tmp_path):
     # No match on 'a'*30+'!' for (a+)+b → (no matches)
     assert not result.is_error
 
+@pytest.mark.asyncio
+async def test_grep_regex_timeout_is_disclosed(tmp_path):
+    """Lines skipped due to regex timeout must be disclosed — a silent
+    '(no matches)' is a false negative the LLM will trust."""
+    import platform
+    if platform.system() == "Windows":
+        pytest.skip("SIGALRM is Unix-only")
+
+    f = tmp_path / "f.txt"
+    f.write_text("a" * 30 + "!")
+    result = await _fn(grep, pattern=r"(a+)+b", path=str(f))
+    assert not result.is_error
+    assert "timeout" in result.content.lower(), result.content
+
 
 def test_grep_search_with_alarm_falls_back_off_main_thread():
     """Regression: signal.signal() raises ValueError outside the main

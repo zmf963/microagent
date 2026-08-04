@@ -32,7 +32,9 @@ class _RegexTimeout(Exception):
 def _search_with_alarm(regex, line: str, seconds: int = 5):
     """Search with a SIGALRM deadline (Unix, main thread only).
 
-    Returns the Match or None (None also means "timed out / not available").
+    Returns the Match or None. Raises _RegexTimeout when the alarm fires —
+    callers must count timeouts separately so skipped lines are disclosed
+    in the result (a silent "no match" would be a false negative).
 
     Limitations (inherent to SIGALRM, documented here):
       - Main thread only: signal.signal() raises ValueError when asyncio
@@ -51,8 +53,6 @@ def _search_with_alarm(regex, line: str, seconds: int = 5):
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(_RegexTimeout()))
         signal.alarm(seconds)
         return regex.search(line)
-    except _RegexTimeout:
-        return None
     except ValueError:
         # signal.signal() raises ValueError outside the main thread.
         # Fall back to an unprotected search rather than crashing grep.
@@ -63,6 +63,13 @@ def _search_with_alarm(regex, line: str, seconds: int = 5):
             signal.signal(signal.SIGALRM, old_handler)
         except (ValueError, OSError):
             pass
+
+
+def _finish(lines: list[str], timed_out: int) -> str:
+    """Assemble the result, disclosing regex-timeout skips if any."""
+    if timed_out:
+        lines = lines + [f"[{timed_out} line(s) skipped: regex timeout]"]
+    return "\n".join(lines)
 
 
 @tool(
@@ -84,6 +91,7 @@ async def grep(
         return ToolResult.error(f"path not found: {path}")
 
     matches: list[str] = []
+    timed_out = 0
 
     if root.is_file():
         files = [root]
@@ -109,15 +117,19 @@ async def grep(
             continue
 
         for i, line in enumerate(lines, 1):
-            hit = _search_with_alarm(regex, line)
+            try:
+                hit = _search_with_alarm(regex, line)
+            except _RegexTimeout:
+                timed_out += 1
+                continue
             if hit:
                 rel = str(fpath)
                 matches.append(f"{rel}:{i}: {line.strip()}")
                 if len(matches) >= max_results:
                     matches.append(f"[truncated at {max_results} results]")
-                    return ToolResult.ok("\n".join(matches))
+                    return ToolResult.ok(_finish(matches, timed_out))
 
     if not matches:
-        return ToolResult.ok("(no matches)")
+        return ToolResult.ok(_finish(["(no matches)"], timed_out))
 
-    return ToolResult.ok("\n".join(matches))
+    return ToolResult.ok(_finish(matches, timed_out))
