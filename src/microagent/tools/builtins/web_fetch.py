@@ -2,7 +2,9 @@
 
 SSRF protection: blocks literal internal IPs, internal hostnames,
 and resolves hostnames to IPs before connecting to prevent DNS rebinding.
-Redirects are NOT followed — each redirect target must pass the same checks.
+Redirects are NOT followed: a 3xx response is returned as-is (usually an
+empty body), so a redirect can never smuggle the agent to an unchecked
+target.
 """
 
 from __future__ import annotations

@@ -183,14 +183,16 @@
 
 ### 🔴 严重
 
-**7.1 cron 输出落盘存在路径穿越 — job.name 未消毒**
+**7.1 cron 输出落盘存在路径穿越 — job.name 未消毒** ✅ **已修复 (4d01e96)**
+- **修复**:`_save_cron_output` 消毒为单一路径分量；`add_job` 拒绝含路径分隔符的名字。测试 3 个。
 - **文件**：`src/microagent/cron/scheduler.py:85`(`_save_cron_output`)
 - **现象**:`out_dir = base_dir / "output" / job_id`,job.name 含 `../../escaped` 时
   直接写到 base_dir 之外（探针 G-1 验证：文件落到了 base 外）。
 - **影响**：任意路径写入（内容部分可控——prompt/response 包在 markdown 模板里，但路径完全可控）。
   攻击面：能注册 cron job 的调用方（gateway 配置/工具）。
 
-**7.2 web_fetch SSRF 未封 CGNAT 100.64.0.0/10(Tailscale 网段）**
+**7.2 web_fetch SSRF 未封 CGNAT 100.64.0.0/10(Tailscale 网段）** ✅ **已修复 (00f6a33)**
+- **修复**:`_BLOCKED_RANGES` 增加 100.64.0.0/10 + 198.18.0.0/15。测试 3 个。
 - **文件**：`src/microagent/tools/builtins/web_fetch.py`(`_BLOCKED_RANGES`)
 - **现象**：探针 E-1:`100.64.1.1` / `100.115.92.2` 均不拦截。Tailscale tailnet 内网服务
   （恰好常用 100.64/10）完全可达；`198.18.0.0/15`(benchmark，部分运营商/设备用）同样未封。
@@ -199,20 +201,23 @@
 
 ### 🟡 应修复
 
-**7.3 grep 正则超时静默返回"无匹配"— 假阴性无披露**
+**7.3 grep 正则超时静默返回"无匹配"— 假阴性无披露** ✅ **已修复 (fbb2701)**
+- **修复**:`_search_with_alarm` 超时 raise,grep 计数并在结果尾部追加 `[N line(s) skipped: regex timeout]`。测试 1 个。
 - **文件**：`src/microagent/tools/builtins/grep.py`(`_search_with_alarm` 超时返回 None)
 - **现象**：灾难性回溯正则（如 `(a+)+$`）在某行触发 5s SIGALRM 超时后，该行被当作
   "不匹配"静默跳过；全部行超时时 LLM 看到 `(no matches)` —— 但实际可能有匹配。
 - **影响**：正确性问题：LLM 依据假阴性下结论。应统计超时行数并在结果尾部追加警告。
 
-**7.4 cron 非法 schedule 在运行中的调度器上炸出异常 + 状态不一致**
+**7.4 cron 非法 schedule 在运行中的调度器上炸出异常 + 状态不一致** ✅ **已修复 (ca0534a)**
+- **修复**:`_validate_schedule` 在 add_job 注册前校验：坏 cron/非整数 interval/interval<=0 → ValueError 无残留。测试 2 个。
 - **文件**：`src/microagent/cron/scheduler.py:133`(`add_job`)/`180`(`_schedule_job`)
 - **现象**：探针 G-2:`add_job("not-a-cron")` 在调度器已启动时 `CronTrigger.from_crontab`
   抛 ValueError 逃逸给调用方，**且 job 已先写入 self.jobs**（注册了但未调度，状态不一致）;
   G-3:`interval:-5` → APScheduler 接受负 interval(`-1 day, 23:59:55`),`interval:0` 被钳到 1s,
   均无校验；`interval:abc` → int() ValueError 逃逸。
 
-**7.5 同一 session_id 并发 run_turn → 历史交错，resume 出"从未发生的对话"**
+**7.5 同一 session_id 并发 run_turn → 历史交错，resume 出"从未发生的对话"** ✅ **已修复 (9d83601, 方案 A)**
+- **修复**:runner 内 `_turn_lock` 串行化 run_turn(wrapper 委托 `_run_turn_inner`);interrupt 无需锁不死锁；跨实例场景文档注明由嵌入方负责。测试 2 个。
 - **文件**：`src/microagent/session/runner.py`（无 per-session 并发守卫）
 - **现象**：探针 H-1：两个 runner 同 session 并发，双方各自加载空历史 →
   落库顺序 user-A, user-B, assistant-A, assistant-B。每个 turn 的 LLM 上下文都看不到对方，
@@ -222,7 +227,7 @@
 
 ### 🔵 可选
 
-**7.6 web_fetch 文档与行为不符（redirect)**：docstring 称"每个 redirect 目标都要过同样检查"，
+**7.6 web_fetch 文档与行为不符（redirect)** ✅ **已修正文档**：docstring 称"每个 redirect 目标都要过同样检查"，
 实际 `follow_redirects=False` 后 3xx 响应当普通内容返回（空 body)，并无 redirect 目标检查。
 **glob/grep `../` 越界**：探针 F-2/F-3 确认可列出/搜索工作目录外的文件 —— 由 permission 层管控，
 属设计行为，仅备注。
