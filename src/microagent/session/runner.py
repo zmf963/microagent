@@ -95,6 +95,10 @@ class SessionRunner:
         self._output_store = None  # lazy init
         self._active_subagents: list[SessionRunner] = []
         self._subagents_lock = asyncio.Lock()
+        # Serializes run_turn calls on THIS runner (see run_turn docstring).
+        # asyncio.Lock is held across the whole async generator — interrupt()
+        # only sets a flag and never needs the lock, so no deadlock.
+        self._turn_lock = asyncio.Lock()
 
         # Per-session state (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -337,7 +341,24 @@ class SessionRunner:
         self,
         messages: list[Message],
     ) -> AsyncIterator[Event]:
-        """Run a conversation turn with streaming tool output."""
+        """Run a conversation turn with streaming tool output.
+
+        Serialized per runner: two concurrent run_turn calls previously
+        interleaved their store writes (user-A,user-B,assistant-A,assistant-B),
+        producing a persisted conversation that never actually happened on
+        resume. The turn lock makes them strictly sequential.
+        Cross-INSTANCE sharing of one session_id is NOT guarded — embedders
+        must not point two runners at the same session concurrently.
+        """
+        async with self._turn_lock:
+            async for event in self._run_turn_inner(messages):
+                yield event
+
+    async def _run_turn_inner(
+        self,
+        messages: list[Message],
+    ) -> AsyncIterator[Event]:
+        """Turn implementation — must only be entered under _turn_lock."""
 
         if self.store is not None and messages:
             last = messages[-1]

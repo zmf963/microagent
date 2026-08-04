@@ -33,7 +33,8 @@ async def test_anti_jitter_reset_is_per_turn_not_per_iteration():
     skip threshold, and every iteration retries a provably-ineffective
     compression (burning LLM tokens)."""
     import inspect
-    src = inspect.getsource(SessionRunner.run_turn)
+    # run_turn is a thin lock wrapper; the turn body lives in _run_turn_inner.
+    src = inspect.getsource(SessionRunner._run_turn_inner)
     # The reset must appear BEFORE the while loop, not inside it.
     while_idx = src.index("while not self.budget.exhausted")
     reset_idx = src.index("reset_for_new_turn")

@@ -192,3 +192,55 @@ class TestLLMStreamErrors:
         result = await agent.arun([Message.user("hi")])
         assert result.startswith("[error:"), f"got {result!r}"
         await agent.close()
+
+class TestConcurrentTurnsSameRunner:
+    async def test_concurrent_run_turn_serialized(self, tmp_path):
+        """Two concurrent run_turn calls on the SAME runner previously
+        interleaved: both loaded empty history, both appended their user
+        message first → store order user-A,user-B,assistant-A,assistant-B.
+        On resume the model sees a conversation that never happened.
+        The per-runner turn lock must serialize them."""
+        import asyncio
+
+        from microagent.core.store import SQLiteStore
+
+        store = SQLiteStore(tmp_path / "s.db")
+        llm = FakeLLMClient([text_response("reply-A"), text_response("reply-B")])
+        runner = SessionRunner(
+            llm=llm, registry=ToolRegistry([]), budget=Budget.root(),
+            store=store, session_id="shared",
+        )
+
+        async def run(tag):
+            return [type(e).__name__ async for e in runner.run_turn([Message.user(f"q-{tag}")])]
+
+        res = await asyncio.gather(run("A"), run("B"))
+        assert all("TurnComplete" in r for r in res), res
+
+        hist = await store.load_history("shared")
+        roles_contents = [(m.role, m.content) for m in hist]
+        assert roles_contents == [
+            ("user", "q-A"),
+            ("assistant", "reply-A"),
+            ("user", "q-B"),
+            ("assistant", "reply-B"),
+        ], roles_contents
+        store.close()
+
+    async def test_turn_lock_does_not_deadlock_interrupt(self, tmp_path):
+        """interrupt() is called from outside the turn and must not need
+        the turn lock — a second turn queued behind the first still runs."""
+        import asyncio
+
+        from microagent.core.store import SQLiteStore
+
+        store = SQLiteStore(tmp_path / "s2.db")
+        llm = FakeLLMClient([text_response("r1"), text_response("r2")])
+        runner = SessionRunner(
+            llm=llm, registry=ToolRegistry([]), budget=Budget.root(),
+            store=store, session_id="s",
+        )
+        r1 = [type(e).__name__ async for e in runner.run_turn([Message.user("one")])]
+        r2 = [type(e).__name__ async for e in runner.run_turn([Message.user("two")])]
+        assert "TurnComplete" in r1 and "TurnComplete" in r2
+        store.close()
