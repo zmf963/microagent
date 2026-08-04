@@ -15,6 +15,7 @@ Requires: pip install playwright && playwright install chromium
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated
@@ -33,6 +34,29 @@ if TYPE_CHECKING:
 _browser: Browser | None = None
 _playwright: Playwright | None = None
 _lock = anyio.Lock()
+
+
+def _check_navigate_url(url: str) -> str | None:
+    """Pre-launch URL validation. Returns an error string or None.
+
+    - scheme whitelist: http/https only. file:// leaks arbitrary local
+      files through browser_snapshot (bypassing read_file's permission
+      layer); javascript:/data: are script-injection vectors.
+    - SSRF: same blocklist as web_fetch (loopback, RFC 1918, CGNAT,
+      link-local, .local hostnames) — the browser must not become a
+      backdoor around web_fetch's protections.
+    """
+    from urllib.parse import urlparse
+
+    from .web_fetch import _resolve_and_check
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"unsupported URL scheme: {parsed.scheme!r}. Only http/https allowed."
+    host = parsed.hostname
+    if not host:
+        return f"invalid URL: no hostname found in {url!r}"
+    return _resolve_and_check(host)
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +151,10 @@ async def browser_navigate(
 ) -> ToolResult:
     if not url.strip():
         return ToolResult.error("url is required")
+
+    url_error = await asyncio.to_thread(_check_navigate_url, url)
+    if url_error is not None:
+        return ToolResult.error(url_error)
 
     try:
         await _ensure_browser()
