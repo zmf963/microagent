@@ -244,3 +244,18 @@ class TestConcurrentTurnsSameRunner:
         r2 = [type(e).__name__ async for e in runner.run_turn([Message.user("two")])]
         assert "TurnComplete" in r1 and "TurnComplete" in r2
         store.close()
+
+class TestBudgetExhaustedMessage:
+    async def test_no_duplicate_prefix(self):
+        """BudgetExceeded's message already starts with 'budget exhausted:' —
+        wrapping it in f'budget exhausted: {e}' produced a doubled prefix."""
+        from microagent.session.budget import BudgetExceeded
+        llm = FakeLLMClient([text_response("x")])
+        runner = SessionRunner(
+            llm=llm, registry=ToolRegistry([]),
+            budget=Budget.root(max_iterations=0),
+        )
+        reasons = [e.reason async for e in runner.run_turn([Message.user("hi")])
+                   if isinstance(e, TurnFailed)]
+        assert reasons
+        assert "budget exhausted: budget exhausted" not in reasons[0]

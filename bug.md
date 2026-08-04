@@ -231,3 +231,40 @@
 实际 `follow_redirects=False` 后 3xx 响应当普通内容返回（空 body)，并无 redirect 目标检查。
 **glob/grep `../` 越界**：探针 F-2/F-3 确认可列出/搜索工作目录外的文件 —— 由 permission 层管控，
 属设计行为，仅备注。
+
+---
+
+## 八、第六轮疯狂测试（Round 6，探针 I–K）— 2026-08-04
+
+> 方法：探针 I（process 工具）、J（task/subagent）、K（browser 工具）。
+> 基线：1061 passed, 11 skipped。
+
+### 🔴 严重
+
+**8.1 `process poll` 对持续输出进程永不返回 — readline 循环无界** ✅ **已修复 (d94520b)**
+- **修复**:poll 排空上限 200 行/次 + '(more output pending)' 提示。顺带修复 kill 时 `p.wait()` 对 pipe 大量未读输出挂死（限 5s)。
+- **文件**：`src/microagent/tools/builtins/process.py`(poll 分支 `while True` readline 循环）
+- **现象**：探针 I-1:`yes spamline` 启动后 poll 挂死 >5s 不返回（每次 0.1s 内必有新行 →
+  `while True` 永不 break)，整个工具调用无限期挂起，agent 回合卡死。
+- **影响**：任何高频输出进程（yes、tail -f、编译日志）让 poll 变成永久阻塞 → 回合挂死。
+
+**8.2 `process` 输出缓冲无界 — `yes` 数秒即 GB 级内存** ✅ **已修复 (d94520b)**
+- **修复**:2000 行环形缓冲 + 单行 2000 字符截断 + dropped 计数，log 披露 `[N earlier line(s) dropped]`。测试 3 个。
+- **文件**：`src/microagent/tools/builtins/process.py`(`reg.outputs[sid]` list 无上限）
+- **现象**：探针 I-1 中 5s 的 `yes` 输出全部 append 进内存 list（数百万行），进程开始 swap;
+  `log` 动作还会把**全部**缓冲塞进 ToolResult。
+- **影响**：LLM 启动一个刷屏进程即可 OOM 宿主。需要行数/字节上限 + 截断标记。
+
+**8.3 `browser_navigate` 无 URL 限制 — file:// 任意读本地文件 + 无 SSRF 防护** ✅ **已修复 (506ed09)**
+- **修复**:`_check_navigate_url` 启动前校验：http/https scheme 白名单 + 复用 web_fetch `_resolve_and_check` SSRF 封禁表。测试 3 个。
+- **文件**：`src/microagent/tools/builtins/browser.py`(browser_navigate)
+- **现象**：探针 K-1:`file:///etc/hosts` 导航成功，`browser_snapshot(full=True)` 完整读出
+  文件内容（绕过 read_file 的权限层）;K-2:`http://192.168.1.1/` 导航成功，无任何
+  SSRF 检查（对比 web_fetch 有完整封禁表）。`javascript:` 被 Playwright 自身拦截（K-3 免修）。
+- **影响**：本地文件泄漏 + 内网探测。browser 工具通常需显式启用，但启用后无任何边界。
+
+### 🔵 可选
+
+**8.4 subagent 预算耗尽错误信息重复** ✅ **已修复**(`"budget exhausted: budget exhausted:"`,cosmetic);
+**`mcp_connect raw:<command>`** 可执行任意命令 —— 与 bash 工具同级权限，属设计行为，
+建议文档注明；**`wait` + 未关闭 stdin 的 `communicate()` 交互**未验证（被 8.1 挂死掩盖，修复后复验）。

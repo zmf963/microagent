@@ -389,7 +389,7 @@ class SessionRunner:
             try:
                 await self.budget.consume(iterations=1)
             except BudgetExceeded as e:
-                yield TurnFailed(f"budget exhausted: {e}")
+                yield TurnFailed(str(e))
                 return
 
             # System prompt is frozen (ADR-0005) — skills/memory/context
@@ -617,7 +617,7 @@ class SessionRunner:
                                         try:
                                             await self.budget.consume_usage(usage)
                                         except BudgetExceeded as e:
-                                            yield TurnFailed(f"budget exhausted: {e}")
+                                            yield TurnFailed(str(e))
                                             return
                                     # Force compaction to reduce context
                                     from .compress import compact_conversation
@@ -662,7 +662,7 @@ class SessionRunner:
                                     try:
                                         await self.budget.consume_usage(usage)
                                     except BudgetExceeded as e:
-                                        yield TurnFailed(f"budget exhausted: {e}")
+                                        yield TurnFailed(str(e))
                                         return
                                 yield TurnFailed("LLM response truncated (max tokens)")
                                 return
@@ -703,7 +703,7 @@ class SessionRunner:
                 try:
                     await self.budget.consume_usage(usage)
                 except BudgetExceeded as e:
-                    yield TurnFailed(f"budget exhausted: {e}")
+                    yield TurnFailed(str(e))
                     return
 
             if not tool_calls:
