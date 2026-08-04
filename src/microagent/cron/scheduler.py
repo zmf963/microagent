@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,12 +78,27 @@ def _release_lock(fd) -> None:
 # ---------------------------------------------------------------------------
 
 
+_SAFE_JOB_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_job_name(name: str) -> str:
+    """Reduce a job name to a safe single path component.
+
+    Job names flow into the output directory path unsanitized — a name
+    like '../../escaped' would otherwise write cron output anywhere on
+    disk. Slashes and other specials become '_'; leading dots/underscores
+    are stripped so the result can never be '.'/'..' or a hidden dir.
+    """
+    safe = _SAFE_JOB_NAME.sub("_", name).strip("._")
+    return safe or "unnamed"
+
+
 def _save_cron_output(base_dir: Path, job_id: str, prompt: str, response: str) -> str:
     """Save cron job output to disk.
 
     Returns the file path. Format: {base_dir}/{job_id}/{timestamp}.md
     """
-    out_dir = base_dir / "output" / job_id
+    out_dir = base_dir / "output" / _sanitize_job_name(job_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = int(time.time())
@@ -132,6 +148,11 @@ class CronScheduler:
 
     def add_job(self, job: CronJob) -> None:
         """Add a job. If scheduler is running, schedule immediately."""
+        # Defense in depth: the name becomes a directory under
+        # ~/.microagent/cron/output/ — reject path separators outright
+        # (output writing also sanitizes, but failing fast is friendlier).
+        if "/" in job.name or "\\" in job.name or job.name in (".", "..", ""):
+            raise ValueError(f"unsafe cron job name: {job.name!r}")
         self.jobs[job.name] = job
         if self._started and self._scheduler is not None and job.enabled:
             self._schedule_job(job)

@@ -1,6 +1,7 @@
 """Tests for CronScheduler — scheduled agent prompts."""
 
 import asyncio
+from pathlib import Path
 
 from microagent import Agent, LLMConfig
 from microagent.cron.scheduler import CronJob, CronScheduler
@@ -142,6 +143,34 @@ class TestSaveCronOutput:
         assert "# Cron Job: job1" in content
         assert "my prompt" in content
         assert "my response" in content
+
+    def test_job_name_path_traversal_contained(self, tmp_path):
+        """A job name with path separators must not escape base_dir."""
+        from microagent.cron.scheduler import _save_cron_output
+        path = _save_cron_output(tmp_path, "../../escaped", "p", "r")
+        resolved = Path(path).resolve()
+        assert str(resolved).startswith(str(tmp_path.resolve())), path
+        import os
+        assert os.path.exists(path)
+        # Nothing written outside
+        assert not (tmp_path.parent / "escaped").exists()
+
+    def test_job_name_absolute_path_contained(self, tmp_path):
+        from microagent.cron.scheduler import _save_cron_output
+        path = _save_cron_output(tmp_path, "/etc/cron-evil", "p", "r")
+        resolved = Path(path).resolve()
+        assert str(resolved).startswith(str(tmp_path.resolve())), path
+
+    def test_add_job_rejects_unsafe_name(self):
+        """Defense in depth: add_job rejects names with path separators."""
+        from microagent.cron.scheduler import CronScheduler, CronJob
+        class FakeAgent:
+            async def arun(self, msgs): return "ok"
+        sched = CronScheduler(agent=FakeAgent(), lock_path=str("/tmp/x.lock"))
+        import pytest
+        with pytest.raises(ValueError, match="unsafe"):
+            sched.add_job(CronJob(name="../evil", schedule="* * * * *", prompt="p"))
+        assert "../evil" not in sched.jobs
 
 
 class TestExecuteJob:
