@@ -173,3 +173,56 @@
 **6.7 `Budget.spawn()` 父耗尽时产出 max_iterations=0 子预算** ✅ **已文档化 (3f97e2d)**（budget.py）：
 `min(max(1, rem//3), rem)` 在 rem=0 时为 0 → 子代理立即 BudgetExceeded（死预算）。
 父预算耗尽时这是合理的"没得给"，但值得文档标注。
+
+---
+
+## 七、第四轮疯狂测试（Round 5,探针 E–H)— 2026-08-04
+
+> 方法：探针 E(web_fetch SSRF)、F(grep SIGALRM + glob/grep 越界）、G(cron 调度器）、H（并发 run_turn 同 session)。
+> 基线：1050 passed, 11 skipped。
+
+### 🔴 严重
+
+**7.1 cron 输出落盘存在路径穿越 — job.name 未消毒**
+- **文件**：`src/microagent/cron/scheduler.py:85`(`_save_cron_output`)
+- **现象**:`out_dir = base_dir / "output" / job_id`,job.name 含 `../../escaped` 时
+  直接写到 base_dir 之外（探针 G-1 验证：文件落到了 base 外）。
+- **影响**：任意路径写入（内容部分可控——prompt/response 包在 markdown 模板里，但路径完全可控）。
+  攻击面：能注册 cron job 的调用方（gateway 配置/工具）。
+
+**7.2 web_fetch SSRF 未封 CGNAT 100.64.0.0/10(Tailscale 网段）**
+- **文件**：`src/microagent/tools/builtins/web_fetch.py`(`_BLOCKED_RANGES`)
+- **现象**：探针 E-1:`100.64.1.1` / `100.115.92.2` 均不拦截。Tailscale tailnet 内网服务
+  （恰好常用 100.64/10）完全可达；`198.18.0.0/15`(benchmark，部分运营商/设备用）同样未封。
+- **影响**：LLM 被诱导 fetch tailnet 内网服务（路由器、NAS、内网 API)→ SSRF。
+  对比：`.local` 主机名、`169.254.169.254`(云 metadata)、十进制/十六进制 IP 变形都已正确封堵。
+
+### 🟡 应修复
+
+**7.3 grep 正则超时静默返回"无匹配"— 假阴性无披露**
+- **文件**：`src/microagent/tools/builtins/grep.py`(`_search_with_alarm` 超时返回 None)
+- **现象**：灾难性回溯正则（如 `(a+)+$`）在某行触发 5s SIGALRM 超时后，该行被当作
+  "不匹配"静默跳过；全部行超时时 LLM 看到 `(no matches)` —— 但实际可能有匹配。
+- **影响**：正确性问题：LLM 依据假阴性下结论。应统计超时行数并在结果尾部追加警告。
+
+**7.4 cron 非法 schedule 在运行中的调度器上炸出异常 + 状态不一致**
+- **文件**：`src/microagent/cron/scheduler.py:133`(`add_job`)/`180`(`_schedule_job`)
+- **现象**：探针 G-2:`add_job("not-a-cron")` 在调度器已启动时 `CronTrigger.from_crontab`
+  抛 ValueError 逃逸给调用方，**且 job 已先写入 self.jobs**（注册了但未调度，状态不一致）;
+  G-3:`interval:-5` → APScheduler 接受负 interval(`-1 day, 23:59:55`),`interval:0` 被钳到 1s,
+  均无校验；`interval:abc` → int() ValueError 逃逸。
+
+**7.5 同一 session_id 并发 run_turn → 历史交错，resume 出"从未发生的对话"**
+- **文件**：`src/microagent/session/runner.py`（无 per-session 并发守卫）
+- **现象**：探针 H-1：两个 runner 同 session 并发，双方各自加载空历史 →
+  落库顺序 user-A, user-B, assistant-A, assistant-B。每个 turn 的 LLM 上下文都看不到对方，
+  但 store 合并了双方 → resume 时模型看到一段它从未参与的组合对话。
+- **影响**：嵌入方（gateway 多实例/多 agent 共话）误用时数据完整性受损。
+  需要 per-session 锁或文档明确禁止。
+
+### 🔵 可选
+
+**7.6 web_fetch 文档与行为不符（redirect)**：docstring 称"每个 redirect 目标都要过同样检查"，
+实际 `follow_redirects=False` 后 3xx 响应当普通内容返回（空 body)，并无 redirect 目标检查。
+**glob/grep `../` 越界**：探针 F-2/F-3 确认可列出/搜索工作目录外的文件 —— 由 permission 层管控，
+属设计行为，仅备注。

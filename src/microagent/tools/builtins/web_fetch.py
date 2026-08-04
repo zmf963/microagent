@@ -26,6 +26,11 @@ _BLOCKED_RANGES = [
     ipaddress.IPv4Network("192.168.0.0/16"),
     ipaddress.IPv4Network("169.254.0.0/16"),
     ipaddress.IPv4Network("0.0.0.0/8"),
+    # CGNAT (RFC 6598) — used by Tailscale tailnets and some ISPs;
+    # services here are internal even though the range is not RFC 1918.
+    ipaddress.IPv4Network("100.64.0.0/10"),
+    # Benchmarking (RFC 2544) — used internally by some devices/ISPs.
+    ipaddress.IPv4Network("198.18.0.0/15"),
     ipaddress.IPv6Network("::1/128"),
     ipaddress.IPv6Network("fc00::/7"),
     ipaddress.IPv6Network("fe80::/10"),

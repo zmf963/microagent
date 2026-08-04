@@ -53,3 +53,22 @@ class TestIPv4MappedIPv6Bypass:
 
     def test_invalid_ip_not_blocked(self):
         assert _is_blocked_ip("not-an-ip") is False
+
+class TestCGNATAndReservedRanges:
+    def test_blocks_tailscale_cgnat(self):
+        """100.64.0.0/10 (CGNAT, used by Tailscale tailnets) is internal."""
+        from microagent.tools.builtins.web_fetch import _is_blocked_ip
+        for ip in ("100.64.0.1", "100.100.100.100", "100.127.255.254"):
+            assert _is_blocked_ip(ip) is True, ip
+
+    def test_blocks_benchmark_range(self):
+        """198.18.0.0/15 — benchmarking, used by some ISPs/devices internally."""
+        from microagent.tools.builtins.web_fetch import _is_blocked_ip
+        for ip in ("198.18.0.1", "198.19.255.254"):
+            assert _is_blocked_ip(ip) is True, ip
+
+    def test_still_allows_public_nearby(self):
+        from microagent.tools.builtins.web_fetch import _is_blocked_ip
+        assert _is_blocked_ip("100.63.255.255") is False
+        assert _is_blocked_ip("100.128.0.1") is False
+        assert _is_blocked_ip("198.20.0.1") is False
