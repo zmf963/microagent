@@ -259,3 +259,53 @@ class TestProcessWaitWriteCleanup:
         r = await process.fn(action="start", command="")
         assert r.is_error
         assert "command is required" in r.content
+
+class TestProcessOutputBounds:
+    async def test_poll_returns_on_continuous_output(self, proc_tool):
+        """A continuously-outputting process previously hung poll forever:
+        every readline succeeded within 0.1s so the drain loop never broke.
+        Poll must return after a bounded drain."""
+        from microagent.tools.builtins.process import process
+        sid = (await process.fn(action="start", command="yes boundedline")).content.strip()
+        try:
+            async with asyncio.timeout(10):
+                r = await process.fn(action="poll", session_id=sid)
+            assert not r.is_error
+            assert "boundedline" in r.content
+        finally:
+            await process.fn(action="kill", session_id=sid)
+
+    async def test_output_buffer_capped(self, proc_tool):
+        """The per-process output buffer must be a bounded ring — an
+        unbounded list lets a spammer (yes) OOM the host in seconds."""
+        from microagent.tools.builtins.process import process, _get_registry, _MAX_BUFFERED_LINES
+        sid = (await process.fn(action="start", command="yes cappedline")).content.strip()
+        try:
+            for _ in range(3):
+                async with asyncio.timeout(10):
+                    await process.fn(action="poll", session_id=sid)
+                await asyncio.sleep(0.2)
+            reg = _get_registry()
+            assert len(reg.outputs[sid]) <= _MAX_BUFFERED_LINES
+        finally:
+            await process.fn(action="kill", session_id=sid)
+
+    async def test_log_discloses_dropped_lines(self, proc_tool):
+        """When the ring buffer drops old lines, log must say so."""
+        from microagent.tools.builtins.process import process, _get_registry, _MAX_BUFFERED_LINES
+        sid = (await process.fn(action="start", command="yes dropline")).content.strip()
+        try:
+            async with asyncio.timeout(10):
+                await process.fn(action="poll", session_id=sid)
+            reg = _get_registry()
+            # Force overflow by polling more
+            for _ in range(3):
+                async with asyncio.timeout(10):
+                    await process.fn(action="poll", session_id=sid)
+                await asyncio.sleep(0.2)
+            r = await process.fn(action="log", session_id=sid)
+            assert not r.is_error
+            if len(reg.outputs[sid]) >= _MAX_BUFFERED_LINES:
+                assert "dropped" in r.content.lower() or "earlier output" in r.content.lower()
+        finally:
+            await process.fn(action="kill", session_id=sid)
