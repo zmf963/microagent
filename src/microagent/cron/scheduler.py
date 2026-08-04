@@ -81,6 +81,31 @@ def _release_lock(fd) -> None:
 _SAFE_JOB_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
+def _validate_schedule(schedule: str) -> None:
+    """Fail fast on malformed schedules (raises ValueError).
+
+    - cron: must parse via CronTrigger.from_crontab
+    - interval:N: N must be a positive integer (APScheduler silently
+      clamps 0→1s and accepts negative intervals — both are nonsense
+      for a cron job)
+    """
+    if schedule.startswith("interval:"):
+        raw = schedule.split(":", 1)[1]
+        try:
+            seconds = int(raw)
+        except ValueError:
+            raise ValueError(f"invalid schedule {schedule!r}: interval must be an integer") from None
+        if seconds <= 0:
+            raise ValueError(f"invalid schedule {schedule!r}: interval must be > 0 seconds")
+        return
+    from apscheduler.triggers.cron import CronTrigger
+
+    try:
+        CronTrigger.from_crontab(schedule)
+    except (ValueError, KeyError) as e:
+        raise ValueError(f"invalid schedule {schedule!r}: {e}") from None
+
+
 def _sanitize_job_name(name: str) -> str:
     """Reduce a job name to a safe single path component.
 
@@ -153,6 +178,10 @@ class CronScheduler:
         # (output writing also sanitizes, but failing fast is friendlier).
         if "/" in job.name or "\\" in job.name or job.name in (".", "..", ""):
             raise ValueError(f"unsafe cron job name: {job.name!r}")
+        # Validate the schedule BEFORE registering — previously a malformed
+        # expression on a running scheduler raised from _schedule_job AFTER
+        # the job had landed in self.jobs (registered but never scheduled).
+        _validate_schedule(job.schedule)
         self.jobs[job.name] = job
         if self._started and self._scheduler is not None and job.enabled:
             self._schedule_job(job)

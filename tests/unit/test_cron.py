@@ -59,6 +59,31 @@ class TestCronScheduler:
         scheduler.add_job(job)
         assert len(scheduler.jobs) == 1
 
+    async def test_add_job_rejects_bad_schedule_no_residue(self):
+        """Malformed schedules must be rejected BEFORE the job lands in
+        self.jobs — previously a bad cron expr on a running scheduler
+        escaped as ValueError AND left the job registered-but-unscheduled."""
+        import pytest
+        agent = Agent.from_config(
+            LLMConfig(base_url="http://localhost/v1", api_key="test", model="test")
+        )
+        scheduler = CronScheduler(agent=agent)
+        for bad in ("not-a-cron", "interval:abc", "interval:0", "interval:-5", ""):
+            with pytest.raises(ValueError, match="schedule"):
+                scheduler.add_job(CronJob(name=f"j-{bad}", schedule=bad, prompt="p"))
+        assert len(scheduler.jobs) == 0
+        await scheduler.stop()
+
+    async def test_add_job_accepts_valid_schedules(self):
+        agent = Agent.from_config(
+            LLMConfig(base_url="http://localhost/v1", api_key="test", model="test")
+        )
+        scheduler = CronScheduler(agent=agent)
+        scheduler.add_job(CronJob(name="c", schedule="0 9 * * 1-5", prompt="p"))
+        scheduler.add_job(CronJob(name="i", schedule="interval:60", prompt="p"))
+        assert len(scheduler.jobs) == 2
+        await scheduler.stop()
+
     async def test_remove_job(self):
         agent = Agent.from_config(
             LLMConfig(
