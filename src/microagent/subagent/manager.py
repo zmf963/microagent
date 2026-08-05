@@ -150,8 +150,11 @@ class SubagentManager:
             async with parent_runner._subagents_lock:
                 if child_runner in parent_runner._active_subagents:
                     parent_runner._active_subagents.remove(child_runner)
+            # child_runner.close() does NOT close the LLM — ownership
+            # tracking is explicit below. Only close the LLM if this
+            # subagent created it (forked_llm=True); the parent's shared
+            # client must stay alive for the parent's next turn.
             await child_runner.close()
-            # Close forked LLM client (has its own AsyncOpenAI connection pool)
             if forked_llm and hasattr(llm, "close"):
                 try:
                     await llm.close()
