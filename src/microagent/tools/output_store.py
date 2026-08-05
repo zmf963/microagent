@@ -51,6 +51,26 @@ class ToolOutputStore:
         self.preview_chars = preview_chars
         self.retention_days = retention_days
 
+    async def process_async(
+        self,
+        tool_call_id: str,
+        content: str,
+        tool_name: str,
+        session_id: str = "default",
+    ) -> ProcessedOutput:
+        """Async wrapper: runs the blocking disk write in a thread.
+
+        The synchronous process() writes oversized outputs to disk on the
+        event loop — a 50KB write blocks the loop and stalls the agent.
+        This async variant offloads the write to a thread so the agent
+        stays responsive to steer/interrupt.
+        """
+        import asyncio
+
+        return await asyncio.to_thread(
+            self.process, tool_call_id, content, tool_name, session_id
+        )
+
     def process(
         self,
         tool_call_id: str,
@@ -59,7 +79,10 @@ class ToolOutputStore:
         session_id: str = "default",
     ) -> ProcessedOutput:
         """Check if output exceeds limits; if so, save to disk and return preview."""
-        if len(content) <= self.max_bytes and content.count("\n") + 1 <= self.max_lines:
+        # Measure bytes, not chars — multi-byte UTF-8 chars inflate the
+        # on-disk size far beyond len(content).
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes <= self.max_bytes and content.count("\n") + 1 <= self.max_lines:
             return ProcessedOutput(content=content, saved_to_disk=False)
 
         # Save to disk. Hash the session/tool_call ids so a hostile or
