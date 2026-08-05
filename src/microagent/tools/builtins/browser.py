@@ -36,6 +36,28 @@ _playwright: Playwright | None = None
 _lock = anyio.Lock()
 
 
+async def close_global_browser() -> None:
+    """Shut down the shared Chromium instance and Playwright runtime.
+
+    Called from Agent.close() so short-lived embeddings (create/destroy
+    per task) don't leak headless Chromium processes.
+    """
+    global _browser, _playwright
+    async with _lock:
+        if _browser is not None:
+            try:
+                await _browser.close()
+            except Exception:
+                pass
+            _browser = None
+        if _playwright is not None:
+            try:
+                await _playwright.stop()
+            except Exception:
+                pass
+            _playwright = None
+
+
 def _check_navigate_url(url: str) -> str | None:
     """Pre-launch URL validation. Returns an error string or None.
 
