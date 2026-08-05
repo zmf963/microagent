@@ -98,9 +98,12 @@ class SQLiteMemoryProvider:
     def __init__(self, path: Path | str):
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._path))
-        self._conn.executescript(self.SCHEMA)
+        # busy_timeout so concurrent writers (CLI + agent, multiple agents)
+        # wait instead of crashing with "database is locked". WAL mode is
+        # enabled before any writes so the schema script runs in WAL.
+        self._conn = sqlite3.connect(str(self._path), timeout=30)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.executescript(self.SCHEMA)
 
     def close(self) -> None:
         """Close the database connection."""
@@ -202,14 +205,16 @@ class SQLiteMemoryProvider:
 
     async def delete(self, memory_id: str) -> None:
         row = self._conn.execute(
-            "SELECT rowid FROM memories WHERE id = ?", (memory_id,)
+            "SELECT rowid, content FROM memories WHERE id = ?", (memory_id,)
         ).fetchone()
         if row:
-            # External content FTS5 requires explicit 'delete' command
+            # External-content FTS5 requires the delete command to carry the
+            # exact text that was originally indexed; passing '' makes the
+            # delete a silent no-op and corrupts the index over time.
             self._conn.execute(
                 "INSERT INTO memories_fts(memories_fts, rowid, content) "
-                "VALUES('delete', ?, '')",
-                (row[0],),
+                "VALUES('delete', ?, ?)",
+                (row[0], row[1]),
             )
         self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         self._conn.commit()
