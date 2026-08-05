@@ -268,3 +268,90 @@
 **8.4 subagent 预算耗尽错误信息重复** ✅ **已修复**(`"budget exhausted: budget exhausted:"`,cosmetic);
 **`mcp_connect raw:<command>`** 可执行任意命令 —— 与 bash 工具同级权限，属设计行为，
 建议文档注明；**`wait` + 未关闭 stdin 的 `communicate()` 交互**未验证（被 8.1 挂死掩盖，修复后复验）。
+
+---
+
+## 九、第七轮疯狂测试（Round 7，探针 L–N）— 2026-08-04
+
+> 方法：探针 L（lsp 工具，真实 gopls)、M（scrubber 边界）、N(session_search 边界查询）。
+> 基线：1068 passed, 11 skipped。
+
+### 🟡 应修复
+
+**9.1 `search_sessions` 空/纯特殊字符查询 → LIKE '%%' 泄漏全部最近消息**
+- **文件**：`src/microagent/session/search.py`(search_sessions LIKE fallback)
+- **现象**：探针 N:`search_sessions(store, "")` 与 `'"'` 均返回**全部 3 条**消息 ——
+  特殊字符剥光后 FTS 查询为 `""` 报语法错 → LIKE fallback 模式为 `'%%'` 匹配所有行。
+  与 6.5(recall 空查询）同类。工具层有 `query.strip()` 守卫，但库直调无防护。
+
+**9.2 `lsp symbols` 输出无截断 — 大文件产生巨大 ToolResult**
+- **文件**：`src/microagent/tools/builtins/lsp.py`(symbols 分支）
+- **现象**：探针 L-1:400 函数 Go 文件 → 10.5KB 未截断输出；5000 符号文件将 >100KB。
+  references 有 50 条上限，symbols 没有。
+
+**9.3 `lsp` client 进程死亡后永久缓存 — 不自愈**
+- **文件**：`src/microagent/tools/builtins/lsp.py`(`_get_client` / state.clients)
+- **现象**：探针 L-2：杀掉 gopls 后，后续所有调用都 `ConnectionResetError('Connection lost')`
+  —— 死 client 永远留在 `state.clients[lang]`，无驱逐/重启逻辑，进程级恢复只能重启 agent。
+
+### 🔵 无发现
+
+**scrubber 边界全部正确**（探针 M)：未闭合标签吞后续（文档化设计）、嵌套/分割/大小写/
+重复开标签均处理正确。
+
+---
+
+## 九、代码审查修复轮（Round 7, 2026-08-05）— 3 个审查 agent + 手动深读
+
+> 方法：3 个并行审查 agent 分别覆盖核心会话/LLM与技能记忆/工具与基础设施模块，
+> 手动深读 + 实测验证交叉确认。基线：1068 passed, 11 skipped。
+
+### 🔴 严重
+
+**9.1 PermissionEngine 是死代码 — 从未被 runner 调用** ✅ **已修复 (7c24b52)**
+- **修复**：`SessionRunner.__init__` 接受 `permission_engine` 参数；`_settle` 在 plan-mode
+  守卫后、工具执行前调用 `engine.evaluate(call)`；DENY → `ToolResult.denied`。
+  `Agent.from_config()` 透传。测试 3 个（DENY/ALLOW/无引擎向后兼容）。
+- **文件**：`src/microagent/session/runner.py`、`src/microagent/agent.py`
+- **现象**：`PermissionEngine` 只在 `__init__.py` 导出，`runner.py` 零引用。
+  LLM 可调 `bash rm *`/`web_fetch`/`execute_code` 零人工确认。
+- **影响**：permission bypass — 整个访问控制层无效。
+
+**9.2 output_store 同步写盘阻塞事件循环 + 字符/字节混淆** ✅ **已修复 (dd560f2)**
+- **修复**：`process_async()` 用 `asyncio.to_thread` 写盘；阈值检查改用
+  `len(content.encode('utf-8'))` 字节数。runner 调用点切换为 async 版本。
+- **文件**：`src/microagent/tools/output_store.py`、`src/microagent/session/runner.py`
+- **现象**：50KB 工具输出同步写盘阻塞 loop → agent 对 steer/interrupt 无响应；
+  多字节 UTF-8 使 50KB 字节阈值实际被 4 倍突破。
+- **影响**：LLM 可 DoS agent。
+
+**9.3 memory provider 无 busy_timeout + WAL 顺序错误** ✅ **已修复 (341ddd5)**
+- **修复**：`sqlite3.connect(timeout=30)` + WAL 在 schema 前启用。
+- **文件**：`src/microagent/memory/provider.py`
+- **现象**：并发写 → `database is locked` → `recall()` 静默降级 LIKE → 记忆"丢失"。
+- **影响**：多 agent/CLI+agent 并发时记忆系统不可靠。
+
+**9.4 browser 全局 Chromium 进程永不关闭** ✅ **已修复 (29cceac)**
+- **修复**：`close_global_browser()` 关闭共享 `_browser` + 停止 `_playwright`；
+  `runner.close()` 调用。
+- **文件**：`src/microagent/tools/builtins/browser.py`、`src/microagent/session/runner.py`
+- **现象**：模块级 `_browser`/`_playwright` 无 close/stop；每次 Agent 创建/销毁泄漏
+  headless Chromium 进程。
+- **影响**：短生命周期嵌入场景内存泄漏。
+
+### 🟡 应修复
+
+**9.5 FTS5 delete 传 '' 替代实际 content — 索引腐蚀** ✅ **已修复 (341ddd5)**
+- **修复**：delete 前 `SELECT content FROM memories WHERE id=?`，传入实际 content。
+- **文件**：`src/microagent/memory/provider.py`
+- **现象**：外部内容 FTS5 契约要求 delete 带原始文本；`''` 使 delete 为 no-op。
+
+**9.6 子代理 close 父共享 LLM client — ownership 语义不清** ✅ **已文档化 (d6f9028)**
+- **修复**：`spawn()` 中显式注释 ownership：`child_runner.close()` 不碰 LLM；
+  只有 `forked_llm=True`（spec.model 覆盖）时子代理才关闭自己的 client。
+- **文件**：`src/microagent/subagent/manager.py`
+
+### ❌ 剔除的误报（3 项）
+- Agent2 #2: ASK 无 callback → fail-open ALLOW — **误报**，返回 ASK 不是 ALLOW。
+- Agent2 #5: tool-call deltas 无 finish_reason 丢失 — **误报**，flush 在循环后无条件执行。
+- Agent2 #13: `run()` 第二次调用崩溃 — **误报**，实测连续两次 run() 正常。
