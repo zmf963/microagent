@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .core.store import Store
+from .core.permission import PermissionEngine
 from .core.tool import ToolRegistry, _default_builtins
 from .core.types import Message, TurnComplete, TurnFailed
 from .llm.client import LLMConfig, OpenAIChatClient
@@ -44,6 +45,7 @@ class Agent:
         session_id: str = "default",
         enable_cron: bool = False,
         skills_path: str | None = None,
+        permission_engine: PermissionEngine | None = None,
     ) -> Agent:
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
@@ -78,6 +80,7 @@ class Agent:
             store=store,
             session_id=session_id,
             skill_loader=skill_loader,
+            permission_engine=permission_engine,
         )
         agent = cls(runner=runner, registry=registry)
 

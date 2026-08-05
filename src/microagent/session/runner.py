@@ -18,6 +18,8 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..core.permission import PermissionEngine
+
 import anyio
 
 from ..core.event import EventBus
@@ -60,6 +62,7 @@ class SessionRunner:
         skill_loader: object = None,
         memory: object = None,
         compression_threshold: int = 0,
+        permission_engine: "PermissionEngine | None" = None,
     ):
         self.llm = llm
         self.registry = registry
@@ -74,6 +77,7 @@ class SessionRunner:
         self.skill_loader = skill_loader
         self.memory = memory
         self.compression_threshold = compression_threshold
+        self.permission_engine = permission_engine
 
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
@@ -846,6 +850,16 @@ class SessionRunner:
                         if reason is not None:
                             results[idx] = ToolResult.denied(f"plan mode: {reason}")
                             return
+
+                # Permission engine check — enforce rule-based access control
+                # after plan-mode guard, before execution.
+                if self.permission_engine is not None:
+                    decision = await self.permission_engine.evaluate(call)
+                    if decision.is_deny:
+                        results[idx] = ToolResult.denied(
+                            f"permission denied: {decision.reason or 'no rule matched'}"
+                        )
+                        return
 
                 # Streaming execution — ToolRegistry.execute_stream always
                 # exists (core/tool.py) and has its own non-streaming fallback
