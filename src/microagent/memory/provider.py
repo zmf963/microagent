@@ -89,7 +89,8 @@ class SQLiteMemoryProvider:
         created_at REAL NOT NULL,
         session_id TEXT,
         visibility TEXT NOT NULL DEFAULT 'private',
-        metadata TEXT
+        metadata TEXT,
+        content_hash TEXT
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
         content, content='memories', content_rowid='rowid'
@@ -108,12 +109,51 @@ class SQLiteMemoryProvider:
         self._conn = sqlite3.connect(str(self._path), timeout=30, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(self.SCHEMA)
+        self._migrate_content_hash()
         # All DB work runs under this lock via asyncio.to_thread — the same
         # discipline as session/search.py + SQLiteStore. Previously every
         # public async method ran synchronous sqlite3 directly on the event
         # loop thread: recall() during a turn blocked streaming/tool calls,
         # and concurrent writers raced on the shared connection.
         self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _normalize_content(content: str) -> str:
+        """Canonical form for dedupe: strip, collapse whitespace, lowercase.
+
+        Deliberately conservative — punctuation and word order are kept,
+        so genuine revisions are not false-positive duplicates.
+        """
+        return " ".join(content.split()).lower()
+
+    @classmethod
+    def _content_hash(cls, content: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(cls._normalize_content(content).encode()).hexdigest()[:16]
+
+    def _migrate_content_hash(self) -> None:
+        """Idempotent migration: add + backfill the content_hash column.
+
+        The LLM extractor writes near-identical facts every turn (overlapping
+        10-message windows, fresh uuid each time), growing the table without
+        bound. Dedupe keys on a normalized-content hash — exact-match dedupe
+        (WHERE content = ?) missed case/whitespace variants.
+        """
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(memories)")}
+        if "content_hash" in cols:
+            return
+        self._conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash)"
+        )
+        rows = self._conn.execute("SELECT id, content FROM memories").fetchall()
+        for mem_id, content in rows:
+            self._conn.execute(
+                "UPDATE memories SET content_hash = ? WHERE id = ?",
+                (self._content_hash(content), mem_id),
+            )
+        self._conn.commit()
 
     def close(self) -> None:
         """Close the database connection.
@@ -265,6 +305,14 @@ class SQLiteMemoryProvider:
         return ""
 
     def _insert(self, m: Memory) -> None:
+        # Normalized-content dedupe: the extractor re-derives the same fact
+        # from overlapping windows with a fresh uuid each turn. Skip when
+        # ANY existing row has the same canonical content.
+        content_hash = self._content_hash(m.content)
+        if self._conn.execute(
+            "SELECT id FROM memories WHERE content_hash = ? LIMIT 1", (content_hash,)
+        ).fetchone():
+            return
         # INSERT OR REPLACE changed the rowid on every rewrite, orphaning
         # the old rowid's FTS entry (external-content FTS5 doesn't sync
         # itself) — index bloat plus stale tokens re-attached to unrelated
@@ -285,8 +333,8 @@ class SQLiteMemoryProvider:
             self._conn.execute("DELETE FROM memories WHERE id = ?", (m.id,))
         self._conn.execute(
             "INSERT INTO memories "
-            "(id, content, category, created_at, session_id, visibility, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, content, category, created_at, session_id, visibility, metadata, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 m.id,
                 m.content,
@@ -295,6 +343,7 @@ class SQLiteMemoryProvider:
                 m.session_id,
                 m.visibility,
                 json.dumps(m.metadata) if m.metadata else None,
+                content_hash,
             ),
         )
         # Sync to FTS5 content table

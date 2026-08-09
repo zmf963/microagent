@@ -146,3 +146,78 @@ class TestProviderInsertSemantics:
             provider._lock.release()
         results = await provider.recall("lock", k=1)
         assert len(results) == 1
+
+
+class TestContentHashDedupe:
+    async def test_exact_duplicate_skipped(self, provider):
+        """Same content with different ids (extractor uses fresh uuids each
+        turn) must dedupe to one row."""
+        await provider.batch_write((
+            Memory(id="a", content="user prefers dark mode", category="preference", created_at=1.0),
+        ))
+        await provider.batch_write((
+            Memory(id="b", content="user prefers dark mode", category="preference", created_at=2.0),
+        ))
+        results = await provider.recall("dark mode", k=5)
+        assert len(results) == 1
+
+    async def test_case_and_whitespace_variants_deduped(self, provider):
+        """Normalization: case + whitespace differences don't defeat dedupe."""
+        await provider.batch_write((
+            Memory(id="a", content="User Prefers Dark Mode", category="preference", created_at=1.0),
+        ))
+        await provider.batch_write((
+            Memory(id="b", content="  user   prefers  dark mode \n", category="preference", created_at=2.0),
+        ))
+        results = await provider.recall("dark mode", k=5)
+        assert len(results) == 1
+
+    async def test_genuine_revisions_kept(self, provider):
+        """Punctuation/word-order differences are NOT duplicates — the
+        normalization is deliberately conservative."""
+        await provider.batch_write((
+            Memory(id="a", content="deploy to production, then staging", category="task", created_at=1.0),
+        ))
+        await provider.batch_write((
+            Memory(id="b", content="deploy to staging then production", category="task", created_at=2.0),
+        ))
+        results = await provider.recall("deploy", k=5)
+        assert len(results) == 2
+
+    async def test_migration_backfills_existing_rows(self, tmp_path):
+        """An old DB (no content_hash column) gains it on open, with
+        existing rows backfilled."""
+        import sqlite3
+
+        path = tmp_path / "old.db"
+        conn = sqlite3.connect(str(path))
+        conn.executescript("""
+        CREATE TABLE memories (
+            id TEXT PRIMARY KEY, content TEXT NOT NULL, category TEXT NOT NULL,
+            created_at REAL NOT NULL, session_id TEXT,
+            visibility TEXT NOT NULL DEFAULT 'private', metadata TEXT
+        );
+        CREATE VIRTUAL TABLE memories_fts USING fts5(
+            content, content='memories', content_rowid='rowid'
+        );
+        """)
+        conn.execute(
+            "INSERT INTO memories (id, content, category, created_at) "
+            "VALUES ('old1', 'legacy fact here', 'fact', 1.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        prov = SQLiteMemoryProvider(path)
+        cols = {r[1] for r in prov._conn.execute("PRAGMA table_info(memories)")}
+        assert "content_hash" in cols
+        row = prov._conn.execute(
+            "SELECT content_hash FROM memories WHERE id = 'old1'"
+        ).fetchone()
+        assert row[0] == SQLiteMemoryProvider._content_hash("legacy fact here")
+        # And dedupe works against the backfilled row
+        await prov.batch_write((
+            Memory(id="new1", content="Legacy Fact Here", category="fact", created_at=2.0),
+        ))
+        assert len(prov._conn.execute("SELECT id FROM memories").fetchall()) == 1
+        prov.close()
