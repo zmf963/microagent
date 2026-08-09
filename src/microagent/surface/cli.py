@@ -599,6 +599,29 @@ def _print_help():
 # ---------------------------------------------------------------------------
 
 
+def _make_permission_engine():
+    """CLI PermissionEngine with an interactive ASK callback.
+
+    permission.py's contract says 'CLI/Web injects one' — without this the
+    CLI had no permission enforcement at all, and embedders who passed a
+    bare PermissionEngine got fail-closed DENY on every ASK rule (task,
+    rm/mv/chmod, output redirect) with no way to approve.
+    """
+    from ..core.permission import DEFAULT_RULES, Decision, PermissionEngine
+
+    async def _ask(call, rule):
+        console.print(
+            f"[yellow]?[/] permission: [bold]{call.name}[/] "
+            f"{str(call.arguments)[:160]}\n  [dim]{rule.reason or 'confirmation required'}[/]"
+        )
+        answer = await asyncio.to_thread(
+            Prompt.ask, "  Allow?", choices=["y", "n"], default="n"
+        )
+        return Decision.ALLOW if answer == "y" else Decision.DENY
+
+    return PermissionEngine(rules=DEFAULT_RULES, ask_callback=_ask)
+
+
 def _make_agent(config, store, session_id: str) -> Agent:
     """Build an Agent from a Config + store + session_id.
 
@@ -612,6 +635,7 @@ def _make_agent(config, store, session_id: str) -> Agent:
         store=store,
         session_id=session_id,
         skills_path=config.skills_path,
+        permission_engine=_make_permission_engine(),
     )
 
 

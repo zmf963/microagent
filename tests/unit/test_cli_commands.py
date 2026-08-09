@@ -249,8 +249,30 @@ async def test_cmd_build(state):
 
 def test_make_agent_returns_agent(state):
     agent = cli._make_agent(state.config, state.store, "new-session")
+    assert isinstance(agent, cli.Agent)
+    # CLI wires the permission engine with an interactive ASK callback —
+    # permission.py's 'CLI/Web injects one' contract
+    assert agent.runner.permission_engine is not None
+    assert agent.runner.permission_engine.ask_callback is not None
     assert agent is not None
     assert agent.runner.session_id == "new-session"
+
+
+@pytest.mark.asyncio
+async def test_cli_ask_callback_allows_on_yes(monkeypatch):
+    """The CLI ask callback prompts and maps y/n to ALLOW/DENY."""
+    engine = cli._make_permission_engine()
+    from microagent.core.permission import Decision
+    from microagent.core.types import ToolCall
+
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *a, **k: "y")
+    call = ToolCall(id="c1", name="task", arguments={"prompt": "x"})
+    decision = await engine.evaluate(call)
+    assert decision.decision is Decision.ALLOW
+
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *a, **k: "n")
+    decision = await engine.evaluate(call)
+    assert decision.decision is Decision.DENY
 
 
 class TestCLIHelpers:
