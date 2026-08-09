@@ -129,11 +129,18 @@ class Agent:
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(self.runner.steer(text))
-            task.add_done_callback(
-                lambda t: logger.warning(
-                    "steer task failed", exc_info=t.exception()
-                ) if t.exception() else None
-            )
+
+            def _on_done(t: "asyncio.Task") -> None:
+                # t.exception() re-raises CancelledError for cancelled tasks —
+                # the callback itself would then blow up with 'Exception in
+                # callback' noise on loop shutdown.
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    logger.warning("steer task failed", exc_info=exc)
+
+            task.add_done_callback(_on_done)
         except RuntimeError:
             # No running loop — create one temporarily
             asyncio.run(self.runner.steer(text))
@@ -150,6 +157,15 @@ class Agent:
         from .tools.builtins.browser import close_global_browser
 
         await close_global_browser()
+        # Prune expired tool-output files — cleanup_expired() had no caller,
+        # so ~/.microagent/tool_outputs grew without bound despite the
+        # documented 7-day retention.
+        try:
+            from .tools.output_store import ToolOutputStore
+
+            await asyncio.to_thread(ToolOutputStore().cleanup_expired)
+        except Exception:
+            pass
         # Close the LLM client if it supports close()
         if hasattr(self.runner.llm, "close"):
             await self.runner.llm.close()

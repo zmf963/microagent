@@ -27,15 +27,25 @@ class EventBus:
         self.subscribers.setdefault(event, []).append(cb)
 
     async def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
-        """Fire an event. All callbacks are called in order.
+        """Fire an event. Sync callbacks run in order; async callbacks run
+        concurrently — one slow async observer (e.g. a remote logging hook)
+        must not stall the main loop at the turn_complete emit point.
         Exceptions are swallowed — observer failures don't block the main loop.
         """
+        pending = []
         for cb in self.subscribers.get(event, []):
             try:
                 result = cb(*args, **kwargs)
                 if asyncio.iscoroutine(result):
-                    await result
+                    pending.append(result)
             except Exception:
                 logger.warning(
                     "EventBus observer failed for event %s", event, exc_info=True
                 )
+        if pending:
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(
+                        "EventBus observer failed for event %s", event, exc_info=r
+                    )

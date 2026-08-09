@@ -14,6 +14,7 @@ import asyncio
 import os
 import sys
 import time
+from uuid import uuid4
 from dataclasses import dataclass, field
 
 from rich.console import Console
@@ -257,7 +258,7 @@ async def _main():
 
     db_path = _Path.home() / ".microagent" / "sessions.db"
     store = SQLiteStore(db_path)
-    session_id = f"cli-{int(time.time())}"
+    session_id = f"cli-{int(time.time())}-{uuid4().hex[:6]}"
     agent = _make_agent(config, store, session_id)
 
     if positional:
@@ -644,7 +645,7 @@ async def _cmd_new(state: ReplState, arg: str) -> None:
     await agent.close()
     config = state.config
     store = state.store
-    state.session_id = f"cli-{int(time.time())}"
+    state.session_id = f"cli-{int(time.time())}-{uuid4().hex[:6]}"
     state.messages = []
     state.usage_tracker.reset()
     state.disabled_skills.clear()

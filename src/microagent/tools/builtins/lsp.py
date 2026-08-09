@@ -499,6 +499,14 @@ async def _get_client(filepath: str) -> LSPClient | None:
         return None
 
     state = _get_state()
+    # Evict a dead client before reusing it — a crashed server (read loop
+    # broken, process gone) otherwise stays cached forever and every
+    # request for that language times out for 30s until the agent restarts.
+    cached = state.clients.get(lang)
+    if cached is not None and (
+        cached._proc is None or cached._proc.returncode is not None
+    ):
+        del state.clients[lang]
     if lang not in state.clients:
         p = Path(filepath).resolve()
         # Walk up to find project root (has .git, pyproject.toml, etc.)

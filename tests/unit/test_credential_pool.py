@@ -51,3 +51,19 @@ class TestCredentialPool:
         pool.mark_failed()
         # All failed → reset
         assert pool.current == cfg1
+
+
+class TestMarkOk:
+    def test_mark_ok_resets_failure_counter(self):
+        """Successes reset _failed — otherwise N keys accumulate N failures
+        across days (with many successes between) and reset-jump to the
+        dead first key."""
+        cfg1 = LLMConfig(base_url="http://x/v1", api_key="k1", model="m")
+        cfg2 = LLMConfig(base_url="http://x/v1", api_key="k2", model="m")
+        pool = CredentialPool(credentials=(cfg1, cfg2))
+        pool.mark_failed()  # rotated to k2, _failed=1
+        pool.mark_ok()
+        assert pool._failed == 0
+        # Another failure rotates again instead of triggering the reset
+        pool.mark_failed()
+        assert pool._failed == 1

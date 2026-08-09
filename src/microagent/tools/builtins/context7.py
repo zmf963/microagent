@@ -54,9 +54,21 @@ async def context7(
                         break
                     chunks.append(chunk)
                     total += len(chunk)
-            data = httpx.Response(
-                status_code=200, content=b"".join(chunks)
-            ).json()
+            truncated = total >= max_bytes
+            try:
+                data = httpx.Response(
+                    status_code=200, content=b"".join(chunks)
+                ).json()
+            except Exception:
+                if not truncated:
+                    raise
+                # The 2MB cap cut the payload mid-JSON — unparseable by
+                # definition. Return the raw text prefix instead of failing
+                # the whole query (which made every large response an error).
+                raw = b"".join(chunks).decode("utf-8", errors="replace")
+                return ToolResult.ok(
+                    raw[:50_000] + "\n...[response truncated at 2MB, partial JSON omitted]..."
+                )
     except Exception as e:
         return ToolResult.error(f"context7 query failed: {e!r}")
 

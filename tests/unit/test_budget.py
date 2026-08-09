@@ -99,6 +99,19 @@ class TestBudgetTree:
         assert root.remaining_iterations == 25
 
 
+class TestBudgetReset:
+    async def test_reset_clears_cancel_event(self):
+        """reset() must clear a set cancel_event — otherwise the 'reset'
+        budget keeps raising 'budget cancelled by root' forever."""
+        root = Budget.root(max_cost_usd=0.5)
+        with pytest.raises(BudgetExceeded):
+            await root.consume(cost_usd=1.0)
+        assert root._cancel_event.is_set()
+        root.reset()
+        assert not root._cancel_event.is_set()
+        await root.consume(cost_usd=0.1)  # usable again
+
+
 class TestBudgetErrorMessage:
     async def test_message_reports_all_metrics(self):
         """BudgetExceeded message must report iterations/tokens/cost so the

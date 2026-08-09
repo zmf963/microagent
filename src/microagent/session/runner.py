@@ -344,20 +344,6 @@ class SessionRunner:
             return type(result)(content=processed.content, is_error=result.is_error, metadata=result.metadata)
         return result
 
-    def _process_tool_output(self, tool_call_id: str, result) -> Any:
-        """Apply ToolOutputStore size management to tool results."""
-        from ..tools.output_store import ToolOutputStore
-
-        if self._output_store is None:
-            self._output_store = ToolOutputStore()
-        processed = self._output_store.process(
-            tool_call_id, result.content, result.metadata.get("tool_name", "unknown") if result.metadata else "unknown",
-            session_id=self.session_id,
-        )
-        if processed.saved_to_disk:
-            return type(result)(content=processed.content, is_error=result.is_error, metadata=result.metadata)
-        return result
-
     def _get_available_tools(self) -> set[str]:
         """Return set of tool names available in current mode."""
         all_names = set(self.registry.names)
@@ -720,13 +706,23 @@ class SessionRunner:
                                         except BudgetExceeded as e:
                                             yield TurnFailed(str(e))
                                             return
-                                    # Force compaction to reduce context
+                                    # Force compaction to reduce context.
+                                    # Use the auxiliary model like the
+                                    # auto-compression path above — the main
+                                    # model just failed on this context size,
+                                    # and the aux model is the cheaper one
+                                    # for a rescue operation.
                                     from .compress import compact_conversation
 
                                     try:
+                                        compress_llm = self.llm
+                                        if self.llm.config.auxiliary_model:
+                                            compress_llm = self.llm.for_model(
+                                                self.llm.config.auxiliary_model
+                                            )
                                         messages_list = await compact_conversation(
                                             tuple(messages),
-                                            self.llm,
+                                            compress_llm,
                                             context_window=_threshold + 8000,
                                             state=self._compaction_state,
                                             force=True,

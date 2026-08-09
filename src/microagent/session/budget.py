@@ -229,6 +229,11 @@ class Budget:
         self._descendants_iter = 0
         self._descendants_tokens = 0
         self._descendants_cost = 0.0
+        # A set cancel_event survives reset() without this — consume()
+        # would keep raising "budget cancelled by root" on the "reset"
+        # budget, contradicting the method's contract.
+        if self._cancel_event is not None:
+            self._cancel_event.clear()
 
 
 class BudgetExceeded(Exception):

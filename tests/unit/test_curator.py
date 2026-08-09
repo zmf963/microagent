@@ -210,3 +210,35 @@ class TestCuratorMore:
         Curator._save_usage(usage_file, {"s1": {"state": "active"}})
         assert usage_file.exists()
         assert json.loads(usage_file.read_text()) == {"s1": {"state": "active"}}
+
+
+class TestCuratorEdge:
+    async def test_run_once_missing_skills_dir(self, tmp_path):
+        """A nonexistent skills_dir must be a no-op, not FileNotFoundError."""
+        from microagent.skill.curator import Curator
+
+        curator = Curator()
+        await curator.run_once(tmp_path / "nonexistent", tmp_path / "usage.json")
+
+    async def test_lsp_dead_client_evicted(self, tmp_path, monkeypatch):
+        """_get_client evicts a cached client whose server process died —
+        previously it stayed cached forever and every request timed out."""
+        from microagent.tools.builtins import lsp as lsp_mod
+
+        state = lsp_mod._get_state()
+        dead = type("DeadClient", (), {"_proc": type("P", (), {"returncode": 1})()})()
+        state.clients["python"] = dead
+
+        class _FakeClient:
+            def __init__(self, cmd, root_uri):
+                self._proc = type("P", (), {"returncode": None})()
+
+            async def start(self):
+                return None
+
+        monkeypatch.setattr(lsp_mod, "_find_lsp_command", lambda lang: ("fake-lsp",))
+        monkeypatch.setattr(lsp_mod, "LSPClient", _FakeClient)
+        result = await lsp_mod._get_client(str(tmp_path / "x.py"))
+        # Corpse evicted, a NEW client was created and cached
+        assert result is not dead
+        assert state.clients["python"] is result

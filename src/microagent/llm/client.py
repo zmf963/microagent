@@ -287,6 +287,9 @@ class OpenAIChatClient:
             if stream is None:
                 raise e
 
+        if self.pool is not None:
+            self.pool.mark_ok()
+
         # Accumulate tool_call fragments by index
         tool_acc: dict[int, dict[str, Any]] = {}
         usage: Usage | None = None

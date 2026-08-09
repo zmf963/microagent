@@ -41,6 +41,15 @@ class CredentialPool:
     def current(self) -> LLMConfig:
         return self.credentials[self._index]
 
+    def mark_ok(self) -> None:
+        """Reset the failure counter after a successful call.
+
+        Without this, N keys accumulate N failures across arbitrary time
+        spans (with many successes in between) and then reset-jump to
+        index 0 — typically the dead first key.
+        """
+        self._failed = 0
+
     def next(self) -> LLMConfig:
         """Rotate to next credential and return it."""
         self._index = (self._index + 1) % len(self.credentials)

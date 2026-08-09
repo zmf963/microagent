@@ -34,6 +34,8 @@ class Curator:
 
     async def run_once(self, skills_dir: Path, usage_file: Path) -> None:
         """Single scan: read usage.json → update states → execute transitions."""
+        if not skills_dir.is_dir():
+            return  # no skills directory yet — nothing to curate
         usage = self._load_usage(usage_file)
         now = time.time()
 
