@@ -73,6 +73,15 @@ class TestPermissionEngine:
         assert decision.decision is Decision.ALLOW
         assert results == ["bash"]
 
+    async def test_ask_without_callback_fails_closed(self):
+        """ASK with no ask_callback must DENY — returning ASK let callers
+        treat it as 'not denied' and silently execute sensitive ops."""
+        engine = PermissionEngine(rules=(Rule("bash", {}, Decision.ASK),))
+        call = ToolCall(id="c1", name="bash", arguments={"command": "rm *"})
+        decision = await engine.evaluate(call)
+        assert decision.is_deny
+        assert "ask_callback" in (decision.reason or "")
+
     def test_resolve(self):
         engine = PermissionEngine(rules=(Rule("read_file", {}, Decision.ALLOW),))
         assert engine.resolve("read_file") is Decision.ALLOW

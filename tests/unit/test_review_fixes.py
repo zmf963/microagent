@@ -81,28 +81,32 @@ class TestASKRules:
         decision = engine.resolve("bash")
         assert decision == Decision.ALLOW  # resolve returns most permissive
 
-        # Check evaluate
+        # Check evaluate — no ask_callback: fail-closed DENY proves the
+        # ASK rule matched (an ALLOW match would return ALLOW).
         import asyncio
         result = asyncio.run(engine.evaluate(call))
-        assert result.decision == Decision.ASK
+        assert result.decision == Decision.DENY
+        assert "ask_callback" in (result.reason or "")
 
     def test_bash_redirect_asks(self):
-        """Output redirection should trigger ASK."""
+        """Output redirection should trigger ASK (fail-closed without callback)."""
         rules = DEFAULT_RULES
         engine = PermissionEngine(rules=rules)
         call = ToolCall(id="c1", name="bash", arguments={"command": "echo hi > /tmp/out"})
         import asyncio
         result = asyncio.run(engine.evaluate(call))
-        assert result.decision == Decision.ASK
+        assert result.decision == Decision.DENY
+        assert "ask_callback" in (result.reason or "")
 
     def test_task_always_asks(self):
-        """task tool should always ASK."""
+        """task tool should always ASK (fail-closed without callback)."""
         rules = DEFAULT_RULES
         engine = PermissionEngine(rules=rules)
         call = ToolCall(id="c1", name="task", arguments={"prompt": "test"})
         import asyncio
         result = asyncio.run(engine.evaluate(call))
-        assert result.decision == Decision.ASK
+        assert result.decision == Decision.DENY
+        assert "ask_callback" in (result.reason or "")
 
 
 class TestPlanBuildCommands:

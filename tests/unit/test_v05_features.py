@@ -144,14 +144,21 @@ class TestSensitiveConfirm:
         assert rule.arguments_constraint == {"command": "rm *"}
 
     async def test_permission_engine_asks_on_matching_condition(self):
-        """PermissionEngine returns ASK when condition matches."""
+        """PermissionEngine invokes ask_callback when condition matches."""
         rules = (
             Rule("bash", {"command": "rm *"}, Decision.ASK),
         )
-        engine = PermissionEngine(rules=rules)
+        asked = []
+
+        async def cb(call, rule):
+            asked.append(call.name)
+            return Decision.ALLOW
+
+        engine = PermissionEngine(rules=rules, ask_callback=cb)
         call = ToolCall(id="c1", name="bash", arguments={"command": "rm -rf /"})
         decision = await engine.evaluate(call)
-        assert decision.decision == Decision.ASK
+        assert decision.decision == Decision.ALLOW
+        assert asked == ["bash"]
 
     async def test_permission_engine_allows_non_matching(self):
         """PermissionEngine returns ALLOW when condition doesn't match (no other rule → deny)."""
@@ -167,11 +174,13 @@ class TestSensitiveConfirm:
         assert decision.decision == Decision.ALLOW
 
     async def test_permission_engine_asks_on_task_always(self):
-        """task tool always asks."""
+        """task tool always triggers the ask path (fail-closed w/o callback)."""
         rules = (
             Rule("task", {}, Decision.ASK),
         )
         engine = PermissionEngine(rules=rules)
         call = ToolCall(id="c1", name="task", arguments={"prompt": "do something"})
         decision = await engine.evaluate(call)
-        assert decision.decision == Decision.ASK
+        # Without an ask_callback the ASK rule fails closed
+        assert decision.decision == Decision.DENY
+        assert "ask_callback" in (decision.reason or "")

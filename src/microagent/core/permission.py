@@ -102,7 +102,16 @@ class PermissionEngine:
             # never ran. Security bypass.
             if isinstance(rule, ScriptRule):
                 return await rule.evaluate(call)
-            if rule.decision is Decision.ASK and self.ask_callback:
+            if rule.decision is Decision.ASK:
+                if self.ask_callback is None:
+                    # Fail closed: without a callback there is nobody to ask,
+                    # and returning ASK lets the caller treat it as "not
+                    # denied" — sensitive ops (rm *, output redirect, …)
+                    # would execute silently.
+                    return PermissionDecision(
+                        Decision.DENY,
+                        f"ASK rule matched but no ask_callback configured: {rule.reason}",
+                    )
                 user_decision = await self.ask_callback(call, rule)
                 return PermissionDecision(user_decision, rule.reason)
             return PermissionDecision(rule.decision, rule.reason)
