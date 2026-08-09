@@ -94,6 +94,11 @@ async def skill_manage(
             )
 
         skill_path = skills_dir / name / "SKILL.md"
+        if skill_path.exists() and not _is_agent_created(name):
+            return ToolResult.error(
+                f"Skill '{name}' already exists and was not created by an agent. "
+                f"Refusing to overwrite a user-created skill."
+            )
         skill_path.parent.mkdir(parents=True, exist_ok=True)
         import asyncio
 
@@ -111,6 +116,14 @@ async def skill_manage(
         skill_path = skills_dir / name / "SKILL.md"
         if not skill_path.exists():
             return ToolResult.error(f"Skill '{name}' not found")
+        # Same provenance guard as delete: skill bodies flow into the system
+        # prompt, so patching a user-written skill is a persistent
+        # prompt-injection channel for a compromised agent.
+        if not _is_agent_created(name):
+            return ToolResult.error(
+                f"Skill '{name}' was not created by an agent. "
+                f"Only agent-created skills can be patched via skill_manage."
+            )
 
         text = skill_path.read_text()
         count = text.count(old_string)

@@ -127,6 +127,82 @@ class TestSkillManage:
         assert not result.is_error
         assert not (tmp_path / "delete-me").exists()
 
+    async def test_patch_user_created_skill_rejected(self, tmp_path, monkeypatch):
+        """patch has the same provenance guard as delete — skill bodies flow
+        into the system prompt, so rewriting a user skill is a persistent
+        prompt-injection channel."""
+        monkeypatch.setattr(
+            "microagent.tools.builtins.skill_manage._get_skills_dir",
+            lambda: tmp_path,
+        )
+        # Simulate a user-written skill (no provenance file)
+        (tmp_path / "user-skill").mkdir()
+        (tmp_path / "user-skill" / "SKILL.md").write_text("user instructions")
+        registry = ToolRegistry(_default_builtins())
+        result = await registry.execute(
+            ToolCall(
+                id="c1",
+                name="skill_manage",
+                arguments={
+                    "action": "patch",
+                    "name": "user-skill",
+                    "old_string": "user instructions",
+                    "new_string": "INJECTED",
+                },
+            )
+        )
+        assert result.is_error
+        assert "not created by an agent" in result.content
+        assert (tmp_path / "user-skill" / "SKILL.md").read_text() == "user instructions"
+
+    async def test_create_does_not_overwrite_user_skill(self, tmp_path, monkeypatch):
+        """create on an existing user-written skill must refuse to overwrite."""
+        monkeypatch.setattr(
+            "microagent.tools.builtins.skill_manage._get_skills_dir",
+            lambda: tmp_path,
+        )
+        (tmp_path / "user-skill").mkdir()
+        (tmp_path / "user-skill" / "SKILL.md").write_text("user instructions")
+        registry = ToolRegistry(_default_builtins())
+        result = await registry.execute(
+            ToolCall(
+                id="c1",
+                name="skill_manage",
+                arguments={
+                    "action": "create",
+                    "name": "user-skill",
+                    "content": "INJECTED",
+                },
+            )
+        )
+        assert result.is_error
+        assert "not created by an agent" in result.content
+        assert (tmp_path / "user-skill" / "SKILL.md").read_text() == "user instructions"
+
+    async def test_create_can_overwrite_agent_skill(self, tmp_path, monkeypatch):
+        """create on an agent-created skill is allowed (idempotent rewrite)."""
+        monkeypatch.setattr(
+            "microagent.tools.builtins.skill_manage._get_skills_dir",
+            lambda: tmp_path,
+        )
+        registry = ToolRegistry(_default_builtins())
+        await registry.execute(
+            ToolCall(
+                id="c1",
+                name="skill_manage",
+                arguments={"action": "create", "name": "mine", "content": "v1"},
+            )
+        )
+        result = await registry.execute(
+            ToolCall(
+                id="c2",
+                name="skill_manage",
+                arguments={"action": "create", "name": "mine", "content": "v2"},
+            )
+        )
+        assert not result.is_error
+        assert (tmp_path / "mine" / "SKILL.md").read_text() == "v2"
+
     async def test_invalid_action(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "microagent.tools.builtins.skill_manage._get_skills_dir",
