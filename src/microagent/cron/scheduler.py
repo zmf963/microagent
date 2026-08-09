@@ -168,8 +168,20 @@ class CronScheduler:
         self._scheduler = None
         self._started = False
         self._lock_fd = None
+        import asyncio
+
+        # Serializes job executions: each job temporarily sets the shared
+        # runner's session_id to its own cron-scoped id, and overlapping
+        # ticks must not interleave that swap.
+        self._exec_lock = asyncio.Lock()
         if not self.lock_path:
             self.lock_path = str(Path.home() / ".microagent" / "cron.lock")
+
+    @staticmethod
+    def _session_id_for(job: CronJob) -> str:
+        """Per-job session id — jobs no longer share one session (which made
+        resume:last pick up other jobs' or the user's interactive history)."""
+        return f"cron-{_sanitize_job_name(job.name)}"
 
     def add_job(self, job: CronJob) -> None:
         """Add a job. If scheduler is running, schedule immediately."""
@@ -258,12 +270,25 @@ class CronScheduler:
         try:
             from ..core.types import Message
 
-            if job.session_strategy == "resume:last" and self.store is not None:
-                messages = await self._build_resume_messages(job)
-            else:
-                messages = [Message.user(job.prompt)]
+            async with self._exec_lock:
+                if job.session_strategy == "resume:last" and self.store is not None:
+                    messages = await self._build_resume_messages(job)
+                else:
+                    messages = [Message.user(job.prompt)]
 
-            result = await self.agent.arun(messages)
+                # Run under the job's own session id so its history neither
+                # pollutes nor reads other sessions. The shared runner's
+                # original id is restored afterwards.
+                runner = getattr(self.agent, "runner", None)
+                if runner is not None:
+                    prev_sid = runner.session_id
+                    runner.session_id = self._session_id_for(job)
+                    try:
+                        result = await self.agent.arun(messages)
+                    finally:
+                        runner.session_id = prev_sid
+                else:
+                    result = await self.agent.arun(messages)
             logger.info(f"Cron job '{job.name}' completed: {result[:200]}")
 
             # Persist result
@@ -277,17 +302,18 @@ class CronScheduler:
             logger.error(f"Cron job '{job.name}' failed: {e}")
 
     async def _build_resume_messages(self, job: CronJob) -> list:
-        """Build messages for resume:last strategy — load last session + append prompt."""
+        """Build messages for resume:last strategy — load THIS JOB's last
+        session history and append the prompt.
+
+        Previously this picked the most recent session in the whole store,
+        so a resume:last job could continue another job's conversation —
+        or the user's interactive session — injecting the scheduled prompt
+        into completely unrelated context.
+        """
         from ..core.types import Message
 
         try:
-            sessions = await self.store.list_sessions()
-            if not sessions:
-                return [Message.user(job.prompt)]
-
-            # Pick the most recent session (list_sessions returns DESC by recency)
-            last_sid = sessions[0]
-            history = await self.store.load_history(last_sid)
+            history = await self.store.load_history(self._session_id_for(job))
             if not history:
                 return [Message.user(job.prompt)]
 

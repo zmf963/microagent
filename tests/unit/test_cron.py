@@ -267,6 +267,62 @@ class TestExecuteJob:
         job = CronJob(name="e", schedule="interval:10", prompt="prompt", session_strategy="resume:last")
         await scheduler._execute_job(job)
 
+    async def test_resume_last_is_per_job(self, tmp_path, monkeypatch):
+        """resume:last must only continue THIS job's session — not the most
+        recent session in the store (which could be another job's or the
+        user's interactive conversation)."""
+        from microagent.cron.scheduler import CronScheduler, CronJob
+        from microagent.core.store import InMemoryStore
+        from microagent.core.types import Message
+
+        store = InMemoryStore()
+        # Another job's conversation + a user's interactive session
+        await store.append("cron-other", Message.user("other job secret"))
+        await store.append("default", Message.user("user interactive chat"))
+        # This job's own previous run
+        await store.append("cron-myjob", Message.user("my previous tick"))
+
+        seen = {}
+
+        class FakeAgent:
+            async def arun(self, messages):
+                seen["contents"] = [m.content for m in messages]
+                return "ok"
+
+        scheduler = CronScheduler(agent=FakeAgent(), store=store)
+        job = CronJob(name="myjob", schedule="interval:30", prompt="tick", session_strategy="resume:last")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        await scheduler._execute_job(job)
+        assert "my previous tick" in seen["contents"]
+        assert "tick" in seen["contents"]
+        assert "other job secret" not in seen["contents"]
+        assert "user interactive chat" not in seen["contents"]
+
+    async def test_execute_job_sets_per_job_session_id(self, tmp_path, monkeypatch):
+        """The shared runner runs cron jobs under a cron-<job> session id,
+        restored afterwards."""
+        from microagent.cron.scheduler import CronScheduler, CronJob
+        from microagent.core.types import Message
+
+        sids = []
+
+        class FakeRunner:
+            session_id = "default"
+
+        class FakeAgent:
+            runner = FakeRunner()
+
+            async def arun(self, messages):
+                sids.append(self.runner.session_id)
+                return "ok"
+
+        scheduler = CronScheduler(agent=FakeAgent())
+        job = CronJob(name="myjob", schedule="interval:30", prompt="x")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        await scheduler._execute_job(job)
+        assert sids == ["cron-myjob"]
+        assert scheduler.agent.runner.session_id == "default"
+
     async def test_agent_error_is_logged(self, caplog):
         import logging
         from microagent.cron.scheduler import CronScheduler, CronJob
