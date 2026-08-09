@@ -105,3 +105,44 @@ class TestProviderWrite:
     async def test_prefetch_noop(self, provider):
         # prefetch is a noop — just ensure it doesn't crash
         await provider.prefetch("anything")
+
+
+class TestProviderInsertSemantics:
+    async def test_rewrite_same_id_clears_stale_fts(self, provider):
+        """INSERT OR REPLACE used to change the rowid and orphan the old
+        FTS entry — a rewrite must clear the stale text from the index."""
+        await provider.batch_write((
+            Memory(id="m1", content="alpha unicorn fact", category="fact", created_at=1.0),
+        ))
+        await provider.batch_write((
+            Memory(id="m1", content="beta dragon fact", category="fact", created_at=2.0),
+        ))
+        assert len(await provider.recall("beta", k=5)) == 1
+        # Stale content must be gone from the FTS index
+        assert len(await provider.recall("unicorn", k=5)) == 0
+
+    async def test_idempotent_rewrite_same_content(self, provider):
+        """Re-writing identical (id, content) is a no-op — the FTS index
+        must not accumulate duplicate entries."""
+        mem = Memory(id="m1", content="same content here", category="fact", created_at=1.0)
+        await provider.batch_write((mem,))
+        await provider.batch_write((mem,))
+        results = await provider.recall("same content", k=5)
+        assert len(results) == 1
+
+    async def test_recall_respects_lock(self, provider):
+        """recall runs sync sqlite3 under the provider lock — holding the
+        lock must block it, proving it no longer runs on the event loop."""
+        import asyncio
+
+        await provider.batch_write((
+            Memory(id="m1", content="lock test fact", category="fact", created_at=1.0),
+        ))
+        await provider._lock.acquire()
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(provider.recall("lock", k=1), timeout=0.3)
+        finally:
+            provider._lock.release()
+        results = await provider.recall("lock", k=1)
+        assert len(results) == 1

@@ -7,6 +7,7 @@ provides full-text search with zero external dependencies.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -101,12 +102,25 @@ class SQLiteMemoryProvider:
         # busy_timeout so concurrent writers (CLI + agent, multiple agents)
         # wait instead of crashing with "database is locked". WAL mode is
         # enabled before any writes so the schema script runs in WAL.
-        self._conn = sqlite3.connect(str(self._path), timeout=30)
+        # check_same_thread=False: all access is serialized by self._lock
+        # via asyncio.to_thread (same discipline as SQLiteStore), so the
+        # connection legitimately crosses threads — never concurrently.
+        self._conn = sqlite3.connect(str(self._path), timeout=30, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(self.SCHEMA)
+        # All DB work runs under this lock via asyncio.to_thread — the same
+        # discipline as session/search.py + SQLiteStore. Previously every
+        # public async method ran synchronous sqlite3 directly on the event
+        # loop thread: recall() during a turn blocked streaming/tool calls,
+        # and concurrent writers raced on the shared connection.
+        self._lock = asyncio.Lock()
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection.
+
+        Synchronous by design (called from test teardown / sync cleanup);
+        a one-shot close at shutdown is acceptable — unlike per-turn I/O.
+        """
         self._conn.close()
 
     async def prefetch(self, query: str) -> None:
@@ -130,6 +144,10 @@ class SQLiteMemoryProvider:
         # CJK queries bypass FTS: unicode61 indexes CJK runs as single
         # tokens (no segmentation), so FTS MATCH misses substrings like
         # '代码' inside '用户的代码审查...'. LIKE substring is correct here.
+        async with self._lock:
+            return await asyncio.to_thread(self._recall_sync, query, k)
+
+    def _recall_sync(self, query: str, k: int) -> tuple[Memory, ...]:
         from ..session.search import _CJK_RE
 
         if _CJK_RE.search(query):
@@ -195,6 +213,10 @@ class SQLiteMemoryProvider:
         )
 
     async def sync_turn(self, session_id: str, history: tuple[Message, ...]) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._sync_turn_sync, session_id, history)
+
+    def _sync_turn_sync(self, session_id: str, history: tuple[Message, ...]) -> None:
         # Store recent messages as basic context memories
         now = time.time()
         for i, msg in enumerate(history[-5:]):  # last 5 messages
@@ -212,10 +234,18 @@ class SQLiteMemoryProvider:
             )
 
     async def batch_write(self, memories: tuple[Memory, ...]) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._batch_write_sync, memories)
+
+    def _batch_write_sync(self, memories: tuple[Memory, ...]) -> None:
         for m in memories:
             self._insert(m)
 
     async def delete(self, memory_id: str) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._delete_sync, memory_id)
+
+    def _delete_sync(self, memory_id: str) -> None:
         row = self._conn.execute(
             "SELECT rowid, content FROM memories WHERE id = ?", (memory_id,)
         ).fetchone()
@@ -235,8 +265,26 @@ class SQLiteMemoryProvider:
         return ""
 
     def _insert(self, m: Memory) -> None:
+        # INSERT OR REPLACE changed the rowid on every rewrite, orphaning
+        # the old rowid's FTS entry (external-content FTS5 doesn't sync
+        # itself) — index bloat plus stale tokens re-attached to unrelated
+        # memories when the rowid was reused. Explicit handling instead:
+        existing = self._conn.execute(
+            "SELECT rowid, content FROM memories WHERE id = ?", (m.id,)
+        ).fetchone()
+        if existing and existing[1] == m.content:
+            return  # idempotent re-write — nothing to do
+        if existing:
+            # Clear the old FTS entry (delete requires the exact original
+            # text, same contract as delete()) then the old row.
+            self._conn.execute(
+                "INSERT INTO memories_fts(memories_fts, rowid, content) "
+                "VALUES('delete', ?, ?)",
+                (existing[0], existing[1]),
+            )
+            self._conn.execute("DELETE FROM memories WHERE id = ?", (m.id,))
         self._conn.execute(
-            "INSERT OR REPLACE INTO memories "
+            "INSERT INTO memories "
             "(id, content, category, created_at, session_id, visibility, metadata) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
@@ -253,7 +301,7 @@ class SQLiteMemoryProvider:
         rowid = self._conn.execute("SELECT rowid FROM memories WHERE id = ?", (m.id,)).fetchone()
         if rowid:
             self._conn.execute(
-                "INSERT OR REPLACE INTO memories_fts(rowid, content) VALUES (?, ?)",
+                "INSERT INTO memories_fts(rowid, content) VALUES (?, ?)",
                 (rowid[0], m.content),
             )
         # Commit so writes survive a process restart — Python's sqlite3
