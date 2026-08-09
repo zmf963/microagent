@@ -143,3 +143,125 @@ class TestDockerTerminal:
         r = await t.run("sleep 10", timeout=0.1)
         assert r.is_timeout is True
         assert "timed out" in r.stderr
+
+    @pytest.mark.asyncio
+    async def test_uses_sh_not_bash(self, monkeypatch):
+        """Default alpine image has no bash — the shell must be sh."""
+        from microagent.terminal import backend
+        from microagent.terminal.backend import DockerTerminal
+
+        class _Proc:
+            returncode = 0
+            async def communicate(self):
+                return b"", b""
+            async def kill(self): pass
+            async def wait(self): pass
+
+        captured = {}
+
+        async def _fake_exec(*args, **kwargs):
+            captured["cmd"] = args
+            return _Proc()
+
+        monkeypatch.setattr(backend.asyncio, "create_subprocess_exec", _fake_exec)
+        t = DockerTerminal()
+        await t.run("echo hi")
+        cmd = captured["cmd"]
+        assert "sh" in cmd and "bash" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_timeout_force_removes_container(self, monkeypatch):
+        """Killing the docker CLI doesn't stop the container daemon-side —
+        a timed-out run must `docker rm -f` the named container."""
+        from microagent.terminal import backend
+        from microagent.terminal.backend import DockerTerminal
+
+        calls = []
+
+        class _Proc:
+            async def communicate(self):
+                raise TimeoutError()
+            async def kill(self): pass
+            async def wait(self): pass
+
+        async def _fake_exec(*args, **kwargs):
+            calls.append(args)
+            return _Proc()
+
+        monkeypatch.setattr(backend.asyncio, "create_subprocess_exec", _fake_exec)
+        t = DockerTerminal()
+        await t.run("sleep 10", timeout=0.1)
+        rm_calls = [c for c in calls if c[:2] == ("docker", "rm")]
+        assert rm_calls, "expected a docker rm -f call after timeout"
+        assert "-f" in rm_calls[0] and t._name in rm_calls[0]
+
+    @pytest.mark.asyncio
+    async def test_cancel_kills_and_removes(self, monkeypatch):
+        """CancelledError (interrupt) must kill the CLI and remove the
+        container, then propagate."""
+        import asyncio as _aio
+        from microagent.terminal import backend
+        from microagent.terminal.backend import DockerTerminal
+
+        killed = []
+        calls = []
+
+        class _Proc:
+            async def communicate(self):
+                await _aio.Event().wait()  # hangs until cancelled
+            def kill(self):
+                killed.append(True)
+            async def wait(self): pass
+
+        async def _fake_exec(*args, **kwargs):
+            calls.append(args)
+            return _Proc()
+
+        monkeypatch.setattr(backend.asyncio, "create_subprocess_exec", _fake_exec)
+        t = DockerTerminal()
+        task = _aio.create_task(t.run("sleep 60"))
+        await _aio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+            raise AssertionError("expected CancelledError")
+        except _aio.CancelledError:
+            pass
+        assert killed
+        assert any(c[:2] == ("docker", "rm") for c in calls)
+
+
+class TestLocalTerminalCancel:
+    @pytest.mark.asyncio
+    async def test_cancel_kills_subprocess(self):
+        """Cancelling run() must kill the subprocess, not orphan it."""
+        import asyncio as _aio
+        import os
+        import signal
+        from microagent.terminal.backend import LocalTerminal
+
+        marker = f"sleep-marker-{os.getpid()}"
+        t = LocalTerminal()
+        task = _aio.create_task(t.run(f"exec sleep 300 # {marker}"))
+        await _aio.sleep(0.2)
+        # Find the child sleep process before cancel
+        pgrep = await _aio.create_subprocess_exec(
+            "pgrep", "-f", marker,
+            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.DEVNULL,
+        )
+        out, _ = await pgrep.communicate()
+        pids_before = out.decode().split()
+        task.cancel()
+        try:
+            await task
+            raise AssertionError("expected CancelledError")
+        except _aio.CancelledError:
+            pass
+        # Give the OS a moment, then verify the child is gone
+        await _aio.sleep(0.1)
+        for pid in pids_before:
+            try:
+                os.kill(int(pid), 0)
+                raise AssertionError(f"orphaned subprocess still alive: {pid}")
+            except ProcessLookupError:
+                pass

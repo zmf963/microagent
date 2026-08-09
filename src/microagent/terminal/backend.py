@@ -108,6 +108,18 @@ class LocalTerminal:
                 exit_code=-1,
                 timed_out=True,
             )
+        except asyncio.CancelledError:
+            # Cancellation (interrupt / budget exhaustion) is BaseException
+            # and bypasses `except Exception` — kill the subprocess before
+            # propagating or it keeps running as an orphan (bash.py and
+            # execute_code.py already handle this path).
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            raise
         except Exception as e:
             return TerminalResult.ok(
                 stdout="",
@@ -138,7 +150,9 @@ class DockerTerminal:
     ) -> TerminalResult:
         proc = None
         try:
-            # docker run --rm <image> bash -c "<command>"
+            # docker run --rm <image> sh -c "<command>"
+            # sh (not bash): the default alpine image has no bash, so the
+            # previous default configuration always failed with exit 127.
             docker_cmd = [
                 "docker",
                 "run",
@@ -151,7 +165,7 @@ class DockerTerminal:
             if env:
                 for k, v in env.items():
                     docker_cmd.extend(["-e", f"{k}={v}"])
-            docker_cmd.extend([self._image, "bash", "-c", command])
+            docker_cmd.extend([self._image, "sh", "-c", command])
 
             proc = await asyncio.create_subprocess_exec(
                 *docker_cmd,
@@ -171,15 +185,42 @@ class DockerTerminal:
                     await proc.wait()
                 except Exception:
                     pass
+            # Killing the local docker CLI does not stop the container —
+            # it keeps running daemon-side and blocks the fixed --name for
+            # every subsequent run(). Force-remove it.
+            await self._force_remove_container()
             return TerminalResult.ok(
                 stdout="",
                 stderr="command timed out",
                 exit_code=-1,
                 timed_out=True,
             )
+        except asyncio.CancelledError:
+            # Same orphan-kill contract as LocalTerminal: propagate the
+            # cancellation, but don't leave the container running.
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            await self._force_remove_container()
+            raise
         except FileNotFoundError:
             return TerminalResult.ok(
                 stdout="",
                 stderr="docker not found — is Docker installed?",
                 exit_code=127,
             )
+
+    async def _force_remove_container(self) -> None:
+        """Best-effort `docker rm -f` for the named container."""
+        try:
+            rm = await asyncio.create_subprocess_exec(
+                "docker", "rm", "-f", self._name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(rm.wait(), timeout=5)
+        except Exception:
+            pass
