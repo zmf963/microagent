@@ -133,6 +133,30 @@ class TestSessionRunnerContextSource:
         assert any(isinstance(ev, TurnComplete) for ev in events)
 
 
+class TestExitTool:
+    async def test_session_exit_marker_ends_turn(self):
+        """The exit tool's [SESSION_EXIT] marker must terminate the turn —
+        previously nothing consumed it and the loop continued."""
+        from microagent.core.tool import _default_builtins
+        from microagent.core.types import TurnComplete
+        from tests.unit.fake_llm import tool_response
+
+        registry = ToolRegistry(_default_builtins())
+        llm = FakeLLMClient([
+            tool_response([("tc1", "exit", {})]),
+            text_response("should never be requested"),
+        ])
+        runner = SessionRunner(llm=llm, registry=registry)
+        events = []
+        async for ev in runner.run_turn([Message.user("do work then exit")]):
+            events.append(ev)
+        completes = [ev for ev in events if isinstance(ev, TurnComplete)]
+        assert completes, "exit tool must end the turn with TurnComplete"
+        assert "session ended" in completes[-1].content
+        # Only ONE LLM call — the loop must not continue after the marker
+        assert len(llm.calls) == 1
+
+
 class TestToolsCacheRefresh:
     async def test_mid_session_registration_reaches_llm(self):
         """mcp_connect-style mid-session register() must invalidate the

@@ -884,6 +884,14 @@ class SessionRunner:
                         )
                         break
 
+            # The exit tool's contract is "the session should end" — its
+            # [SESSION_EXIT] marker must actually terminate the turn here.
+            # Previously NOTHING consumed the marker: the loop continued,
+            # the LLM got another iteration, and the exit call was a no-op.
+            if any(r.content.strip() == "[SESSION_EXIT]" for r in results):
+                yield TurnComplete("(session ended by exit tool)")
+                return
+
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")
 
     async def _run_tool_calls(
