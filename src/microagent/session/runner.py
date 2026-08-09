@@ -107,12 +107,14 @@ class SessionRunner:
         # asyncio.Lock is held across the whole async generator — interrupt()
         # only sets a flag and never needs the lock, so no deadlock.
         self._turn_lock = asyncio.Lock()
-        # Dedupe state for user-message persistence: the actual store tail
-        # (role, content) as known to this runner, kept current by _append.
-        # None until the first lazy tail check (avoids a history load per
-        # turn for runners that never persist).
-        self._store_tail: tuple[str, str] | None = None
-        self._tail_checked = False
+        # Dedupe state for user-message persistence, keyed by session_id:
+        # the actual store tail (role, content) per session as known to
+        # this runner, kept current by _append. Keying matters because the
+        # cron scheduler temporarily runs this runner under per-job session
+        # ids — a single global tail would compare against the WRONG
+        # session's messages after a cron tick.
+        self._store_tail: dict[str, tuple[str, str]] = {}
+        self._tail_checked: set[str] = set()
 
         # Per-session state (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -328,7 +330,7 @@ class SessionRunner:
                 return f"'{verb} {tokens[1]}' modifies the environment — not allowed in plan mode"
         return None
 
-    async def _process_tool_output_async(self, tool_call_id: str, result) -> Any:
+    async def _process_tool_output_async(self, tool_call_id: str, result, sid: str) -> Any:
         """Apply ToolOutputStore size management to tool results (non-blocking)."""
         from ..tools.output_store import ToolOutputStore
 
@@ -336,7 +338,7 @@ class SessionRunner:
             self._output_store = ToolOutputStore()
         processed = await self._output_store.process_async(
             tool_call_id, result.content, result.metadata.get("tool_name", "unknown") if result.metadata else "unknown",
-            session_id=self.session_id,
+            session_id=sid,
         )
         if processed.saved_to_disk:
             return type(result)(content=processed.content, is_error=result.is_error, metadata=result.metadata)
@@ -383,12 +385,17 @@ class SessionRunner:
         resume. The turn lock makes them strictly sequential.
         Cross-INSTANCE sharing of one session_id is NOT guarded — embedders
         must not point two runners at the same session concurrently.
+
+        The session id is captured ONCE under the turn lock: the cron
+        scheduler swaps runner.session_id around its own arun, and an
+        in-flight turn must keep writing to the session it started in.
         """
         async with self._turn_lock:
-            async for event in self._run_turn_inner(messages):
+            sid = self.session_id
+            async for event in self._run_turn_inner(messages, sid):
                 yield event
 
-    async def _persist_user_tail(self, last: Message) -> None:
+    async def _persist_user_tail(self, last: Message, sid: str) -> None:
         """Append the trailing user message to the store, deduplicated.
 
         Two paths used to write the SAME message twice: (a) resume() loads
@@ -402,34 +409,40 @@ class SessionRunner:
         a completed turn leaves an assistant (or tool) tail, so the guard
         only fires when nothing was persisted after that user message.
         """
-        if not self._tail_checked:
-            self._tail_checked = True
+        if sid not in self._tail_checked:
+            self._tail_checked.add(sid)
             try:
-                history = await self.store.load_history(self.session_id)
+                history = await self.store.load_history(sid)
             except Exception:
                 history = []
             if history:
-                self._store_tail = (history[-1].role, history[-1].content)
-        if self._store_tail == ("user", last.content):
+                self._store_tail[sid] = (history[-1].role, history[-1].content)
+        if self._store_tail.get(sid) == ("user", last.content):
             return
-        await self._append(self.session_id, last)
+        await self._append(sid, last)
 
     async def _append(self, session_id: str, msg: Message) -> None:
         """Store append that keeps the known store tail current — the
         user-message dedupe in _persist_user_tail relies on it."""
         await self.store.append(session_id, msg)
-        self._store_tail = (msg.role, msg.content)
+        self._store_tail[session_id] = (msg.role, msg.content)
 
     async def _run_turn_inner(
         self,
         messages: list[Message],
+        sid: str,
     ) -> AsyncIterator[Event]:
-        """Turn implementation — must only be entered under _turn_lock."""
+        """Turn implementation — must only be entered under _turn_lock.
+
+        ``sid`` is the session id captured under the turn lock; all store
+        writes and events in this turn use it, immune to mid-turn swaps of
+        ``self.session_id`` (the cron scheduler does that around its arun).
+        """
 
         if self.store is not None and messages:
             last = messages[-1]
             if last.role == "user":
-                await self._persist_user_tail(last)
+                await self._persist_user_tail(last, sid)
 
         self._overflow_retried = False
         self._stream_retried = False  # one-shot stream-error retry per turn
@@ -745,7 +758,7 @@ class SessionRunner:
                                 )
                                 messages.append(assistant_msg)
                                 if self.store is not None:
-                                    await self._append(self.session_id, assistant_msg)
+                                    await self._append(sid, assistant_msg)
                                 if usage:
                                     try:
                                         await self.budget.consume_usage(usage)
@@ -784,7 +797,7 @@ class SessionRunner:
             messages.append(assistant_msg)
 
             if self.store is not None:
-                await self._append(self.session_id, assistant_msg)
+                await self._append(sid, assistant_msg)
 
             if usage:
                 yield usage
@@ -797,7 +810,7 @@ class SessionRunner:
             if not tool_calls:
                 if self.event_bus:
                     await self.event_bus.emit(
-                        "turn_complete", self.session_id, assistant_msg.content
+                        "turn_complete", sid, assistant_msg.content
                     )
                 if self._extractor is not None:
                     try:
@@ -829,7 +842,7 @@ class SessionRunner:
                     )
                     messages.append(msg)
                     if self.store is not None:
-                        await self._append(self.session_id, msg)
+                        await self._append(sid, msg)
                 raise
 
             # Yield progress events before results (real-time UX)
@@ -838,11 +851,11 @@ class SessionRunner:
 
             for tc, result in zip(tool_calls, results):
                 # Apply output size management if result is large
-                processed = await self._process_tool_output_async(tc.id, result)
+                processed = await self._process_tool_output_async(tc.id, result, sid)
                 msg = Message.tool_result(processed, tool_call_id=tc.id)
                 messages.append(msg)
                 if self.store is not None:
-                    await self._append(self.session_id, msg)
+                    await self._append(sid, msg)
                 yield ToolResultDelta(
                     id=tc.id,
                     name=tc.name,

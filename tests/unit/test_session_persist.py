@@ -123,6 +123,36 @@ class TestSessionPersistence:
         users = [m for m in history if m.role == "user" and m.content == "继续"]
         assert len(users) == 2
 
+    async def test_turn_pins_session_id_against_mid_turn_swap(self):
+        """The cron scheduler swaps runner.session_id around its own arun.
+        An in-flight turn must keep writing to the session it STARTED in —
+        store appends, output-store paths and turn_complete all use the
+        pinned id captured under the turn lock."""
+        from microagent.core.tool import tool as tool_decorator
+        from microagent.core.types import ToolResult
+        from tests.unit.fake_llm import tool_response
+
+        store = InMemoryStore()
+        llm = FakeLLMClient([
+            tool_response([("tc1", "swapper", {})]),
+            text_response("final answer"),
+        ])
+
+        @tool_decorator("swapper", description="swaps session id mid-turn")
+        async def _swapper() -> ToolResult:
+            runner.session_id = "cron-job"  # simulate cron tick interleaving
+            return ToolResult.ok("swapped")
+
+        runner = SessionRunner(llm=llm, registry=ToolRegistry([_swapper]), store=store)
+        messages = [Message.user("go")]
+        async for _ in runner.run_turn(messages):
+            pass
+
+        default_hist = await store.load_history("default")
+        cron_hist = await store.load_history("cron-job")
+        assert any(m.content == "final answer" for m in default_hist)
+        assert cron_hist == []
+
     async def test_store_is_optional(self):
         """Store=None should work without errors (backward compat)."""
         llm = FakeLLMClient([text_response("ok")])
