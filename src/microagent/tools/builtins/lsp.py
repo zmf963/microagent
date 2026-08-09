@@ -585,10 +585,14 @@ async def lsp(
             syms = await client.symbols(str(p))
             if not syms:
                 return ToolResult.ok("(no symbols found)")
-            out = [f"Symbols in {filepath}:"]
-            for s in syms:
+            # Cap like references (50) — a 5000-symbol file otherwise
+            # produced an unbounded ToolResult (>100KB).
+            out = [f"Symbols in {filepath} ({len(syms)} total):"]
+            for s in syms[:200]:
                 indent = "    " if s.get("depth") else ""
                 out.append(f"  {s['line']:5d} [{s['kind']}] {indent}{s['name']}")
+            if len(syms) > 200:
+                out.append(f"  ... and {len(syms) - 200} more (showing first 200)")
             return ToolResult.ok("\n".join(out))
 
         elif action == "definition":

@@ -100,3 +100,37 @@ class TestLSPToolErrorPaths:
         from microagent.tools.builtins.lsp import lsp
         r = await lsp.fn(action="symbols", filepath="/nonexistent/file.py")
         assert r.is_error
+
+
+class TestSymbolsTruncation:
+    @pytest.mark.asyncio
+    async def test_symbols_capped_at_200(self, tmp_path, monkeypatch):
+        """A huge symbol list must be truncated like references (50) —
+        a 5000-symbol file otherwise produced an unbounded ToolResult."""
+        from microagent.core.tool import ToolRegistry
+        from microagent.core.types import ToolCall
+        from microagent.tools.builtins import lsp as lsp_mod
+
+        f = tmp_path / "big.py"
+        f.write_text("x = 1\n")
+
+        class _FakeClient:
+            async def symbols(self, filepath):
+                return [
+                    {"name": f"sym{i}", "kind": "function", "line": i, "depth": 0}
+                    for i in range(300)
+                ]
+
+        async def _fake_get_client(fp):
+            return _FakeClient()
+
+        monkeypatch.setattr(lsp_mod, "_get_client", _fake_get_client)
+        registry = ToolRegistry([lsp_mod.lsp])
+        result = await registry.execute(
+            ToolCall(id="c1", name="lsp", arguments={"action": "symbols", "filepath": str(f)})
+        )
+        assert not result.is_error
+        assert "300 total" in result.content
+        assert "and 100 more" in result.content
+        # 1 header + 200 symbols + 1 truncation note
+        assert len(result.content.splitlines()) == 202
