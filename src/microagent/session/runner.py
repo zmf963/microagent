@@ -14,6 +14,7 @@ yield ToolProgressDelta events for real-time display.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Any
@@ -41,6 +42,8 @@ from ..core.types import (
 )
 from ..llm.client import LLMClient, StreamDone
 from .budget import Budget, BudgetExceeded
+
+logger = logging.getLogger(__name__)
 
 
 class SessionRunner:
@@ -534,7 +537,14 @@ class SessionRunner:
                         pass
 
             for src in self.context_sources:
-                contribution = await src.contribute(None)
+                try:
+                    contribution = await src.contribute(None)
+                except Exception:
+                    # A failing ContextSource (network lookup, bug in a
+                    # plugin) must not crash the whole turn — same
+                    # fault-tolerance contract as the skill loader above.
+                    logger.warning("context source %r failed", src, exc_info=True)
+                    continue
                 if contribution:
                     context_parts.append(contribution)
 
@@ -570,7 +580,12 @@ class SessionRunner:
             # naturally invalidate the cache every turn — that's correct.
             hooked_system = system
             for hook in self.pre_llm_hooks:
-                hooked_system = await hook(hooked_system)
+                try:
+                    hooked_system = await hook(hooked_system)
+                except Exception:
+                    # Keep the last good system prompt; a broken hook must
+                    # not abort the turn.
+                    logger.warning("pre_llm_hook %r failed", hook, exc_info=True)
 
             if self._cached_system is None or hooked_system != self._cached_system or self.mode != self._cached_mode:
                 self._cached_system = hooked_system

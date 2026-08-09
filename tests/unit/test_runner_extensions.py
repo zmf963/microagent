@@ -108,3 +108,45 @@ class TestSessionRunnerContextSource:
         user_msgs = [m for m in runner.llm.calls[0]["messages"] if m.role == "user"]
         user_content = " ".join(m.content for m in user_msgs)
         assert "git: main" in user_content
+
+    async def test_failing_context_source_does_not_crash_turn(self):
+        """A ContextSource that raises must be skipped, not crash the turn
+        (same fault-tolerance contract as the skill loader)."""
+
+        class ExplodingSource:
+            async def contribute(self, ctx):
+                raise RuntimeError("network lookup failed")
+
+        class GoodSource:
+            async def contribute(self, ctx):
+                return "\ngood context"
+
+        runner = SessionRunner(
+            llm=FakeLLMClient([text_response("ok")]),
+            registry=ToolRegistry(),
+            context_sources=(ExplodingSource(), GoodSource()),
+        )
+        events = []
+        async for ev in runner.run_turn([Message.user("hi")]):
+            events.append(ev)
+        from microagent.core.types import TurnComplete
+        assert any(isinstance(ev, TurnComplete) for ev in events)
+
+    async def test_failing_pre_llm_hook_keeps_last_good_system(self):
+        """A pre_llm_hook that raises must not abort the turn; the previous
+        system prompt is kept."""
+
+        class ExplodingHook:
+            async def __call__(self, system):
+                raise ValueError("hook bug")
+
+        runner = SessionRunner(
+            llm=FakeLLMClient([text_response("ok")]),
+            registry=ToolRegistry(),
+            pre_llm_hooks=(ExplodingHook(),),
+        )
+        events = []
+        async for ev in runner.run_turn([Message.user("hi")]):
+            events.append(ev)
+        from microagent.core.types import TurnComplete
+        assert any(isinstance(ev, TurnComplete) for ev in events)
