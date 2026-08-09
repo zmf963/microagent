@@ -12,13 +12,21 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-# Patterns that indicate injection attempts
+# Patterns that indicate injection attempts. The paired-tag patterns are
+# complemented by OPENING-tag-only patterns: an unclosed <context> or
+# <system-reminder> otherwise sailed through — and the runner wraps
+# injected context in a real <context> block, so an unclosed opening tag
+# from a malicious skill/memory re-tags everything after it as trusted
+# runner-generated context.
 _INJECTION_PATTERNS = [
     re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"</?system-reminder>", re.IGNORECASE),
     re.compile(r"</system>", re.IGNORECASE),
     re.compile(r"<system\b[^>]*>", re.IGNORECASE),
     re.compile(r"<context>.*?</context>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"</?context>", re.IGNORECASE),
     re.compile(r"<memory-context>.*?</memory-context>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"</?memory-context>", re.IGNORECASE),
 ]
 
 _BLOCKED_PLACEHOLDER = "[BLOCKED: injection pattern detected]"
