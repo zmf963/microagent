@@ -106,6 +106,12 @@ class SessionRunner:
         # asyncio.Lock is held across the whole async generator — interrupt()
         # only sets a flag and never needs the lock, so no deadlock.
         self._turn_lock = asyncio.Lock()
+        # Dedupe state for user-message persistence: the actual store tail
+        # (role, content) as known to this runner, kept current by _append.
+        # None until the first lazy tail check (avoids a history load per
+        # turn for runners that never persist).
+        self._store_tail: tuple[str, str] | None = None
+        self._tail_checked = False
 
         # Per-session state (isolation between concurrent agents)
         from ..tools.builtins import browser as _br_module
@@ -381,6 +387,38 @@ class SessionRunner:
             async for event in self._run_turn_inner(messages):
                 yield event
 
+    async def _persist_user_tail(self, last: Message) -> None:
+        """Append the trailing user message to the store, deduplicated.
+
+        Two paths used to write the SAME message twice: (a) resume() loads
+        a history whose last message is an unanswered user message (crash
+        before the assistant reply) and the caller passes it back in;
+        (b) a turn ends in TurnFailed (budget/interrupt) and the caller
+        retries with the same messages list. Both produced duplicate user
+        messages in the store — and on resume, history the model never
+        actually saw. Skip the append when the store tail already IS this
+        message. Identical consecutive user texts are not falsely skipped:
+        a completed turn leaves an assistant (or tool) tail, so the guard
+        only fires when nothing was persisted after that user message.
+        """
+        if not self._tail_checked:
+            self._tail_checked = True
+            try:
+                history = await self.store.load_history(self.session_id)
+            except Exception:
+                history = []
+            if history:
+                self._store_tail = (history[-1].role, history[-1].content)
+        if self._store_tail == ("user", last.content):
+            return
+        await self._append(self.session_id, last)
+
+    async def _append(self, session_id: str, msg: Message) -> None:
+        """Store append that keeps the known store tail current — the
+        user-message dedupe in _persist_user_tail relies on it."""
+        await self.store.append(session_id, msg)
+        self._store_tail = (msg.role, msg.content)
+
     async def _run_turn_inner(
         self,
         messages: list[Message],
@@ -390,7 +428,7 @@ class SessionRunner:
         if self.store is not None and messages:
             last = messages[-1]
             if last.role == "user":
-                await self.store.append(self.session_id, last)
+                await self._persist_user_tail(last)
 
         self._overflow_retried = False
         self._stream_retried = False  # one-shot stream-error retry per turn
@@ -696,7 +734,7 @@ class SessionRunner:
                                 )
                                 messages.append(assistant_msg)
                                 if self.store is not None:
-                                    await self.store.append(self.session_id, assistant_msg)
+                                    await self._append(self.session_id, assistant_msg)
                                 if usage:
                                     try:
                                         await self.budget.consume_usage(usage)
@@ -735,7 +773,7 @@ class SessionRunner:
             messages.append(assistant_msg)
 
             if self.store is not None:
-                await self.store.append(self.session_id, assistant_msg)
+                await self._append(self.session_id, assistant_msg)
 
             if usage:
                 yield usage
@@ -780,7 +818,7 @@ class SessionRunner:
                     )
                     messages.append(msg)
                     if self.store is not None:
-                        await self.store.append(self.session_id, msg)
+                        await self._append(self.session_id, msg)
                 raise
 
             # Yield progress events before results (real-time UX)
@@ -793,7 +831,7 @@ class SessionRunner:
                 msg = Message.tool_result(processed, tool_call_id=tc.id)
                 messages.append(msg)
                 if self.store is not None:
-                    await self.store.append(self.session_id, msg)
+                    await self._append(self.session_id, msg)
                 yield ToolResultDelta(
                     id=tc.id,
                     name=tc.name,

@@ -64,6 +64,65 @@ class TestSessionPersistence:
 
         store.close()
 
+    async def test_no_duplicate_user_on_retry_same_list(self):
+        """A turn that fails (budget exhausted) followed by a retry with the
+        SAME messages list must not persist the trailing user message twice."""
+        from microagent.session.budget import Budget
+
+        store = InMemoryStore()
+        llm = FakeLLMClient([text_response("reply")])
+        runner = SessionRunner(
+            llm=llm, registry=ToolRegistry(), store=store,
+            budget=Budget(max_iterations=0),  # turn fails immediately
+        )
+        messages = [Message.user("same question")]
+        async for _ in runner.run_turn(messages):
+            pass
+        # Retry after raising the budget — same list object
+        runner2 = SessionRunner(
+            llm=FakeLLMClient([text_response("reply")]),
+            registry=ToolRegistry(), store=store,
+        )
+        async for _ in runner2.run_turn(messages):
+            pass
+        history = await store.load_history("default")
+        users = [m for m in history if m.role == "user" and m.content == "same question"]
+        assert len(users) == 1
+
+    async def test_no_duplicate_user_on_resume_unanswered(self):
+        """Resume a session whose tail is an unanswered user message (crash
+        before the assistant reply): passing the loaded history back must
+        not re-persist that message."""
+        store = InMemoryStore()
+        llm = FakeLLMClient([text_response("late answer")])
+        runner = SessionRunner(llm=llm, registry=ToolRegistry(), store=store)
+        await store.append("default", Message.user("unanswered q"))
+        history = await runner.resume("default", store)
+        messages = list(history)
+        async for _ in runner.run_turn(messages):
+            pass
+        final = await store.load_history("default")
+        users = [m for m in final if m.role == "user" and m.content == "unanswered q"]
+        assert len(users) == 1
+
+    async def test_identical_consecutive_user_messages_both_persisted(self):
+        """Dedupe must not eat legit repeats: after a completed turn the
+        store tail is the assistant message, so an identical follow-up IS
+        appended."""
+        store = InMemoryStore()
+        llm = FakeLLMClient([text_response("a1"), text_response("a2")])
+        runner = SessionRunner(llm=llm, registry=ToolRegistry(), store=store)
+        messages = [Message.user("继续")]
+        async for _ in runner.run_turn(messages):
+            pass
+        messages.append(Message.assistant("a1"))
+        messages.append(Message.user("继续"))
+        async for _ in runner.run_turn(messages):
+            pass
+        history = await store.load_history("default")
+        users = [m for m in history if m.role == "user" and m.content == "继续"]
+        assert len(users) == 2
+
     async def test_store_is_optional(self):
         """Store=None should work without errors (backward compat)."""
         llm = FakeLLMClient([text_response("ok")])
