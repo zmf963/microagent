@@ -187,6 +187,7 @@ def count_tokens(messages: tuple[Message, ...]) -> int:
 def micro_compact(
     messages: tuple[Message, ...],
     threshold: int = TRUNCATION_THRESHOLD,
+    keep_recent: int = 4,
 ) -> tuple[Message, ...]:
     """Zero-cost preprocessing: truncate long re-obtainable tool results.
 
@@ -194,6 +195,12 @@ def micro_compact(
     - User messages are never truncated
     - Error messages are never truncated
     - Non-reobtainable tool results are preserved (may contain unique data)
+    - The most recent `keep_recent` tool results are never truncated: the
+      compression check runs at the TOP of each runner iteration, so
+      truncating the just-produced result means the LLM only ever sees the
+      placeholder, re-runs the tool per the placeholder's own hint, and the
+      fresh result gets truncated again — an unbreakable re-read loop that
+      burns the whole budget without the LLM ever reading the file.
     """
     # Build tool_call_id → tool_name mapping from assistant messages
     tc_names: dict[str, str] = {}
@@ -203,8 +210,14 @@ def micro_compact(
                 tc_names[tc.id] = tc.name
 
     result = list(messages)
+    # Indices of the most recent keep_recent tool messages (tail protection)
+    tool_indices = [i for i, m in enumerate(result) if m.role == "tool"]
+    tail_protected = set(tool_indices[-keep_recent:]) if keep_recent > 0 else set()
+
     for i, msg in enumerate(result):
         if msg.role != "tool":
+            continue
+        if i in tail_protected:
             continue
         if msg.is_error:
             continue  # preserve errors

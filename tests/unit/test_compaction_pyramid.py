@@ -11,19 +11,39 @@ from microagent.session.compress import (
 
 class TestMicroCompact:
     def test_truncates_long_tool_results(self):
-        """Tool results >500 chars from re-obtainable tools are summarized."""
+        """Tool results >500 chars from re-obtainable tools are summarized
+        (once they are older than the tail-protection window)."""
         tc = ToolCall(id="c1", name="read_file", arguments={"path": "app.py"})
+        # 5 newer tool results push c1's result out of the keep_recent window
+        newer = tuple(
+            Message.tool_result(ToolResult.ok(f"new-{i}"), tool_call_id=f"n{i}")
+            for i in range(5)
+        )
         messages = (
             Message.user("read app.py"),
             Message.assistant("let me read", tool_calls=(tc,)),
             Message.tool_result(ToolResult.ok("x" * 600), tool_call_id="c1"),
             Message.assistant("file contents: " + "x" * 600),
-        )
+        ) + newer
         result = micro_compact(messages)
         # Tool result should be summarized (shorter than original)
         assert len(result[2].content) < 600
         # Summary contains tool name marker
         assert "[read_file]" in result[2].content
+
+    def test_recent_tool_results_never_truncated(self):
+        """The just-produced tool result must survive micro_compact — the
+        compression check runs at the top of each runner iteration, so
+        truncating it means the LLM only ever sees the placeholder and
+        re-reads the file in an unbreakable loop."""
+        tc = ToolCall(id="c1", name="read_file", arguments={"path": "app.py"})
+        messages = (
+            Message.user("read app.py"),
+            Message.assistant("let me read", tool_calls=(tc,)),
+            Message.tool_result(ToolResult.ok("x" * 600), tool_call_id="c1"),
+        )
+        result = micro_compact(messages)
+        assert result[2].content == "x" * 600  # untouched
 
     def test_preserves_user_messages(self):
         """User messages are never truncated."""
