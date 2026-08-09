@@ -24,6 +24,10 @@ from ..core.types import Message
 # Limits
 MAX_FILES = 3
 MAX_CHARS_PER_FILE = 3000
+# Read cap: never pull more than this from disk. Mentioned files can be
+# huge (logs, datasets); read_text() on the whole file caused memory spikes
+# before the 3000-char truncation ever ran.
+MAX_READ_BYTES = 64 * 1024
 
 
 def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
@@ -46,8 +50,12 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
                             for candidate in _parse_paths_from_string(arg_val):
                                 paths[candidate] = i
 
-        # Content-based fallback — scan message text for explicit path mentions
-        if msg.content:
+        # Content-based fallback — scan message text for explicit path
+        # mentions. Tool RESULT content is deliberately excluded: it is
+        # untrusted (web pages, command output) and a poisoned result could
+        # name sensitive local files (~/.ssh/config, ~/.aws/credentials)
+        # that would then be read from disk and sent to the LLM API.
+        if msg.content and msg.role in ("user", "assistant"):
             for candidate in _parse_paths_from_string(msg.content):
                 paths[candidate] = max(paths.get(candidate, 0), i)
 
@@ -165,8 +173,10 @@ def recover_file_attachments(
     attachments = []
     for fpath in files:
         try:
-            content = Path(fpath).expanduser().read_text()
-        except (OSError, UnicodeDecodeError):
+            with open(Path(fpath).expanduser(), "rb") as fh:
+                raw = fh.read(MAX_READ_BYTES)
+            content = raw.decode("utf-8", errors="replace")
+        except OSError:
             continue
 
         if len(content) > MAX_CHARS_PER_FILE:

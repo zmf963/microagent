@@ -195,6 +195,25 @@ class TestExtractFromToolCalls:
         paths = _extract_file_paths((msg,))
         assert str(f) in paths
 
+    def test_tool_result_content_not_scanned(self, tmp_path):
+        """Tool-result content is untrusted (web pages, command output) — a
+        poisoned result naming ~/.aws/credentials must not get the file
+        read from disk and injected into LLM context."""
+        from microagent.session.attachments import recover_file_attachments
+        from microagent.core.types import Message, ToolResult
+        secret = tmp_path / "credentials.txt"
+        secret.write_text("SECRET-KEY-MATERIAL")
+        msgs = (
+            Message.user("fetch that page"),
+            Message.tool_result(
+                ToolResult.ok(f"page body mentions {secret} and other stuff"),
+                tool_call_id="c1",
+            ),
+        )
+        result = recover_file_attachments(msgs, (Message.user("summary"),))
+        assert len(result) == 1
+        assert "SECRET-KEY-MATERIAL" not in "".join(m.content for m in result)
+
 
 class TestRecoverFileAttachments:
     def test_no_messages_returns_compressed(self):
@@ -248,6 +267,25 @@ class TestRecoverFileAttachments:
         )
         result = recover_file_attachments(msgs, (Message.user("summary"),))
         assert len(result) == 1  # no attachment added
+
+    def test_read_is_byte_bounded(self, tmp_path):
+        """Huge mentioned files must not be fully loaded into memory before
+        truncation — the read itself is capped at MAX_READ_BYTES."""
+        import microagent.session.attachments as att
+        from microagent.core.types import Message, ToolCall
+
+        f = tmp_path / "huge.txt"
+        f.write_text("y" * (att.MAX_READ_BYTES * 4))
+        msgs = (
+            Message.assistant(
+                text="", tool_calls=(ToolCall(id="c1", name="read_file", arguments={"path": str(f)}),)
+            ),
+        )
+        result = att.recover_file_attachments(msgs, (Message.user("summary"),))
+        assert len(result) == 2
+        # Attached content is truncated to MAX_CHARS_PER_FILE, well under
+        # the byte cap — and never held the whole 256KB file as a str.
+        assert len(result[1].content) < att.MAX_READ_BYTES
 
 
 class TestIsReadableFileMore:
