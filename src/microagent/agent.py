@@ -143,6 +143,13 @@ class Agent:
         if self.cron is not None:
             await self.cron.stop()
         await self.runner.close()
+        # Shut down the shared Chromium instance — it is a process-level
+        # singleton, so it is closed here (Agent lifecycle) rather than in
+        # runner.close(), which also runs for subagent child runners and
+        # would kill this session's pages out from under it.
+        from .tools.builtins.browser import close_global_browser
+
+        await close_global_browser()
         # Close the LLM client if it supports close()
         if hasattr(self.runner.llm, "close"):
             await self.runner.llm.close()

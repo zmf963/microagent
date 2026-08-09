@@ -4,6 +4,41 @@ enable_cron, and the sync run() entry point."""
 import pytest
 
 
+class TestBrowserOwnership:
+    @pytest.mark.asyncio
+    async def test_runner_close_keeps_global_browser(self, monkeypatch):
+        """runner.close() must NOT close the process-level shared Chromium —
+        it also runs for subagent child runners and would kill the parent's
+        pages. Global browser cleanup belongs to Agent.close()."""
+        import microagent.tools.builtins.browser as browser_mod
+        from microagent import Agent
+        from microagent.llm.client import LLMConfig
+
+        closed = []
+        async def fake_close():
+            closed.append(True)
+        monkeypatch.setattr(browser_mod, "close_global_browser", fake_close)
+
+        agent = Agent.from_config(LLMConfig(base_url="http://x", api_key="k", model="m"))
+        await agent.runner.close()
+        assert closed == []
+
+    @pytest.mark.asyncio
+    async def test_agent_close_closes_global_browser(self, monkeypatch):
+        import microagent.tools.builtins.browser as browser_mod
+        from microagent import Agent
+        from microagent.llm.client import LLMConfig
+
+        closed = []
+        async def fake_close():
+            closed.append(True)
+        monkeypatch.setattr(browser_mod, "close_global_browser", fake_close)
+
+        agent = Agent.from_config(LLMConfig(base_url="http://x", api_key="k", model="m"))
+        await agent.close()
+        assert closed == [True]
+
+
 class TestFromConfigOptions:
     def test_with_custom_tools(self):
         import uuid

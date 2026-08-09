@@ -157,11 +157,11 @@ class SessionRunner:
                 pass
             self._browser_state.page = None
 
-        # Shut down the shared Chromium instance so short-lived embeddings
-        # don't leak headless browser processes across Agent lifecycles.
-        from ..tools.builtins.browser import close_global_browser
-
-        await close_global_browser()
+        # NOTE: the shared Chromium instance is deliberately NOT closed here.
+        # It is a process-level singleton shared across sessions (browser.py);
+        # runner.close() also runs for subagent child runners, so closing it
+        # here would kill the parent's pages and any concurrent session's
+        # browser. Process-level cleanup belongs to Agent.close().
 
         if self._extractor is not None:
             await self._extractor.close()
