@@ -113,11 +113,20 @@ class MemoryExtractor:
 
     @staticmethod
     def _build_prompt(history: tuple[dict[str, str], ...]) -> str:
-        """Build the extraction prompt from conversation history."""
+        """Build the extraction prompt from conversation history.
+
+        Bounded: history entries carry full tool results (up to ~50KB each),
+        and the extraction call ran unbounded every turn. Cap each message
+        and the total.
+        """
         lines = []
+        total = 0
         for msg in history[-10:]:  # last 10 messages
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = msg.get("content", "")[:2000]
+            if total + len(content) > 20_000:
+                break
+            total += len(content)
             lines.append(f"{role}: {content}")
         return EXTRACTION_PROMPT.format(history="\n".join(lines))
 

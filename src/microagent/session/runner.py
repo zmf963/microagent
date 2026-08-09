@@ -155,7 +155,10 @@ class SessionRunner:
                 provider=self.memory,
                 base_url=self.llm.config.base_url,
                 api_key=self.llm.config.api_key,
-                model=self.llm.config.model,
+                # Fire-and-forget extraction every turn shouldn't burn the
+                # (usually expensive) main model when a cheaper auxiliary
+                # model is configured.
+                model=self.llm.config.auxiliary_model or self.llm.config.model,
             )
 
     async def close(self) -> None:

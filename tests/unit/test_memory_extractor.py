@@ -144,3 +144,26 @@ class TestLifecycle:
             await extractor._extract(({"role": "user", "content": "hi"},))
         # error logged at debug, not raised
         assert any("Memory extraction failed" in r.message for r in caplog.records)
+
+
+class TestBuildPromptBounds:
+    def test_prompt_is_bounded(self):
+        """Full tool results (~50KB each) must not flow unbounded into the
+        extraction prompt every turn."""
+        from microagent.memory.extractor import MemoryExtractor
+
+        history = tuple(
+            {"role": "tool", "content": "y" * 50_000} for _ in range(10)
+        )
+        prompt = MemoryExtractor._build_prompt(history)
+        assert len(prompt) < 25_000
+
+    def test_prompt_keeps_small_messages(self):
+        from microagent.memory.extractor import MemoryExtractor
+
+        history = (
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        )
+        prompt = MemoryExtractor._build_prompt(history)
+        assert "hello" in prompt and "world" in prompt
