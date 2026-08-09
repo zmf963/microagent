@@ -116,6 +116,13 @@ class _MCPConnectionManager:
         for _ in range(50):  # 5 seconds max
             if self._connected:
                 break
+            if self._task.done():
+                # The connection task already ended (server failed to start,
+                # e.g. FileNotFoundError: npx missing). Surface the REAL
+                # error immediately instead of polling the full 5s and
+                # masking it behind a generic "timed out".
+                await self._task  # re-raises the task's exception
+                raise RuntimeError("MCP server exited before connecting")
             await asyncio.sleep(0.1)
         else:
             # Timed out: cancel the background connection task. Without this

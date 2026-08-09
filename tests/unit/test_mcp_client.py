@@ -237,6 +237,46 @@ class TestRegisterTools:
         assert "git_log" not in reg.names
 
 
+class TestConnectEarlyFailure:
+    @pytest.mark.asyncio
+    async def test_task_failure_surfaces_real_error_fast(self, monkeypatch):
+        """A server that fails at startup (e.g. npx not found) must raise
+        the REAL error immediately — not poll for 5s and mask it behind
+        'timed out'."""
+        import time
+
+        import microagent.mcp.client as mcp_mod
+
+        _install_fake_mcp(monkeypatch)
+        import sys as _sys
+        stdio_mod = _sys.modules["mcp.client.stdio"]
+
+        class _BoomStdio:
+            def __init__(self, params):
+                pass
+
+            async def __aenter__(self):
+                raise FileNotFoundError("npx not found")
+
+            async def __aexit__(self, *a):
+                return False
+
+        stdio_mod.stdio_client = _BoomStdio
+
+        # Speed up the polling loop
+        real_sleep = asyncio.sleep
+        async def fast_sleep(_):
+            await real_sleep(0)
+        monkeypatch.setattr(mcp_mod.asyncio, "sleep", fast_sleep)
+
+        mgr = mcp_mod._MCPConnectionManager(("npx", "nonexistent-server"))
+        t0 = time.monotonic()
+        with pytest.raises(FileNotFoundError, match="npx not found"):
+            await mgr.connect()
+        assert time.monotonic() - t0 < 1.0  # no 5s polling
+        assert mgr._connected is False
+
+
 class TestConnectTimeout:
     @pytest.mark.asyncio
     async def test_timeout_cancels_background_task(self, monkeypatch):
