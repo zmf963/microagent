@@ -247,6 +247,14 @@ class ToolRegistry:
             raise ValueError(f"duplicate tool: {tool.name}")
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> None:
+        """Remove a tool by name (no-op if absent).
+
+        Needed for rollback when a batch registration (e.g. MCP tools)
+        fails partway through and must not leave a half-registered state.
+        """
+        self._tools.pop(name, None)
+
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 

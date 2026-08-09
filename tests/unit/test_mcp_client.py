@@ -196,3 +196,90 @@ class TestRegisterTools:
         assert "git_status" in reg.names
         assert "git_log" in reg.names
         await mgr.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_register_tools_rolls_back_on_conflict(self, monkeypatch):
+        """A duplicate tool name must not leave a half-registered state."""
+        from microagent.core.tool import tool
+        from microagent.core.types import ToolResult
+        from microagent.mcp.client import _MCPConnectionManager
+
+        @tool("git_status", description="builtin")
+        async def _builtin() -> ToolResult:
+            return ToolResult.ok("x")
+
+        _install_fake_mcp(monkeypatch)
+        mgr = _MCPConnectionManager(("uvx", "srv"))
+        await mgr.connect()
+        reg = ToolRegistry([_builtin])
+        with pytest.raises(ValueError, match="duplicate tool"):
+            mgr.register_tools(reg)
+        # Pre-existing tool untouched; partial registrations rolled back
+        assert reg.get("git_status") is _builtin
+        assert "git_log" not in reg.names
+        await mgr.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_connect_mcp_stdio_disconnects_on_conflict(self, monkeypatch):
+        """connect_mcp_stdio failure must not orphan the server subprocess."""
+        from microagent.core.tool import tool
+        from microagent.core.types import ToolResult
+        from microagent.mcp.client import connect_mcp_stdio
+
+        @tool("git_status", description="builtin")
+        async def _builtin() -> ToolResult:
+            return ToolResult.ok("x")
+
+        _install_fake_mcp(monkeypatch)
+        reg = ToolRegistry([_builtin])
+        with pytest.raises(RuntimeError, match="tool registration failed"):
+            await connect_mcp_stdio(("uvx", "srv"), reg)
+        assert "git_log" not in reg.names
+
+
+class TestConnectTimeout:
+    @pytest.mark.asyncio
+    async def test_timeout_cancels_background_task(self, monkeypatch):
+        """Slow list_tools: the 5s timeout must cancel the connection task,
+        not leave it (and the server subprocess) running forever."""
+        import microagent.mcp.client as mcp_mod
+
+        _FakeClientSession, _ = _install_fake_mcp(monkeypatch)
+
+        async def _hanging_list_tools(self):
+            await asyncio.Event().wait()  # never returns
+
+        # Patch the fake session class used inside the connection
+        import sys as _sys
+        stdio_mod = _sys.modules["mcp.client.stdio"]
+
+        class _HangSession:
+            def __init__(self, read, write):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def initialize(self):
+                return None
+
+            list_tools = _hanging_list_tools
+
+        stdio_mod.ClientSession = _HangSession
+        _sys.modules["mcp"].ClientSession = _HangSession
+
+        # Shrink the polling loop to make the test fast
+        real_sleep = asyncio.sleep
+        async def fast_sleep(_):
+            await real_sleep(0)
+        monkeypatch.setattr(mcp_mod.asyncio, "sleep", fast_sleep)
+
+        mgr = mcp_mod._MCPConnectionManager(("uvx", "slow-srv"))
+        with pytest.raises(RuntimeError, match="timed out"):
+            await mgr.connect()
+        # Background task cancelled — no orphan
+        assert mgr._task is None
+        assert mgr._connected is False

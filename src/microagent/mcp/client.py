@@ -87,7 +87,6 @@ class _MCPConnectionManager:
                 async with ClientSession(read, write) as session:
                     self._session = session
                     await session.initialize()
-                    self._connected = True
                     tools_result = await session.list_tools()
                     self._tools = [
                         {
@@ -97,6 +96,11 @@ class _MCPConnectionManager:
                         }
                         for t in tools_result.tools
                     ]
+                    # Mark connected only AFTER list_tools completes — the
+                    # connect() polling loop returns as soon as this flag is
+                    # set; setting it earlier races register_tools() into
+                    # permanently registering 0 tools on slow servers.
+                    self._connected = True
                     # Keep session alive until disconnected
                     try:
                         while True:
@@ -114,6 +118,11 @@ class _MCPConnectionManager:
                 break
             await asyncio.sleep(0.1)
         else:
+            # Timed out: cancel the background connection task. Without this
+            # the task (and its npx/uvx subprocess) lives forever if the
+            # server connects later — and the manager is never tracked
+            # anywhere, so close() cannot clean it up.
+            await self.disconnect()
             raise RuntimeError("MCP server connection timed out")
 
     async def disconnect(self) -> None:
@@ -130,15 +139,27 @@ class _MCPConnectionManager:
         self._tools = []
 
     def register_tools(self, registry: ToolRegistry) -> None:
-        """Register all discovered MCP tools into the given registry."""
-        for t in self._tools:
-            adapter = MCPToolAdapter(
-                name=t["name"],
-                description=t["description"],
-                parameters=t["inputSchema"],
-                _manager=self,
-            )
-            registry.register(adapter)
+        """Register all discovered MCP tools into the given registry.
+
+        Atomic: if any tool conflicts (e.g. an MCP server exposing
+        ``read_file``), already-registered adapters are rolled back so the
+        registry is never left half-populated.
+        """
+        registered: list[str] = []
+        try:
+            for t in self._tools:
+                adapter = MCPToolAdapter(
+                    name=t["name"],
+                    description=t["description"],
+                    parameters=t["inputSchema"],
+                    _manager=self,
+                )
+                registry.register(adapter)
+                registered.append(t["name"])
+        except ValueError:
+            for name in registered:
+                registry.unregister(name)
+            raise
 
 
 async def connect_mcp_stdio(
@@ -161,5 +182,12 @@ async def connect_mcp_stdio(
     """
     manager = _MCPConnectionManager(command)
     await manager.connect()
-    manager.register_tools(registry)
+    try:
+        manager.register_tools(registry)
+    except ValueError as e:
+        # Tool-name conflict (common: catalog servers exposing read_file etc).
+        # register_tools already rolled back the partial registrations; shut
+        # the connection down so the server subprocess is not orphaned.
+        await manager.disconnect()
+        raise RuntimeError(f"MCP tool registration failed: {e}") from e
     return manager
