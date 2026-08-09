@@ -447,11 +447,86 @@ AGENTS.md/README.md/DESIGN.md 数字更新为实测值：runner 977 行、单元
 总测试 1098、核心依赖 6、集成测试 10、单测文件 93、核心 ~11,000 LOC。
 
 ### 🔵 未处理（下轮候选）
-- `Budget.reset()` 不清 `_cancel_event`（test-only 标注）；`agent.py:132` steer callback
-  取消时自抛 CancelledError（日志噪音）；CLI session_id 秒级时间戳冲突；
-  `_cached_tools` 不随 mcp_connect 动态注册刷新（新 MCP 工具当回合对 LLM 不可见）；
-  lsp symbols 输出无截断；lsp client 死后不重启（9.3，部分缓解于 10.9）；
-  `_cjk_aware_ratio` 中文匹配限制（4.1 观察项）；SSH AutoAddPolicy 无主机密钥校验；
-  LocalTerminal env 整体替换语义；`_process_tool_output` 同步版死代码；
-  EventBus.emit 串行 await 慢 handler；溢出恢复压缩不用 auxiliary_model；
-  流错误重试额外消耗迭代预算；pricing 裸 dated id 前缀匹配失效。
+- lsp symbols 输出无截断；`_cjk_aware_ratio` 中文匹配限制（4.1 观察项）；
+  SSH AutoAddPolicy 无主机密钥校验；LocalTerminal env 整体替换语义；
+  流错误重试额外消耗迭代预算；pricing 裸 dated id 前缀匹配失效；
+  memory extractor 重叠窗口近似重复记忆无限增长（需 provider 内容哈希去重）；
+  memory provider async 方法内跑同步 sqlite3（阻塞事件循环）；
+  snip token 记账低估释放量（过度 snip）；question 工具超时后 input 线程抢 stdin；
+  mcp 超时路径异常遮蔽（真实错误被 RuntimeError timeout 替代 + 无谓 5s 轮询）。
+
+---
+
+## 十一、第九轮疯狂测试（Round 9，3 个并行审查 agent + 复审本轮修复）— 2026-08-09
+
+> 方法：(a) 复审 Round 8 的 15 个 commit 是否引入新问题；(b) 深挖此前未覆盖区域
+> （budget/compress L1L2/security/memory/pool/output_store）；(c) 核实 🔵 积压项。
+> 基线：1097 passed → 修复后 1117 passed, 1 skipped（一次偶发 flake，复查三轮全绿）。
+
+### 🔴 严重
+
+**11.1 子 budget 自身耗尽误杀整个 budget 树** ✅ **已修复 (1469bb7)**
+- **修复**：只有 root 耗尽或 tree 耗尽才 set 共享 cancel_event；子节点自身耗尽只本地 raise。
+- **文件**：`src/microagent/session/budget.py:151-160`
+- **现象**：explore 子代理跑满自己的 10 次迭代上限 → set 共享 root cancel_event →
+  父 runner 下一次 consume() 抛 "budget cancelled by root"，后续子代理全部拒绝启动。
+  文件头契约明确 "shared cancel_event for root exhaustion"。
+
+**11.2 micro_compact 无尾部保护 → LLM 永远读不到文件内容的死循环** ✅ **已修复 (863355f)**
+- **修复**：最近 4 条 tool 结果不截断（对齐 snip keep_recent 契约）。
+- **文件**：`src/microagent/session/compress.py:187-238`
+- **现象**：压缩检查在每轮迭代开头执行；60-80% 上下文区间的长会话中，刚产生的
+  工具结果被换成占位符，LLM 按占位符提示重读文件，新结果又被截断 —— 不可打破的
+  重读循环烧光预算。
+
+### 🟡 应修复
+
+**11.3 `_cached_tools` 不随 registry 变化刷新** ✅ **已修复 (2584538)**
+- **修复**：`ToolRegistry` 加单调 version 计数器，runner 版本不一致即重建快照。
+- **现象**：mcp_connect 会话中注册的工具永远不进 LLM tools 列表（MCP 核心场景失效）。
+
+**11.4 cron 换 session_id 与进行中交互 turn 竞争 + 去重状态跨 session 污染** ✅ **已修复 (6663287)**
+- **修复**：run_turn 在 turn 锁内一次性捕获 sid 并贯穿整个 turn（store append/
+  output_store 路径/turn_complete 事件）；`_store_tail`/`_tail_checked` 按 sid 键控。
+- **现象**：cron tick 与交互 turn 重叠时，交互 turn 后续消息全部写入 cron 会话；
+  去重状态被 cron 会话尾部污染导致 10.13 场景复活。
+
+**11.5 CLI 从未接 PermissionEngine；task 工具 fail-closed 后无法批准** ✅ **已修复 (21651fa)**
+- **修复**：`_make_agent` 挂 DEFAULT_RULES + rich Prompt 交互 ask_callback（y→ALLOW）。
+- **现象**：permission.py 注释声称 "CLI/Web injects one" 但 CLI 没接；嵌入方传裸
+  engine 则 task/rm/mv 永远 DENY 无恢复路径。
+
+**11.6 FTS5 CJK 查询静默空结果（实测复现）** ✅ **已修复 (40a1c34, 08fb0fd)**
+- **修复**：CJK 查询整体走 LIKE 子串路径（search_sessions 按词 AND；recall 走现有
+  LIKE fallback）。首轮 bigram* 前缀方案实测只命中 run 首 bigram，二次修复改 LIKE。
+- **现象**：unicode61 把 CJK 整段索引为单 token，"代码" 永配不上 "用户的代码审查…"，
+  无报错 → LIKE fallback 不触发 → 错误空结果。
+
+**11.7 凭证轮换泄漏 httpx client + 轮换后重试无 backoff 只试一次** ✅ **已修复 (2fdfc13)**
+- **修复**：`_on_auth_error` async 化并 close 旧 client；轮换重试走
+  `_create_with_backoff`，最多 3 次轮换。
+
+**11.8 exit 工具 `[SESSION_EXIT]` 标记无人消费** ✅ **已修复 (7f0c52f)**
+- **修复**：runner 在工具结果落库后检测标记 → TurnComplete 结束 turn。
+- **现象**：exit 工具契约完全未实现，调用成 no-op。
+
+**11.9 注入扫描未闭合标签绕过** ✅ **已修复 (c4a4c88)**
+- **修复**：三种标签族补开/闭单标签 pattern。
+- **现象**：未闭合 `<context>` 穿过扫描，而 runner 自己用 `<context>` 包裹注入
+  context —— 走私标签之后的内容全被重标记为可信 runner 上下文。
+
+**11.10 小修批（10 项）** ✅ **已修复 (7c9ad05)**
+EventBus.emit 改 gather 并发；溢出恢复压缩用 auxiliary_model；Budget.reset 清
+cancel_event；lsp 死 client 驱逐重建；CredentialPool.mark_ok 成功重置失败计数；
+steer callback 不再自抛 CancelledError；Curator.run_once 容忍缺失 skills_dir；
+CLI session_id 加 uuid 后缀；context7 截断响应返回原文前缀不再必失败；
+Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_output`。
+
+**11.11 memory extractor 用主模型 + 输入无界** ✅ **已修复 (c54d56c)**
+- **修复**：auxiliary_model 优先；prompt 单条 2K/总量 20K 截断。
+- **遗留**：重叠窗口近似重复记忆增长（需 provider 内容哈希去重）记入下轮候选。
+
+### 复审结论（Round 8 commit 复查）
+- 978dc43/0572e3f 的交互缺陷（11.4）已修；7842493 UTF-8 截断无乱码注入
+  （errors="replace"）；其余 12 个 commit 未发现引入性 bug。
+- mcp 超时路径异常遮蔽（f702206 残留 🔵）记入候选清单。
