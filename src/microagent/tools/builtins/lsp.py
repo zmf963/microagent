@@ -142,24 +142,56 @@ class LSPClient:
         # request ("LSP works once then hangs forever").
         self._stderr_task = asyncio.create_task(self._drain_stderr())
 
-        # Initialize
-        result = await self._request("initialize", {
-            "processId": None,
-            "rootUri": self._root_uri,
-            "capabilities": {
-                "textDocument": {
-                    "definition": {"linkSupport": False},
-                    "references": {},
-                    "hover": {"contentFormat": ["plaintext"]},
-                    "documentSymbol": {},
+        # Initialize — on failure (timeout, server error, crash) clean up
+        # the spawned process and reader tasks. Previously start() raised
+        # with everything still running, and since the client was never put
+        # into state.clients, every retry leaked another server process.
+        try:
+            result = await self._request("initialize", {
+                "processId": None,
+                "rootUri": self._root_uri,
+                "capabilities": {
+                    "textDocument": {
+                        "definition": {"linkSupport": False},
+                        "references": {},
+                        "hover": {"contentFormat": ["plaintext"]},
+                        "documentSymbol": {},
+                    },
                 },
-            },
-            "workspaceFolders": [{"uri": self._root_uri, "name": Path(self._root_uri.replace("file://", "")).name}],
-        })
+                "workspaceFolders": [{"uri": self._root_uri, "name": Path(self._root_uri.replace("file://", "")).name}],
+            })
+        except BaseException:
+            await self._cleanup_failed_start()
+            raise
         self._initialized = True
 
         # Send initialized notification
         await self._notify("initialized", {})
+
+    async def _cleanup_failed_start(self) -> None:
+        """Terminate the server process and cancel reader tasks after a
+        failed initialize handshake."""
+        for task in (self._reader_task, self._stderr_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._reader_task = None
+        self._stderr_task = None
+        if self._proc is not None:
+            try:
+                self._proc.kill()
+                await self._proc.wait()
+            except Exception:
+                pass
+            self._proc = None
+        # Fail any futures still waiting on responses
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.cancel()
+        self._pending.clear()
 
     async def ensure_open(self, filepath: str) -> str:
         """Send didOpen for a file, return its URI."""
@@ -334,6 +366,11 @@ class LSPClient:
         except TimeoutError:
             self._pending.pop(rid, None)
             raise
+        except asyncio.CancelledError:
+            # Interrupted mid-request: drop the pending entry so a late
+            # response doesn't hit a cancelled future in the read loop.
+            self._pending.pop(rid, None)
+            raise
 
     async def _notify(self, method: str, params: dict) -> None:
         """Send a JSON-RPC notification (no id, no response awaited).
@@ -409,11 +446,18 @@ class LSPClient:
                     rid = msg.get("id")
                     if rid is not None and rid in self._pending:
                         future = self._pending.pop(rid)
+                        if future.done():
+                            # Request was cancelled/timed out while the
+                            # response was in flight — set_exception on a
+                            # done future raises InvalidStateError, which
+                            # the catch-all below turned into a dead read
+                            # loop (killing the whole LSP session).
+                            continue
                         if "error" in msg:
                             future.set_exception(
                                 RuntimeError(msg["error"].get("message", "LSP error"))
                             )
-                        elif not future.done():
+                        else:
                             future.set_result(msg.get("result"))
                     # Notifications (no id) are ignored
             except asyncio.CancelledError:

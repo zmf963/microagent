@@ -140,6 +140,77 @@ async def test_shutdown_kills_unresponsive_server(tmp_path, root_uri):
 
 
 @pytest.mark.asyncio
+async def test_failed_initialize_cleans_up(tmp_path, root_uri):
+    """If initialize fails, start() must terminate the server process and
+    cancel reader tasks — previously every failed start leaked a server
+    process (and the client never entered state.clients, so each retry
+    leaked another)."""
+    # Server that answers initialize with an error, then idles.
+    err_srv = textwrap.dedent("""
+        import sys, json, time
+        def send(msg):
+            data = json.dumps(msg).encode()
+            sys.stdout.buffer.write(f"Content-Length: {len(data)}\\r\\n\\r\\n".encode() + data)
+            sys.stdout.buffer.flush()
+        buf = b""
+        while True:
+            chunk = sys.stdin.buffer.read(1)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\\r\\n\\r\\n" in buf:
+                header, _, rest = buf.partition(b"\\r\\n\\r\\n")
+                cl = 0
+                for line in header.decode().split("\\r\\n"):
+                    if line.lower().startswith("content-length:"):
+                        cl = int(line.split(":", 1)[1].strip())
+                if len(rest) < cl:
+                    break
+                body, buf = rest[:cl], rest[cl:]
+                msg = json.loads(body)
+                if msg.get("method") == "initialize":
+                    send({"jsonrpc": "2.0", "id": msg["id"],
+                          "error": {"code": -32603, "message": "init boom"}})
+    """)
+    script = tmp_path / "err_lsp.py"
+    script.write_text(err_srv)
+    client = LSPClient((sys.executable, str(script)), root_uri)
+    with pytest.raises(RuntimeError, match="init boom"):
+        await client.start()
+    # Everything cleaned up
+    assert client._proc is None
+    assert client._reader_task is None
+    assert client._stderr_task is None
+    assert client._initialized is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_keeps_session_alive(fake_server, root_uri):
+    """Cancelling an in-flight request must not kill the read loop. The old
+    code left the cancelled future in _pending; the late response then hit
+    set_exception on a done future → InvalidStateError → dead read loop →
+    every later request timed out for 30s."""
+    client = LSPClient(fake_server, root_uri)
+    await client.start()
+    try:
+        # The fake server ignores unknown methods → this request never
+        # gets a response and hangs until cancelled.
+        task = asyncio.create_task(
+            client._request("textDocument/definition", {"textDocument": {"uri": "file:///x"}})
+        )
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert client._pending == {}
+        # Read loop must still be alive: a real request round-trips.
+        result = await client._request("shutdown", {})
+        assert result is None  # server responds with result: null
+    finally:
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_read_loop_logs_instead_of_silent_break(fake_server, root_uri, caplog):
     """A parse error or transport error in _read_loop used to break the
     loop silently, stranding pending futures. It must now log a warning."""
