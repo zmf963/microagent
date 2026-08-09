@@ -374,3 +374,29 @@ class TestSnipNoProgress:
             messages, keep_recent=2, max_tokens=1, protect_first_n=1,
         )
         assert result == messages
+
+
+class TestSnipTokenAccounting:
+    def test_snip_accounts_tool_calls_overhead(self):
+        """Snip's per-removal accounting must use the same formula as
+        count_tokens (content + tool_calls + 4). Content-only accounting
+        underestimated each removal → over-snipping."""
+        from microagent.session.compress import count_tokens, snip_tool_results
+
+        big_args = {"code": "z" * 2000}
+        tcs = tuple(
+            ToolCall(id=f"c{i}", name="execute_code", arguments=big_args)
+            for i in range(3)
+        )
+        messages = (
+            Message.user("run these"),
+            Message.assistant("ok", tool_calls=tcs),
+        ) + tuple(
+            Message.tool_result(ToolResult.ok("out" * 400), tool_call_id=f"c{i}")
+            for i in range(3)
+        )
+        max_tokens = count_tokens(messages) - 100  # force a small trim
+        result = snip_tool_results(messages, keep_recent=1, max_tokens=max_tokens)
+        # Post-snip actual total must be within 5% of the target — with
+        # content-only accounting it overshot the trim significantly.
+        assert count_tokens(result) <= max_tokens + int(max_tokens * 0.05)

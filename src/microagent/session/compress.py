@@ -155,28 +155,30 @@ def estimate_tokens(text: str) -> int:
     return ((chars - cjk) // 4) + (cjk // 2) + 1
 
 
-def count_tokens(messages: tuple[Message, ...]) -> int:
-    """Sum estimated tokens across all messages.
+def _message_tokens(m: Message) -> int:
+    """Estimated tokens for ONE message — the shared per-message formula.
 
     Includes tool_calls and tool_call_id overhead — an assistant message
     with 5 tool calls (each with id, name, JSON args) can represent
-    hundreds of API tokens even when content is empty. Ignoring them
-    caused count_tokens to severely underestimate actual usage, making
-    the compression threshold fire too late (context overflow / API error).
+    hundreds of API tokens even when content is empty. Extracted so
+    count_tokens and snip_tool_results can never drift apart again (snip
+    used content-only counts, underestimating what each removal freed).
     """
     import json
-    total = 0
-    for m in messages:
-        total += estimate_tokens(m.content or "")
-        # Account for serialized tool_calls (id + function name + args)
-        if m.tool_calls:
-            for tc in m.tool_calls:
-                total += estimate_tokens(json.dumps({
-                    "id": tc.id, "name": tc.name, "arguments": tc.arguments,
-                }))
-        # role + tool_call_id framing overhead (~4 tokens)
-        total += 4
-    return total
+
+    total = estimate_tokens(m.content or "")
+    if m.tool_calls:
+        for tc in m.tool_calls:
+            total += estimate_tokens(json.dumps({
+                "id": tc.id, "name": tc.name, "arguments": tc.arguments,
+            }))
+    # role + tool_call_id framing overhead (~4 tokens)
+    return total + 4
+
+
+def count_tokens(messages: tuple[Message, ...]) -> int:
+    """Sum estimated tokens across all messages."""
+    return sum(_message_tokens(m) for m in messages)
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +275,11 @@ def snip_tool_results(
     ):
         return messages
 
-    # Pre-compute per-message token counts to avoid O(n²) re-scanning
-    msg_tokens = [estimate_tokens(m.content or "") for m in result]
+    # Pre-compute per-message token counts to avoid O(n²) re-scanning.
+    # Same formula as count_tokens (shared helper): content-only counts
+    # underestimated what each removal freed, so snip removed MORE tool
+    # results than needed to get under max_tokens.
+    msg_tokens = [_message_tokens(m) for m in result]
 
     # Remove oldest tool_result messages outside protected zone
     i = 0
