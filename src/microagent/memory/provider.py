@@ -127,6 +127,13 @@ class SQLiteMemoryProvider:
         # connection, so a permanent error propagates from the fallback too;
         # but we log here so a transient error that happens to succeed on the
         # fallback isn't silently reported as "no match".
+        # CJK queries bypass FTS: unicode61 indexes CJK runs as single
+        # tokens (no segmentation), so FTS MATCH misses substrings like
+        # '代码' inside '用户的代码审查...'. LIKE substring is correct here.
+        from ..session.search import _CJK_RE
+
+        if _CJK_RE.search(query):
+            return self._like_search(query, k)
         try:
             return self._fts_search(query, k)
         except sqlite3.OperationalError as e:

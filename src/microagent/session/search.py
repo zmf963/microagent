@@ -127,8 +127,45 @@ async def search_sessions(
 
     fts_query = _build_fts_query(query)
 
+    def _rows_to_messages(rows) -> tuple[Message, ...]:
+        results = []
+        for data, _rank in rows:
+            try:
+                obj = json.loads(data)
+                results.append(
+                    Message(
+                        role=obj.get("role", "user"),
+                        content=obj.get("content", ""),
+                    )
+                )
+            except (json.JSONDecodeError, KeyError):
+                continue
+        return tuple(results)
+
     def _search() -> tuple[Message, ...]:
         ensure_fts5(store)
+        # CJK queries bypass FTS entirely: unicode61 indexes a CJK run as
+        # ONE token with no segmentation, so FTS can only match run-initial
+        # prefixes — '代码' never matches '用户的代码审查...'. LIKE substring
+        # matching is correct for CJK; require every extracted term (latin
+        # words + CJK runs) to appear (AND semantics).
+        if _CJK_RE.search(query):
+            terms = _LATIN_WORD_RE.findall(query) + _CJK_RE.findall(query)
+            if terms:
+                where = " AND ".join("data LIKE ? ESCAPE '\\'" for _ in terms)
+                patterns = [
+                    f"%{t.replace(chr(92), chr(92)*2).replace('%', chr(92)+'%').replace('_', chr(92)+'_')}%"
+                    for t in terms
+                ]
+                rows = [
+                    (data, None)
+                    for (data,) in store._conn.execute(
+                        f"SELECT data FROM messages WHERE {where} "
+                        "ORDER BY id DESC LIMIT ?",
+                        (*patterns, k),
+                    ).fetchall()
+                ]
+                return _rows_to_messages(rows)
         try:
             # FTS5 with ranking — higher rank = better match
             rows = store._conn.execute(
@@ -150,20 +187,7 @@ async def search_sessions(
                     (pattern, k),
                 ).fetchall()
             ]
-
-        results = []
-        for data, _rank in rows:
-            try:
-                obj = json.loads(data)
-                results.append(
-                    Message(
-                        role=obj.get("role", "user"),
-                        content=obj.get("content", ""),
-                    )
-                )
-            except (json.JSONDecodeError, KeyError):
-                continue
-        return tuple(results)
+        return _rows_to_messages(rows)
 
     async with store._lock:
         return await asyncio.to_thread(_search)
