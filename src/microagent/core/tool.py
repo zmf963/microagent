@@ -238,14 +238,26 @@ class ToolRegistry:
 
     def __init__(self, tools: list[Tool] | None = None):
         self._tools: dict[str, Tool] = {}
+        self._version = 0
         if tools:
             for t in tools:
                 self.register(t)
+
+    @property
+    def version(self) -> int:
+        """Monotonic change counter — bump on every register/unregister.
+
+        SessionRunner compares this against its cached tools snapshot so
+        mid-session registrations (mcp_connect) actually reach the LLM's
+        tools list instead of being invisible behind the stale cache.
+        """
+        return self._version
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
             raise ValueError(f"duplicate tool: {tool.name}")
         self._tools[tool.name] = tool
+        self._version += 1
 
     def unregister(self, name: str) -> None:
         """Remove a tool by name (no-op if absent).
@@ -253,7 +265,9 @@ class ToolRegistry:
         Needed for rollback when a batch registration (e.g. MCP tools)
         fails partway through and must not leave a half-registered state.
         """
-        self._tools.pop(name, None)
+        if name in self._tools:
+            del self._tools[name]
+            self._version += 1
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

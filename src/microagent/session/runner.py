@@ -84,6 +84,7 @@ class SessionRunner:
 
         self._cached_system: str | None = None
         self._cached_tools: list[dict] | None = None
+        self._cached_tools_version: int = -1  # registry.version at last rebuild
         self._cached_skill_catalog: str = ""  # stable part of system prompt
         # OrderedDict preserves insertion order + supports move_to_end/popitem
         # for LRU eviction. Replaces the prior hand-rolled set+list pair.
@@ -625,9 +626,19 @@ class SessionRunner:
                     # not abort the turn.
                     logger.warning("pre_llm_hook %r failed", hook, exc_info=True)
 
-            if self._cached_system is None or hooked_system != self._cached_system or self.mode != self._cached_mode:
+            # Rebuild the cached tools snapshot when the system prompt or
+            # mode changes — OR when the registry itself changed (mcp_connect
+            # registers tools mid-session; without the version check they
+            # never reached the LLM's tools list).
+            if (
+                self._cached_system is None
+                or hooked_system != self._cached_system
+                or self.mode != self._cached_mode
+                or self.registry.version != self._cached_tools_version
+            ):
                 self._cached_system = hooked_system
                 self._cached_mode = self.mode
+                self._cached_tools_version = self.registry.version
                 all_tools = self.registry.to_openai_tools() or None
                 # Filter tools by mode (plan mode blocks write tools)
                 if all_tools and self.mode == "plan":

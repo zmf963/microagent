@@ -132,6 +132,34 @@ class TestSessionRunnerContextSource:
         from microagent.core.types import TurnComplete
         assert any(isinstance(ev, TurnComplete) for ev in events)
 
+
+class TestToolsCacheRefresh:
+    async def test_mid_session_registration_reaches_llm(self):
+        """mcp_connect-style mid-session register() must invalidate the
+        cached tools snapshot — otherwise the new tool never appears in the
+        LLM's tools list for the rest of the session."""
+        from microagent.core.tool import tool as tool_decorator
+        from microagent.core.types import ToolResult
+
+        @tool_decorator("late_tool", description="registered mid-session")
+        async def _late() -> ToolResult:
+            return ToolResult.ok("late")
+
+        registry = ToolRegistry()
+        llm = FakeLLMClient([text_response("first"), text_response("second")])
+        runner = SessionRunner(llm=llm, registry=registry)
+        async for _ in runner.run_turn([Message.user("hi")]):
+            pass
+        assert llm.calls[0]["tools"] is None  # empty registry
+
+        registry.register(_late)
+        async for _ in runner.run_turn([Message.user("again")]):
+            pass
+        tools = llm.calls[1]["tools"]
+        assert tools is not None
+        names = [t["function"]["name"] for t in tools]
+        assert "late_tool" in names
+
     async def test_failing_pre_llm_hook_keeps_last_good_system(self):
         """A pre_llm_hook that raises must not abort the turn; the previous
         system prompt is kept."""
