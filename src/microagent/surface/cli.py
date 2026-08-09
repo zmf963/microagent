@@ -10,6 +10,7 @@ Visual hierarchy:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
@@ -120,8 +121,6 @@ class ReplState:
 
 
 def main():
-    import asyncio
-
     asyncio.run(_main())
 
 
@@ -387,7 +386,6 @@ async def _run_streaming(
     When ``show_thinking`` is True, reasoning deltas are printed inline
     under a dim "thinking" rule.
     """
-    import asyncio
     import sys
 
     try:

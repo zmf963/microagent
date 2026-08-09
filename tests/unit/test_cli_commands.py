@@ -158,6 +158,17 @@ async def test_cmd_models_count(state):
     assert "models in cache" in _captured(state)
 
 
+@pytest.mark.asyncio
+async def test_cmd_models_refresh(state, monkeypatch):
+    """'/models refresh' previously crashed with NameError — asyncio was only
+    imported inside main()/_run_streaming, invisible to _cmd_models."""
+    from microagent.llm import pricing as _pricing
+
+    monkeypatch.setattr(_pricing, "refresh", lambda: 364)
+    await cli._cmd_models(state, "refresh")
+    assert "364 models" in _captured(state)
+
+
 # --- Skill command ---
 
 @pytest.mark.asyncio
