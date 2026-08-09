@@ -132,6 +132,56 @@ class TestCompactionPrompt:
         assert "msg2" in prompt
         assert "msg3" in prompt
 
+    def test_includes_assistant_and_tool_content(self):
+        """Assistant/tool content reaches the compressor — without it the
+        summary's file/error/progress sections are pure hallucination."""
+        from microagent.core.types import ToolCall, ToolResult
+
+        tc = ToolCall(id="c1", name="read_file", arguments={"path": "src/auth.py"})
+        messages = (
+            Message.user("fix the login bug"),
+            Message.assistant("reading auth module", tool_calls=(tc,)),
+            Message.tool_result(ToolResult.ok("def login(): buggy_token_check"), tool_call_id="c1"),
+            Message.assistant("fixed buggy_token_check in src/auth.py"),
+        )
+        prompt = build_compaction_summary_prompt(messages)
+        assert "reading auth module" in prompt
+        assert "read_file" in prompt
+        assert "buggy_token_check" in prompt
+        assert "fixed buggy_token_check in src/auth.py" in prompt
+
+    def test_serialization_total_cap_drops_oldest(self):
+        """Overall cap keeps the tail (recent context) and drops the head."""
+        from microagent.session.compress import _SUMMARY_TOTAL_CHARS
+
+        big = "x" * 1000
+        messages = tuple(
+            Message.user(f"old-{i} {big}") for i in range(80)
+        ) + (Message.user("recent-marker"),)
+        prompt = build_compaction_summary_prompt(messages)
+        assert "recent-marker" in prompt
+        assert "older messages omitted" in prompt
+        # old-0 must have been dropped by the cap
+        assert "[user] old-0 " not in prompt
+        assert len(prompt) < _SUMMARY_TOTAL_CHARS + 10_000  # template + enumeration
+
+    def test_incremental_prompt_includes_full_conversation(self):
+        """Incremental mode also serializes assistant/tool messages."""
+        from microagent.core.types import ToolResult
+        from microagent.session.compress import build_incremental_summary_prompt
+
+        messages = (
+            Message.user("new request"),
+            Message.assistant("did work on server.go"),
+            Message.tool_result(
+                ToolResult.ok("compile error: undefined foo"), tool_call_id="c9"
+            ),
+        )
+        prompt = build_incremental_summary_prompt(messages, "PREV SUMMARY TEXT")
+        assert "PREV SUMMARY TEXT" in prompt
+        assert "did work on server.go" in prompt
+        assert "compile error: undefined foo" in prompt
+
 
 class TestCompactionState:
     def test_initial_state(self):

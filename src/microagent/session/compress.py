@@ -336,6 +336,10 @@ COMPACTION_PROMPT_TEMPLATE = """You are compressing a conversation history for c
 CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
 Your entire response must be structured text.
 
+=== CONVERSATION TO COMPRESS ===
+{conversation}
+=== END CONVERSATION ===
+
 Generate a summary using these 7 sections. Be specific — include file paths,
 function names, error messages, and exact user quotes.
 
@@ -369,6 +373,35 @@ function names, error messages, and exact user quotes.
 </summary>"""
 
 
+_SUMMARY_PER_MSG_CHARS = 500  # per-message truncation in the serialized conversation
+_SUMMARY_TOTAL_CHARS = 30_000  # overall cap; oldest messages dropped first
+
+
+def _serialize_conversation(messages: tuple[Message, ...]) -> str:
+    """Serialize the full conversation (user/assistant/tool) for the summary prompt.
+
+    The L3 summary is only as good as what the compressor can see — feeding
+    only user-message fragments forces the LLM to hallucinate sections 3/4/7
+    (files, errors, progress). Assistant tool_calls and tool results carry
+    most of that information, so they are included (truncated per message,
+    with an overall cap dropping oldest messages first).
+    """
+    lines: list[str] = []
+    for m in messages:
+        text = (m.content or "")[:_SUMMARY_PER_MSG_CHARS]
+        if m.role == "assistant" and m.tool_calls:
+            calls = ", ".join(
+                f"{tc.name}({str(tc.arguments)[:100]})" for tc in m.tool_calls
+            )
+            lines.append(f"[assistant] {text}\n  tool_calls: {calls}")
+        else:
+            lines.append(f"[{m.role}] {text}")
+    serialized = "\n".join(lines)
+    if len(serialized) > _SUMMARY_TOTAL_CHARS:
+        serialized = "...[older messages omitted]...\n" + serialized[-_SUMMARY_TOTAL_CHARS:]
+    return serialized or "(empty conversation)"
+
+
 def build_compaction_summary_prompt(
     messages: tuple[Message, ...],
 ) -> str:
@@ -379,7 +412,10 @@ def build_compaction_summary_prompt(
     if not user_messages:
         user_messages = "(no user messages)"
 
-    return COMPACTION_PROMPT_TEMPLATE.format(user_messages=user_messages)
+    return COMPACTION_PROMPT_TEMPLATE.format(
+        user_messages=user_messages,
+        conversation=_serialize_conversation(messages),
+    )
 
 
 INCREMENTAL_PROMPT_TEMPLATE = """You are updating an existing conversation summary with new context.
@@ -396,6 +432,9 @@ You are given a PREVIOUS SUMMARY and NEW messages. Your job:
 {previous_summary}
 
 === NEW MESSAGES TO INCORPORATE ===
+{conversation}
+=== END NEW MESSAGES ===
+
 <analysis>
 [Your internal reasoning — this will be stripped]
 </analysis>
@@ -440,6 +479,7 @@ def build_incremental_summary_prompt(
     return INCREMENTAL_PROMPT_TEMPLATE.format(
         previous_summary=previous_summary,
         user_messages=user_messages,
+        conversation=_serialize_conversation(messages),
     )
 
 
