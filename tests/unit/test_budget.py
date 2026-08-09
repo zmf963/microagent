@@ -66,12 +66,21 @@ class TestBudgetTree:
         await child.consume(cost_usd=1.0)
         assert root._descendants_cost == 1.0
 
-    async def test_child_exhaustion_sets_root_cancel(self):
+    async def test_child_exhaustion_does_not_set_root_cancel(self):
+        """A child exhausting its OWN sub-limit must raise locally without
+        killing the whole tree — the shared cancel_event is for ROOT
+        exhaustion only (file-header contract). Previously a subagent
+        hitting its 10-iteration cap cancelled the parent's next consume()
+        with 'budget cancelled by root'."""
         root = Budget.root(max_cost_usd=10.0)
         child = root.spawn(max_cost_usd=0.5)
         with pytest.raises(BudgetExceeded):
             await child.consume(cost_usd=0.5)
-        assert root._cancel_event.is_set()
+        assert not root._cancel_event.is_set()
+        # Parent and siblings remain usable
+        await root.consume(cost_usd=1.0)
+        sibling = root.spawn(max_cost_usd=0.5)
+        await sibling.consume(cost_usd=0.1)
 
     async def test_tree_exhausted_triggers_cancel(self):
         root = Budget.root(max_cost_usd=5.0)

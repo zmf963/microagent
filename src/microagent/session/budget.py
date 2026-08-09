@@ -149,7 +149,16 @@ class Budget:
                 node = node._parent
 
             if self.exhausted or self._tree_exhausted():
-                if self._cancel_event is not None:
+                # Only ROOT-level exhaustion sets the shared cancel_event
+                # (header contract: "shared cancel_event for root
+                # exhaustion"). A child exhausting its OWN sub-limit (e.g.
+                # a subagent hitting its 10-iteration cap) must raise
+                # locally — setting the shared event killed the parent's
+                # next consume() with "budget cancelled by root" and made
+                # every later subagent refuse to start.
+                if self._cancel_event is not None and (
+                    self._parent is None or self._tree_exhausted()
+                ):
                     self._cancel_event.set()  # notify entire tree
                 raise BudgetExceeded(
                     "budget exhausted: "
