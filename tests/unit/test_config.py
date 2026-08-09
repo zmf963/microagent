@@ -29,6 +29,16 @@ system_prompt: "Custom system prompt."
         assert cfg.llm.model == "gpt-4o"
         assert cfg.system_prompt == "You are a helpful assistant."
 
+    def test_from_file_non_mapping_yaml(self, tmp_path, monkeypatch):
+        """Valid YAML with a scalar/list top level must degrade to defaults,
+        not crash with AttributeError."""
+        for content in ("just a string", "- item1\n- item2\n", "42"):
+            config_file = tmp_path / "config.yaml"
+            config_file.write_text(content)
+            monkeypatch.setattr(Config, "_config_path", lambda: config_file)
+            cfg = Config.from_file()
+            assert cfg.llm.model == "gpt-4o", f"failed for content: {content!r}"
+
     def test_env_override(self, tmp_path, monkeypatch):
         """Environment variables override config file."""
         config_file = tmp_path / "config.yaml"

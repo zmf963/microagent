@@ -96,6 +96,17 @@ class Config:
             _logger.warning("Failed to read config file %s: %r", path, e)
             return {}
 
+        if not isinstance(data, dict):
+            # Syntactically valid YAML whose top level is a scalar or list
+            # ("just a string", "- item") passed safe_load but has no
+            # .get() — without this guard the file crashed startup with
+            # AttributeError instead of falling back to defaults.
+            _logger.warning(
+                "Config file %s has non-mapping top level (%s) — ignoring",
+                path, type(data).__name__,
+            )
+            return {}
+
         model_section = data.get("model", {})
         if not isinstance(model_section, dict):
             model_section = {}
