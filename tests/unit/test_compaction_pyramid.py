@@ -161,9 +161,11 @@ class TestCompactionPrompt:
         prompt = build_compaction_summary_prompt(messages)
         assert "recent-marker" in prompt
         assert "older messages omitted" in prompt
-        # old-0 must have been dropped by the cap
-        assert "[user] old-0 " not in prompt
-        assert len(prompt) < _SUMMARY_TOTAL_CHARS + 10_000  # template + enumeration
+        # old-0's 500-char serialized body must have been dropped by the cap
+        # (the user-message enumeration keeps a 200-char mention, so check
+        # for the full-length body that only exists in the serialized block)
+        assert ("x" * 500 + "\n[user] old-1") not in prompt
+        assert len(prompt) < _SUMMARY_TOTAL_CHARS + 20_000  # template + enumeration
 
     def test_incremental_prompt_includes_full_conversation(self):
         """Incremental mode also serializes assistant/tool messages."""
