@@ -1,6 +1,6 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~10,400 行核心代码 | 34 内置工具 | 1037 测试
+> 版本 1.0.0 | Python ≥3.14 | ~11,000 行核心代码 | 34 内置工具 | 1098 测试
 
 **MicroAgent 是一个将 AI Agent 的核心循环压缩到 10,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
@@ -354,7 +354,7 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~10,400 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心代码量 | ~11,000 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
 | 核心循环模块 | 654 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 697 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
@@ -537,4 +537,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~10,400 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,000 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。

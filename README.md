@@ -5,7 +5,7 @@
 [![Tests](https://img.shields.io/badge/tests-1042%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~10,400 LOC**, **34 built-in tools**, **62 public API symbols**, **1037 unit+smoke+e2e tests, 10 integration tests**.
+**~11,000 LOC**, **34 built-in tools**, **62 public API symbols**, **1098 unit+smoke+e2e tests, 10 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 

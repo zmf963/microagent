@@ -355,3 +355,103 @@
 - Agent2 #2: ASK 无 callback → fail-open ALLOW — **误报**，返回 ASK 不是 ALLOW。
 - Agent2 #5: tool-call deltas 无 finish_reason 丢失 — **误报**，flush 在循环后无条件执行。
 - Agent2 #13: `run()` 第二次调用崩溃 — **误报**，实测连续两次 run() 正常。
+
+---
+
+## 十、第八轮疯狂测试（Round 8，3 个并行审查 agent）— 2026-08-09
+
+> 方法：3 个并行只读审查 agent 覆盖核心会话/工具与基础设施/agent-skill-memory-cli 三条线，
+> 主会话逐条源码核实后分 4 批修复。基线：1068 passed → 修复后 1097 passed, 1 skipped。
+> 注意：Round 7 报告曾将「ASK 无 callback 返回 ASK」判为误报——本轮重新认定为
+> fail-open 设计缺陷（runner 只检查 is_deny，ASK 静默放行），见 10.4。
+
+### 🔴 严重
+
+**10.1 L3 压缩 prompt 从未包含 assistant/tool 消息** ✅ **已修复 (ca620ca, 6fbf616)**
+- **修复**：`build_compaction_summary_prompt`/`build_incremental_summary_prompt` 注入全对话
+  序列化（assistant 含 tool_calls 摘要、tool 结果，单条截 500 字符、总量 30K 从 oldest 截）。
+- **文件**：`src/microagent/session/compress.py:372-443`
+- **现象**：压缩 LLM 只收到 user 消息枚举（各截 200 字符），第 3/4/7 节（文件/错误/进度）
+  必然大量幻觉——压缩金字塔中唯一消耗 API 的层，输出质量从结构上无法保证。
+
+**10.2 CLI `/models refresh` 必然 NameError** ✅ **已修复 (90af17c)**
+- **修复**：`surface/cli.py` 顶层 `import asyncio`，删除 main()/_run_streaming 局部 import。
+- **现象**：`asyncio` 仅在两个函数局部导入，`_cmd_models` 作用域不可见 → 命令必崩
+  （`/models count`/查询正常，测试因此漏网）。
+
+**10.3 MCP 连接失败泄漏子进程 + list_tools 竞态 + 半注册** ✅ **已修复 (f702206)**
+- **修复**：`_connected=True` 移到 `list_tools()` 完成后；超时/注册失败先 `disconnect()`；
+  `register_tools` 原子化（重名回滚已注册项）；`ToolRegistry.unregister()` 新增。
+- **现象**：超时后 `_run_connection` 任务与 npx/uvx 子进程永久泄漏；`_connected` 在
+  list_tools 前置位 → 慢 server 注册 0 工具且幂等锁死；重名冲突残留半注册工具表。
+
+### 🟡 应修复
+
+**10.4 PermissionEngine ASK fail-open** ✅ **已修复 (58ce6c5)**
+- **修复**：ASK 且无 `ask_callback` → 返回 DENY（reason 注明）。fail-closed。
+- **现象**：runner 只检查 `is_deny`，无 callback 时 `rm *`/`mv *`/输出重定向/`task` 等
+  ASK 规则被静默放行。
+
+**10.5 attachments 扫描 tool 结果内容 → 提示注入驱动文件外泄** ✅ **已修复 (7842493)**
+- **修复**：content 扫描限 user/assistant（tool_calls 参数扫描保留）；读取限 64KB 字节
+  再截 3000 字符。
+- **现象**：恶意网页/命令输出中写入 `~/.ssh/config` 等路径，L3 压缩后文件被读盘注入
+  LLM 上下文；整文件读入内存后才截断，大文件内存尖峰。
+
+**10.6 skill_manage patch/create 无 provenance 校验** ✅ **已修复 (0b8f37a)**
+- **修复**：`patch` 加 `_is_agent_created` 检查（与 delete 一致）；`create` 拒绝覆盖
+  非 agent 创建的同名 skill。
+- **现象**：被注入的 agent 可改写用户手工 SKILL.md（skill 进入 system prompt 链路）→
+  持久化 prompt-injection 通道。
+
+**10.7 子 agent close 误杀全局共享 Chromium** ✅ **已修复 (0cdb0a4)**
+- **修复**：`close_global_browser()` 从 `runner.close()` 移到 `Agent.close()`。
+- **现象**：SubagentManager finally 无条件 `child_runner.close()` → 任何 task 子代理结束
+  都关闭进程级共享浏览器，父 agent page 变 "Target closed"，并发会话同死。
+
+**10.8 terminal backend 不处理 CancelledError + Docker 默认必失败** ✅ **已修复 (c3e5b27)**
+- **修复**：Local/Docker 加 CancelledError kill+wait+raise；Docker 改 `sh -c`（默认 alpine
+  无 bash）；超时/取消后 `docker rm -f` 清残留容器。
+- **现象**：中断后子进程孤儿；默认配置 exit 127 必失败；固定 `--name` 撞名后续全挂。
+
+**10.9 LSP 双泄漏：initialize 失败 + 取消后读循环死亡** ✅ **已修复 (2662e92)**
+- **修复**：`start()` initialize 失败 terminate 进程+取消任务后 re-raise；`_request`
+  取消时 pop `_pending`；`_read_loop` set_exception 前查 `future.done()`。
+- **现象**：initialize 失败每次泄漏一个 server 进程且 client 不入缓存（重试再漏）；
+  取消后迟到响应对 cancelled future `set_exception` → InvalidStateError → 读循环死亡，
+  整个 LSP 会话 30s 超时瘫痪。
+
+**10.10 context_sources/pre_llm_hooks 异常逃逸 run_turn** ✅ **已修复 (17a1864)**
+- **修复**：两处均 try/except + log + 跳过（hook 保留上次正常 system prompt），
+  对齐 skill_loader 容错模式。
+- **现象**：第三方插件异常直接穿透 async generator 崩 turn，连 TurnFailed 都没有。
+
+**10.11 cron `resume:last` 取全局最新 session → 跨 job/用户串扰** ✅ **已修复 (0572e3f)**
+- **修复**：每个 job 在 `cron-<name>` 专属 session 下运行（exec lock 串行化、用后恢复），
+  resume:last 只加载本 job 历史。
+- **现象**：`sessions[0]` 是整个 store 最新 session —— job A 可续上 job B 甚至用户交互
+  会话，定时 prompt 注入无关上下文。
+
+**10.12 config.py 非 dict 顶层 YAML 启动崩溃** ✅ **已修复 (1d12d8f)**
+- **修复**：`safe_load` 后 `isinstance(data, dict)` 防护，非标量 dict 降级 {} + warning。
+- **现象**：合法 YAML 但顶层为标量/列表 → `data.get` AttributeError 启动即崩。
+
+**10.13 resume/失败重试时末尾 user 消息重复写库** ✅ **已修复 (978dc43)**
+- **修复**：turn 入口经 `_persist_user_tail` 去重（store 尾部已是该消息则跳过）；
+  全部 append 走 `_append()` 维护已知尾部，连续相同用户消息不误伤。
+- **现象**：resume 未应答会话或 TurnFailed 后同 list 重试 → store 出现重复 user 消息，
+  resume 后模型看到从未发生的对话。
+
+### 📄 文档漂移（本轮同步）
+AGENTS.md/README.md/DESIGN.md 数字更新为实测值：runner 977 行、单元测试 1078、
+总测试 1098、核心依赖 6、集成测试 10、单测文件 93、核心 ~11,000 LOC。
+
+### 🔵 未处理（下轮候选）
+- `Budget.reset()` 不清 `_cancel_event`（test-only 标注）；`agent.py:132` steer callback
+  取消时自抛 CancelledError（日志噪音）；CLI session_id 秒级时间戳冲突；
+  `_cached_tools` 不随 mcp_connect 动态注册刷新（新 MCP 工具当回合对 LLM 不可见）；
+  lsp symbols 输出无截断；lsp client 死后不重启（9.3，部分缓解于 10.9）；
+  `_cjk_aware_ratio` 中文匹配限制（4.1 观察项）；SSH AutoAddPolicy 无主机密钥校验；
+  LocalTerminal env 整体替换语义；`_process_tool_output` 同步版死代码；
+  EventBus.emit 串行 await 慢 handler；溢出恢复压缩不用 auxiliary_model；
+  流错误重试额外消耗迭代预算；pricing 裸 dated id 前缀匹配失效。
