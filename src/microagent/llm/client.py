@@ -213,7 +213,7 @@ class OpenAIChatClient:
         status_code = getattr(exc, "status_code", None)
         return status_code is not None and status_code >= 500
 
-    def _on_auth_error(self) -> bool:
+    async def _on_auth_error(self) -> bool:
         """Handle auth/rate-limit error. Returns True if retry possible.
 
         Note: ``self.config`` is a mutable instance attribute on
@@ -226,7 +226,15 @@ class OpenAIChatClient:
             return False
         self.pool.mark_failed()
         self.config = self.pool.current
+        # Close the discarded client — it owns an httpx connection pool,
+        # and dropping it without close() leaked one pool per rotation.
+        old = self._client
         self._client = None  # force re-creation with new key
+        if old is not None:
+            try:
+                await old.close()
+            except Exception:
+                pass
         return True
 
     def for_model(self, model: str) -> OpenAIChatClient:
@@ -261,14 +269,23 @@ class OpenAIChatClient:
         try:
             stream = await self._create_with_backoff(kwargs)
         except Exception as e:
-            # Only rotate credentials on auth / rate-limit errors
-            if self._is_retryable(e) and self._on_auth_error():
+            # Only rotate credentials on auth / rate-limit errors. The
+            # rotated retry goes through _create_with_backoff too (the old
+            # code did one bare create — no backoff — and gave up after a
+            # single rotation even when the pool had more keys).
+            stream = None
+            rotations = 0
+            while self._is_retryable(e) and rotations < 3 and await self._on_auth_error():
+                rotations += 1
                 # Update kwargs: new credential may have a different model
                 kwargs["model"] = self.config.model
-                client = self._get_client()
-                stream = await client.chat.completions.create(**kwargs)
-            else:
-                raise
+                try:
+                    stream = await self._create_with_backoff(kwargs)
+                    break
+                except Exception as e2:
+                    e = e2
+            if stream is None:
+                raise e
 
         # Accumulate tool_call fragments by index
         tool_acc: dict[int, dict[str, Any]] = {}

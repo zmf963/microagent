@@ -156,6 +156,59 @@ class TestJitteredBackoff:
         # 1 initial + 3 retries = 4 total attempts
         assert call_count == 4
 
+    async def test_rotation_closes_old_client_and_retries(self):
+        """On 401 with a pool: the discarded AsyncOpenAI client must be
+        closed (it owns an httpx pool), and the rotated retry must succeed
+        via the backoff path."""
+        from openai import AuthenticationError
+        from microagent.llm.pool import CredentialPool
+
+        cfg1 = LLMConfig(base_url="http://x/v1", api_key="bad", model="m")
+        cfg2 = LLMConfig(base_url="http://x/v1", api_key="good", model="m")
+        pool = CredentialPool(credentials=(cfg1, cfg2))
+        client = OpenAIChatClient(cfg1, pool=pool)
+
+        closed = []
+
+        class FakeStream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        call_count = 0
+
+        async def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if client.config.api_key == "bad":
+                raise AuthenticationError(
+                    message="bad key",
+                    response=MagicMock(status_code=401, headers={}),
+                    body=None,
+                )
+            return FakeStream()
+
+        old_client = MagicMock()
+        old_client.chat.completions.create = mock_create
+
+        async def _close():
+            closed.append(True)
+
+        old_client.close = _close
+        client._client = old_client
+
+        # New client created after rotation must also use our mock
+        client._get_client = lambda: old_client
+
+        async for _ in client.stream(system="sys", messages=(), tools=None):
+            pass
+
+        assert closed == [True]  # old client closed on rotation
+        assert client.config.api_key == "good"  # rotated
+        assert call_count >= 2  # retried after rotation
+
     async def test_stream_no_retry_on_auth_error(self):
         """stream() does NOT retry on 401 auth error."""
         from openai import AuthenticationError
