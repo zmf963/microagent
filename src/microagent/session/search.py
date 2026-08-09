@@ -79,14 +79,21 @@ def _build_fts_query(query: str) -> str:
             words = _LATIN_WORD_RE.findall(latin)
             parts.extend(f'"{w}"' for w in words)
 
-        # Split CJK into bigrams
+        # Split CJK into bigrams. FTS5's unicode61 tokenizer indexes a CJK
+        # run as ONE token ("代码审查非常重要" is a single token — no CJK
+        # segmentation), so a bare bigram like 代码 never matches. Prefix
+        # matching (代码*) does: the indexed run starts with the bigram.
+        # Without the '*', every CJK query silently returned 0 rows with no
+        # error (so the LIKE fallback never fired) — verified against real
+        # sqlite3. The '*' is added here after user input was stripped of
+        # FTS5 specials, so it can't break the query grammar.
         cjk = m.group()
         bigrams = [cjk[i : i + 2] for i in range(len(cjk) - 1)]
         if bigrams:
-            parts.extend(bigrams)
+            parts.extend(f"{bg}*" for bg in bigrams)
         else:
             # Single CJK character — keep as-is
-            parts.append(cjk)
+            parts.append(f"{cjk}*")
         pos = m.end()
 
     # Remaining Latin text

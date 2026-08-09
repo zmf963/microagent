@@ -134,6 +134,11 @@ class SQLiteMemoryProvider:
             return self._like_search(query, k)
 
     def _fts_search(self, query: str, k: int) -> tuple[Memory, ...]:
+        # Build a CJK-aware query: raw CJK input never matches because
+        # unicode61 indexes CJK runs as single tokens (see search.py).
+        from ..session.search import _build_fts_query
+
+        fts_query = _build_fts_query(query)
         rows = self._conn.execute(
             "SELECT m.id, m.content, m.category, m.created_at, "
             "       -bm25(memories_fts) AS relevance_score, "
@@ -142,7 +147,7 @@ class SQLiteMemoryProvider:
             "JOIN memories m ON memories_fts.rowid = m.rowid "
             "WHERE memories_fts MATCH ? "
             "ORDER BY relevance_score DESC LIMIT ?",
-            (query, k),
+            (fts_query, k),
         ).fetchall()
         return self._rows_to_memories(rows)
 

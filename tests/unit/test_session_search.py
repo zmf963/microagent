@@ -74,6 +74,30 @@ class TestSearchSessions:
         results = await search_sessions(store, "special", k=1)
         assert len(results) >= 1
 
+    async def test_cjk_query_matches(self, store):
+        """unicode61 indexes a CJK run as ONE token — bare bigrams never
+        match. CJK queries must use prefix matching (bigram*) or every CJK
+        search silently returns 0 rows (no error → no LIKE fallback)."""
+        from microagent.core.types import Message
+
+        await store.append("s1", Message.user("代码审查非常重要，需要仔细检查"))
+        results = await search_sessions(store, "代码", k=3)
+        assert len(results) >= 1
+        assert any("代码审查" in m.content for m in results)
+
+    async def test_cjk_recall_matches(self, tmp_path):
+        """Same CJK fix in SQLiteMemoryProvider.recall — raw MATCH missed."""
+        from microagent.memory.provider import Memory, SQLiteMemoryProvider
+
+        prov = SQLiteMemoryProvider(tmp_path / "mem.db")
+        await prov.batch_write((
+            Memory(id="m1", content="用户的代码审查偏好是先看安全", category="preference", created_at=1.0),
+        ))
+        results = await prov.recall("代码", k=3)
+        assert len(results) >= 1
+        assert any("代码审查" in m.content for m in results)
+        prov.close()
+
     async def test_search_respects_store_lock(self, store):
         """search_sessions runs raw sync sqlite3 on store._conn — it must
         go through store._lock + to_thread like every other SQLiteStore
