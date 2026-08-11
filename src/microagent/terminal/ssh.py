@@ -22,12 +22,22 @@ class SSHTerminal:
         password: str = "",
         key_file: str = "",
         port: int = 22,
+        *,
+        known_hosts: str | bool | None = None,
     ):
+        """*known_hosts* — controls host-key verification:
+        - ``None`` or ``True``: use the default ``~/.ssh/known_hosts``
+          (``RejectPolicy`` if the file exists, ``AutoAddPolicy`` otherwise).
+        - ``False``: skip verification (``AutoAddPolicy``, TOFU).
+        - ``str`` path: use that file as known_hosts (``RejectPolicy`` if it
+          exists and has entries, ``AutoAddPolicy`` otherwise).
+        """
         self._host = host
         self._username = username
         self._password = password
         self._key_file = key_file
         self._port = port
+        self._known_hosts = known_hosts
 
     async def run(
         self,
@@ -64,7 +74,29 @@ class SSHTerminal:
             full_cmd = f"{exports} {full_cmd}"
 
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        # Host-key verification policy based on known_hosts setting.
+        if self._known_hosts is False:
+            policy = paramiko.AutoAddPolicy()
+        elif isinstance(self._known_hosts, str):
+            kh = Path(self._known_hosts)
+            if kh.exists() and kh.stat().st_size > 0:
+                _load_host_keys = getattr(client, "load_host_keys", None)
+                if _load_host_keys:
+                    _load_host_keys(self._known_hosts)
+                policy = paramiko.RejectPolicy()
+            else:
+                policy = paramiko.AutoAddPolicy()
+        else:  # None or True — default ~/.ssh/known_hosts
+            kh = Path.home() / ".ssh" / "known_hosts"
+            if kh.exists() and kh.stat().st_size > 0:
+                _load_host_keys = getattr(client, "load_host_keys", None)
+                if _load_host_keys:
+                    _load_host_keys(str(kh))
+                policy = paramiko.RejectPolicy()
+            else:
+                policy = paramiko.AutoAddPolicy()
+        client.set_missing_host_key_policy(policy)
 
         try:
             connect_kw = {

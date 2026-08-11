@@ -60,6 +60,9 @@ def _install_fake_paramiko(monkeypatch, *, fail_connect=False, fail_exec=False, 
         def set_missing_host_key_policy(self, policy):
             pass
 
+        def load_host_keys(self, path):
+            pass
+
         def connect(self, **kw):
             self.kwargs = kw
             if fail_connect:
@@ -79,6 +82,7 @@ def _install_fake_paramiko(monkeypatch, *, fail_connect=False, fail_exec=False, 
 
     fake.SSHClient = _FakeSSHClient
     fake.AutoAddPolicy = _Policy
+    fake.RejectPolicy = _Policy
     monkeypatch.setitem(sys.modules, "paramiko", fake)
     return _FakeSSHClient, client_instances
 
