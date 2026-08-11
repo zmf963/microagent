@@ -14,6 +14,7 @@ TerminalBackend, or by injecting a TerminalBackend via a custom tool.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -78,6 +79,13 @@ class LocalTerminal:
         env: dict[str, str] | None = None,
         timeout: float | None = None,
     ) -> TerminalResult:
+        # Merge caller-supplied env on top of os.environ so PATH and other
+        # essential vars survive. Without this, passing env={"FOO": "bar"}
+        # fully replaces the environment — the subprocess loses PATH and
+        # can't find even basic utilities like `ls` or `python`.
+        child_env = os.environ.copy()
+        if env:
+            child_env.update({str(k): str(v) for k, v in env.items()})
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -87,7 +95,7 @@ class LocalTerminal:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-                env=env,
+                env=child_env,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             return TerminalResult.ok(
