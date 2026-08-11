@@ -194,6 +194,13 @@ class TestPricingMorePaths:
         # 'gpt-4o' matches 'openai/gpt-4o'
         assert get_pricing("gpt-4o") == get_pricing("openai/gpt-4o")
 
+    def test_bare_dated_id_prefix_match(self):
+        """A bare dated id (no provider/) resolves via tail-prefix match."""
+        from microagent.llm.pricing import get_pricing
+        # 'gpt-4o-2024-08-06' should match 'openai/gpt-4o' via the
+        # bare-tail-prefix path, not fall through to fallback pricing.
+        assert get_pricing("gpt-4o-2024-08-06") == get_pricing("openai/gpt-4o")
+
     def test_refresh_failure_keeps_cache(self, monkeypatch, tmp_path):
         """refresh() with all fetches failing keeps existing cache."""
         from microagent.llm import pricing

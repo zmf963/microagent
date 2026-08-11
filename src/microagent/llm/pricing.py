@@ -111,7 +111,12 @@ def _lookup(model: str) -> dict[str, Any] | None:
     best: tuple[int, dict] | None = None
     for key, entry in _cache.items():
         kl = key.lower()
-        if m.startswith(kl) or kl.endswith("/" + m.split("/")[-1]):
+        tail = kl.split("/", 1)[-1] if "/" in kl else kl
+        if (
+            m.startswith(kl)                         # full "provider/model-2024-01"
+            or kl.endswith("/" + m.split("/")[-1])   # cache key ends with model
+            or ("/" not in m and m.startswith(tail)) # bare "model-2024-01" → tail prefix
+        ):
             if best is None or len(kl) > best[0]:
                 best = (len(kl), entry)
     if best is not None:
