@@ -447,13 +447,42 @@ AGENTS.md/README.md/DESIGN.md 数字更新为实测值：runner 977 行、单元
 总测试 1098、核心依赖 6、集成测试 10、单测文件 93、核心 ~11,000 LOC。
 
 ### 🔵 未处理（下轮候选）
-- lsp symbols 输出无截断；`_cjk_aware_ratio` 中文匹配限制（4.1 观察项）；
-  SSH AutoAddPolicy 无主机密钥校验；LocalTerminal env 整体替换语义；
-  流错误重试额外消耗迭代预算；pricing 裸 dated id 前缀匹配失效；
-  memory extractor 重叠窗口近似重复记忆无限增长（需 provider 内容哈希去重）；
-  memory provider async 方法内跑同步 sqlite3（阻塞事件循环）；
-  snip token 记账低估释放量（过度 snip）；question 工具超时后 input 线程抢 stdin；
-  mcp 超时路径异常遮蔽（真实错误被 RuntimeError timeout 替代 + 无谓 5s 轮询）。
+- `_cjk_aware_ratio` 中文匹配限制（4.1 观察项，根治需嵌入检索）；
+  SSH AutoAddPolicy 无主机密钥校验（opt-in 后端取舍）；LocalTerminal env 整体替换语义；
+  流错误重试额外消耗迭代预算（默认 25 次下影响小）；pricing 裸 dated id 前缀匹配失效；
+  question 工具超时后 input 线程抢 stdin。
+
+---
+
+## 十二、第十轮修复（Round 10，🔵 候选清单前 5 项）— 2026-08-09
+
+> 基线：1117 passed → 修复后 1127 passed, 1 skipped。
+
+**12.1 memory provider 同步 sqlite3 阻塞事件循环 + rowid 抖动** ✅ **已修复 (b37bf89)**
+- **修复**：全部公开 async 方法经 `asyncio.Lock` + `to_thread`（对齐 session/search.py
+  纪律），`check_same_thread=False`；`_insert` 弃用 INSERT OR REPLACE——重写时按 delete
+  契约清旧 FTS 条目再全新 INSERT；相同 (id, content) 重写为 no-op。
+- **现象**：recall 在 turn 中阻塞流式/工具调用；INSERT OR REPLACE 每次重写改 rowid，
+  旧 FTS 条目残留（索引膨胀 + rowid 复用后陈旧 token 关联无关记忆）。
+
+**12.5 归一化哈希去重 + 幂等迁移** ✅ **已修复 (b5224f7)**
+- **修复**：`_insert` 按 `sha256(strip+空白折叠+小写)[:16]` 去重（不同 id 同内容跳过）；
+  标点/语序保留不误杀修订；旧库 `ALTER TABLE` 加列 + 索引 + 存量回填，幂等。
+- **现象**：extractor 每轮对重叠窗口产出近似 fact（新 uuid），记忆表无限增长、召回被稀释。
+
+**12.2 snip token 记账低估 → 过度 snip** ✅ **已修复 (9762ca4)**
+- **修复**：提取 `_message_tokens()` 共享 helper（content + tool_calls 序列化 + 4），
+  count_tokens 与 snip 共用。
+- **现象**：snip 按 content-only 递减 total_tokens（实际含 tool_calls+开销）→ 每次删除
+  低估释放量 → 删掉比需要更多的 tool 结果。
+
+**12.3 MCP 超时路径异常遮蔽** ✅ **已修复 (9a0ac70)**
+- **修复**：轮询循环检查 `self._task.done()`，立即重抛任务真实异常。
+- **现象**：server 启动即失败（npx 不存在等）仍白等 5s，真实错误被 "timed out" 遮蔽。
+
+**12.4 lsp symbols 输出无截断** ✅ **已修复 (0d80110)**
+- **修复**：上限 200 条 + 总数 + 截断提示（对齐 references 模式）。
+- **现象**：5000 符号文件产生 >100KB 无界 ToolResult。
 
 ---
 
