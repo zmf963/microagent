@@ -448,9 +448,8 @@ AGENTS.md/README.md/DESIGN.md 数字更新为实测值：runner 977 行、单元
 
 ### 🔵 未处理（下轮候选）
 - `_cjk_aware_ratio` 中文匹配限制（4.1 观察项，根治需嵌入检索）；
-  SSH AutoAddPolicy 无主机密钥校验（opt-in 后端取舍）；LocalTerminal env 整体替换语义；
-  流错误重试额外消耗迭代预算（默认 25 次下影响小）；pricing 裸 dated id 前缀匹配失效；
-  question 工具超时后 input 线程抢 stdin。
+  流错误重试额外消耗迭代预算（默认 25 次下影响小）；
+  question 工具超时后 input 线程抢 stdin（Python 线程根本限制）。
 
 ---
 
@@ -559,3 +558,24 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - 978dc43/0572e3f 的交互缺陷（11.4）已修；7842493 UTF-8 截断无乱码注入
   （errors="replace"）；其余 12 个 commit 未发现引入性 bug。
 - mcp 超时路径异常遮蔽（f702206 残留 🔵）记入候选清单。
+
+---
+
+## 十三、第十一轮修复（Round 11，剩余 🔵 清单）— 2026-08-11
+
+> 基线：1127 passed → 修复后 1128 passed, 11 skipped。
+
+**13.1 pricing 裸 dated id 前缀匹配失效** ✅ **已修复 (7d094e2)**
+- **修复**：`_lookup()` 第三步增加 bare-tail-prefix 条件——查询无 `/` 时，
+  用 cache key 的 tail（`/` 后部分）做前缀匹配。
+- **现象**：`gpt-4o-2024-08-06`（无 `openai/` 前缀）穿透到 fallback 价格。
+
+**13.2 SSH AutoAddPolicy 无主机密钥校验** ✅ **已修复 (edf3d2d)**
+- **修复**：新增 `known_hosts` 参数——`None`/`True`（默认）加载 `~/.ssh/known_hosts`
+  + RejectPolicy；`False` 跳过验证（旧行为）；`str` 指定文件路径。
+- **现象**：始终 AutoAddPolicy，MITM 风险。
+
+**13.3 LocalTerminal env 整体替换** ✅ **已修复 (e474271)**
+- **修复**：`env` 参数合并到 `os.environ.copy()` 之上，不再整体替换。
+- **现象**：传 `env={"FOO": "bar"}` 导致 PATH 丢失，子进程找不到基本命令。
+
