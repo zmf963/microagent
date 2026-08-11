@@ -4,13 +4,13 @@ Instructions for AI coding assistants working on the microagent codebase.
 
 ## What MicroAgent Is
 
-MicroAgent is an embeddable AI agent core library (~11,000 LOC, 34 tools, 1078 unit tests).
+MicroAgent is an embeddable AI agent core library (~11,450 LOC, 34 tools, 1128 unit tests).
 It runs the core agent loop — LLM → tool calls → LLM → text response — and
 nothing else. No gateway, no desktop, no dashboard. It is a library, not a product.
 
 The single most important principle: **the core is a narrow waist; capability
 lives in tools and extension points, not in the core loop.** SessionRunner
-(~977 LOC) is the sole execution path. Everything else — memory, skills,
+(~1008 LOC) is the sole execution path. Everything else — memory, skills,
 compression, permissions, subagents — plugs in through Protocols.
 
 ## Project Structure
@@ -35,7 +35,7 @@ microagent/
 │   │   ├── templates.py     # Model-specific system prompt templates
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
-│   │   ├── runner.py        # SessionRunner — the core loop (~977 LOC)
+│   │   ├── runner.py        # SessionRunner — the core loop (~1008 LOC)
 │   │   ├── compress.py      # 4-layer compression pyramid
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
@@ -72,7 +72,7 @@ microagent/
 
 ### 1. The core loop is sacred
 
-`SessionRunner.run_turn()` is the only execution path. It is ~977 LOC and
+`SessionRunner.run_turn()` is the only execution path. It is ~1008 LOC and
 every line traces to the core contract:
 
 ```
@@ -162,8 +162,8 @@ Auto trigger: `compression_threshold=0` → auto-computed as 60% of context wind
 source .venv/bin/activate
 
 # Unit tests (mock LLM, fast)
-python -m pytest tests/unit/ -q            # 1078 unit tests
-python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 1098 tests total
+python -m pytest tests/unit/ -q            # 1128 unit tests
+python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 1139 tests total
 
 # Integration tests (real LLM API)
 MICROAGENT_TEST_BASE_URL=... \

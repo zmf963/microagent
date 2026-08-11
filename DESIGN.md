@@ -1,8 +1,8 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~11,000 行核心代码 | 34 内置工具 | 1098 测试
+> 版本 1.0.0 | Python ≥3.14 | ~11,450 行核心代码 | 34 内置工具 | 1139 测试
 
-**MicroAgent 是一个将 AI Agent 的核心循环压缩到 10,000 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 11,500 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
 **核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
 
@@ -187,7 +187,7 @@ deepseek-v4-flash, tx-d4p → deepseek-v4-pro）通过 `_ALIAS_TO_CANONICAL` 映
 
 ## 五、会话管理 (`session/`)
 
-### SessionRunner (`runner.py` — 654 行)
+### SessionRunner (`runner.py` — 1008 行)
 
 核心循环：
 
@@ -207,7 +207,7 @@ while not budget.exhausted:
 - **自动持久化**：user/assistant/tool_result 自动写入 store
 - **压缩**：`compression_threshold=0` 时自动用 60% 窗口计算
 
-### 4 层压缩金字塔 (`compress.py` — 697 行)
+### 4 层压缩金字塔 (`compress.py` — 734 行)
 
 | 层 | 名称 | API | 触发 | 操作 |
 |----|------|-----|------|------|
@@ -271,7 +271,7 @@ class ContextSource(Protocol):
 
 ## 九、Surface 层
 
-### CLI (`surface/cli.py` — 855 行)
+### CLI (`surface/cli.py` — 911 行)
 
 ```
 ────── 💭 thinking ──────      思考过程（灰色分割线）
@@ -354,11 +354,11 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~11,000 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
-| 核心循环模块 | 654 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
+| 核心代码量 | ~11,450 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心循环模块 | 1008 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
-| 压缩代码量 | 697 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
-| CLI 代码量 | 855 行 | 16,304 行 | 闭源（产品级 CLI） |
+| 压缩代码量 | 734 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
+| CLI 代码量 | 911 行 | 16,304 行 | 闭源（产品级 CLI） |
 | 测试数量 | 1037（82% 行覆盖率） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
@@ -537,4 +537,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,000 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,450 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
