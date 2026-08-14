@@ -238,3 +238,84 @@ async def test_mcp_connect_reconnects_after_dead_manager(monkeypatch):
     r2 = await mc.mcp_connect.fn(name="git")
     assert "Connected" in r2.content, f"dead manager not replaced: {r2.content}"
     assert call_count["n"] == 2
+
+
+async def test_question_active_flag_set_and_cleared(monkeypatch):
+    """The ESC watcher relies on _QUESTION_ACTIVE to stop stealing stdin
+    keystrokes from input(). The flag must be set for the duration of the
+    question and cleared afterwards."""
+    from microagent.tools.builtins import question as q
+    import sys
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setitem(
+        sys.modules, "asyncio",
+        type("_Shim", (), {
+            "TimeoutError": __import__("asyncio").TimeoutError,
+            "to_thread": staticmethod(_fake_to_thread),
+            "wait_for": staticmethod(_fake_wait_for),
+        })(),
+    )
+    q._QUESTION_ACTIVE.clear()
+    r = await q.question.fn(text="q", timeout=5)
+    assert not r.is_error
+    assert not q._QUESTION_ACTIVE.is_set(), "flag must clear after the answer"
+
+
+async def test_question_flag_cleared_on_timeout(monkeypatch):
+    from microagent.tools.builtins import question as q
+    import sys
+    import asyncio as _real_asyncio
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setitem(
+        sys.modules, "asyncio",
+        type("_Shim", (), {
+            "TimeoutError": _real_asyncio.TimeoutError,
+            "to_thread": staticmethod(_fake_to_thread),
+            "wait_for": staticmethod(_fake_wait_for),
+        })(),
+    )
+    q._QUESTION_ACTIVE.clear()
+
+    async def _raise_timeout(awaitable, timeout=None):
+        raise _real_asyncio.TimeoutError()
+
+    sys.modules["asyncio"].wait_for = _raise_timeout
+    r = await q.question.fn(text="q", timeout=2)
+    assert r.is_error and "timed out" in r.content
+    assert not q._QUESTION_ACTIVE.is_set(), "flag must clear after a timeout"
+
+
+def test_restore_cooked_noop_and_active(monkeypatch):
+    """_restore_cooked is a no-op without published settings, and calls
+    tcsetattr with the published settings when present."""
+    from microagent.tools.builtins import question as q
+
+    saved = q._ORIGINAL_TERMIOS
+    try:
+        q._ORIGINAL_TERMIOS = None
+        q._restore_cooked()  # must not raise
+
+        calls = []
+        fake_attrs = object()
+        q._ORIGINAL_TERMIOS = fake_attrs
+
+        class _FakeTermios:
+            TCSADRAIN = 1
+            error = OSError
+
+            @staticmethod
+            def tcsetattr(fd, action, attrs):
+                calls.append((fd, action, attrs))
+
+        import sys
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        # Under pytest's capture, sys.stdin is a capture object whose
+        # fileno() raises OSError — pin it so the tcsetattr path runs.
+        monkeypatch.setattr("sys.stdin.fileno", lambda: 0)
+        monkeypatch.setitem(sys.modules, "termios", _FakeTermios)
+        q._restore_cooked()
+        assert calls and calls[0][2] is fake_attrs
+    finally:
+        q._ORIGINAL_TERMIOS = saved

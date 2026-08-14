@@ -405,8 +405,14 @@ async def _run_streaming(
         nonlocal _esc_count
         if not sys.stdin.isatty() or not _HAS_TERMIOS:
             return
+        from ..tools.builtins import question as _question_mod
+
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        # Publish the original cooked settings so the question tool can
+        # restore them before input() (in cbreak mode readline truncates
+        # answers to one keystroke).
+        _question_mod._ORIGINAL_TERMIOS = old
         try:
             # Use setcbreak, NOT setraw: setraw disables OPOST (output
             # post-processing), which kills ONLCR (\n → \r\n). In raw mode
@@ -416,7 +422,23 @@ async def _run_streaming(
             # still disabling ECHO/ICANON for single-key Esc detection.
             tty.setcbreak(fd)
             while not _interrupt.is_set():
-                ch = await asyncio.to_thread(sys.stdin.read, 1)
+                # The question tool needs exclusive stdin: in cbreak mode
+                # this watcher steals single keystrokes from its input().
+                # While a question is pending, stop reading entirely (the
+                # question tool restores cooked mode itself via the
+                # published _ORIGINAL_TERMIOS). Resume watching once it
+                # settles.
+                if _question_mod._QUESTION_ACTIVE.is_set():
+                    while _question_mod._QUESTION_ACTIVE.is_set() and not _interrupt.is_set():
+                        await asyncio.sleep(0.1)
+                    _esc_count = 0
+                    continue
+                try:
+                    ch = await asyncio.wait_for(
+                        asyncio.to_thread(sys.stdin.read, 1), timeout=0.2
+                    )
+                except asyncio.TimeoutError:
+                    continue  # poll the question flag again
                 if ch == "\x1b":
                     _esc_count += 1
                     if _esc_count >= 2:
