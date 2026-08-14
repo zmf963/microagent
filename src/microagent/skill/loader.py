@@ -177,6 +177,18 @@ def _parse_skill_md(path: Path, namespace: str = "claude") -> Skill | None:
         )
         return None
 
+    # YAML can parse to a list/scalar (e.g. a frontmatter body that starts
+    # with '- '). front.get would then raise AttributeError and abort the
+    # whole load() — one malformed skill file breaks every skill. config.py
+    # already guards the same way; mirror it here.
+    if not isinstance(front, dict):
+        import logging
+        logging.getLogger(__name__).warning(
+            "Skipping SKILL.md %s: frontmatter is not a mapping (got %s)",
+            path, type(front).__name__,
+        )
+        return None
+
     triggers_raw = front.get("triggers", [])
     if isinstance(triggers_raw, list):
         triggers = tuple(triggers_raw)
