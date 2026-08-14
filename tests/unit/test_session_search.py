@@ -115,3 +115,60 @@ class TestSearchSessions:
         # With the lock free, the search completes.
         results = await search_sessions(store, "docker", k=3)
         assert len(results) >= 1
+
+
+async def test_fts5_path_actually_works_non_cjk(tmp_path):
+    """Regression: the FTS5 index was created in an external-content shape
+    (content=messages) whose columns role/content/session_id do not exist on
+    the messages table. Every MATCH query raised 'no such column: T.role',
+    was swallowed by the except-fallback, and silently degraded to LIKE.
+    This test drives the REAL FTS path (Latin query, no CJK) and asserts a
+    hit — proving the index is usable, not just present."""
+    import asyncio
+    from microagent.core.store import SQLiteStore
+    from microagent.core.types import Message
+    from microagent.session.search import search_sessions, ensure_fts5, _has_broken_fts_schema
+
+    store = SQLiteStore(tmp_path / "s.db")
+    await store.append("sess-A", Message.user("the quick brown fox"))
+    await store.append("sess-B", Message.user("something completely different"))
+
+    found = await search_sessions(store, "brown fox", k=5)
+    contents = [m.content for m in found]
+    assert "the quick brown fox" in contents, f"FTS miss; got {contents}"
+    assert _has_broken_fts_schema(store._conn) is False
+    store.close()
+
+
+async def test_fts5_migrates_broken_external_content_shape(tmp_path):
+    """An existing DB created with the broken content=messages shape must be
+    detected, dropped, rebuilt as self-contained, and backfilled — making
+    pre-existing sessions searchable via FTS for the first time."""
+    import json
+    from microagent.core.store import SQLiteStore
+    from microagent.session.search import ensure_fts5, _has_broken_fts_schema
+
+    store = SQLiteStore(tmp_path / "s.db")
+    conn = store._conn
+    # Simulate the OLD broken shape exactly.
+    conn.executescript("""
+        CREATE VIRTUAL TABLE messages_fts USING fts5(
+            role, content, session_id, content=messages, content_rowid=id);
+        CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, role, content, session_id)
+            VALUES (new.id, json_extract(new.data, '$.role'),
+                    json_extract(new.data, '$.content'), new.session_id);
+        END;
+    """)
+    conn.execute("INSERT INTO messages (session_id, seq, data) VALUES (?,?,?)",
+                 ("old", 1, json.dumps({"role": "user", "content": "legacy searchable text"})))
+    assert _has_broken_fts_schema(conn) is True
+
+    ensure_fts5(store)  # should migrate + backfill
+
+    assert _has_broken_fts_schema(conn) is False
+    hit = conn.execute(
+        "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'legacy'"
+    ).fetchone()[0]
+    assert hit == 1, f"backfill failed; FTS hits={hit}"
+    store.close()

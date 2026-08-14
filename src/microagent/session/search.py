@@ -20,9 +20,7 @@ FTS5_INIT_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     role,
     content,
-    session_id,
-    content=messages,
-    content_rowid=id
+    session_id
 );
 
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
@@ -33,21 +31,63 @@ CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, role, content, session_id)
-    VALUES ('delete', old.id, json_extract(old.data, '$.role'),
-            json_extract(old.data, '$.content'),
-            old.session_id);
+    DELETE FROM messages_fts WHERE rowid = old.id;
 END;
 """
 
 
+def _has_broken_fts_schema(conn) -> bool:
+    """Detect the old external-content shape (content=messages).
+
+    That schema never worked: FTS5 columns role/content/session_id do not
+    exist as real columns on the messages table (the values live inside the
+    JSON data blob), so every query raised 'no such column: T.role' and was
+    silently swallowed by the except-fallback in _search. The index was
+    created but unusable. Returns True if the table exists in that shape and
+    must be migrated.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+    ).fetchone()
+    if not row or not row[0]:
+        return False
+    return "content=messages" in (row[0] or "").replace(" ", "")
+
+
 def ensure_fts5(store: SQLiteStore) -> None:
-    """Ensure FTS5 index exists on the store (idempotent)."""
+    """Ensure the FTS5 index exists on the store (idempotent + self-healing).
+
+    Migrates away from the broken external-content shape (content=messages)
+    by dropping and rebuilding as a self-contained table, then backfills the
+    index from any messages that pre-date the index. Idempotent: a correct
+    table is left untouched.
+    """
     conn = store._conn
+    need_backfill = False
+    if _has_broken_fts_schema(conn):
+        conn.execute("DROP TRIGGER IF EXISTS messages_ai")
+        conn.execute("DROP TRIGGER IF EXISTS messages_ad")
+        conn.execute("DROP TABLE IF EXISTS messages_fts")
+        need_backfill = True
+    elif conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+    ).fetchone() is None:
+        need_backfill = True  # fresh table — index any pre-existing messages
+
     try:
         conn.executescript(FTS5_INIT_SQL)
     except Exception:
-        pass  # FTS5 may already exist or be unsupported
+        pass  # FTS5 may be unsupported on this build
+
+    if need_backfill:
+        try:
+            conn.execute(
+                "INSERT INTO messages_fts(rowid, role, content, session_id) "
+                "SELECT id, json_extract(data, '$.role'), "
+                "json_extract(data, '$.content'), session_id FROM messages"
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +207,12 @@ async def search_sessions(
                 ]
                 return _rows_to_messages(rows)
         try:
-            # FTS5 with ranking — higher rank = better match
+            # FTS5 with ranking — higher rank = better match. Join the FTS
+            # rowid back to messages.id to recover the full JSON data (the
+            # self-contained FTS table holds indexed text, not the raw blob).
             rows = store._conn.execute(
-                """SELECT data, rank FROM messages_fts
+                """SELECT m.data, f.rank FROM messages_fts f
+                   JOIN messages m ON m.id = f.rowid
                    WHERE messages_fts MATCH ?
                    ORDER BY rank
                    LIMIT ?""",
