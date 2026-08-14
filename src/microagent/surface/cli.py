@@ -817,6 +817,111 @@ async def _cmd_history(state: ReplState, arg: str) -> None:
     console.print(table)
 
 
+async def _cmd_memory(state: ReplState, arg: str) -> None:
+    """Memory management (Hermes /memory parity).
+
+    /memory                    — memory status (enabled, pending count)
+    /memory pending            — list memories awaiting approval
+    /memory approve <id>       — approve one pending memory
+    /memory reject <id>        — reject one pending memory
+    """
+    memory = state.agent.runner.memory
+    if memory is None:
+        console.print("[dim]memory is disabled (construct the agent with memory=False)[/]")
+        return
+
+    parts = arg.split(maxsplit=1) if arg else []
+    subcmd = parts[0] if parts else "status"
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if subcmd == "pending":
+        if not getattr(memory, "write_approval", False):
+            console.print("[dim]write_approval is off — memories are written directly[/]")
+            return
+        try:
+            pending = await memory.pending_memories()
+        except Exception as e:
+            console.print(f"[error]✗[/] failed to list pending: {e!r}")
+            return
+        if not pending:
+            console.print("[dim](no pending memories)[/]")
+            return
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="dim", width=14)
+        table.add_column("Category", width=12)
+        table.add_column("Content", overflow="fold")
+        for m in pending:
+            table.add_row(m.id, m.category, m.content)
+        console.print(table)
+        return
+
+    if subcmd == "approve":
+        if not rest:
+            console.print("[error]✗[/] Usage: /memory approve <id>")
+            return
+        try:
+            await memory.approve_memory(rest)
+            console.print(f"[success]✓[/] Memory '{rest}' approved")
+        except Exception as e:
+            console.print(f"[error]✗[/] approve failed: {e!r}")
+        return
+
+    if subcmd == "reject":
+        if not rest:
+            console.print("[error]✗[/] Usage: /memory reject <id>")
+            return
+        try:
+            await memory.reject_memory(rest)
+            console.print(f"[success]✓[/] Memory '{rest}' rejected")
+        except Exception as e:
+            console.print(f"[error]✗[/] reject failed: {e!r}")
+        return
+
+    # status
+    approval = getattr(memory, "write_approval", False)
+    console.print(
+        f"[info]memory[/]  enabled: [success]yes[/]  "
+        f"write_approval: [{'error' if approval else 'success'}]{approval}[/]"
+    )
+
+
+async def _cmd_learn(state: ReplState, arg: str) -> None:
+    """Learn a reusable skill from chat/dir/url (Hermes /learn parity).
+
+    /learn chat <text>          — distill a skill from provided text
+    /learn chat .               — distill from THIS conversation's history
+    /learn dir <path>           — distill from a directory tree
+    /learn url <url>            — distill from a fetched page
+    """
+    parts = arg.split(maxsplit=1) if arg else []
+    kind = parts[0] if parts else ""
+    source = parts[1] if len(parts) > 1 else ""
+
+    if kind not in ("chat", "dir", "url"):
+        console.print("[error]✗[/] Usage: /learn <chat|dir|url> <source>  ('chat .' = this conversation)")
+        return
+
+    if kind == "chat" and source in ("", "."):
+        history = "\n\n".join(
+            f"{m.role}: {m.content[:2000]}" for m in state.messages[-20:]
+        )
+        if not history.strip():
+            console.print("[error]✗[/] no conversation history to learn from")
+            return
+        source = history
+
+    if not source:
+        console.print("[error]✗[/] source is required")
+        return
+
+    with console.status("[dim]Learning skill…[/]", spinner="dots"):
+        try:
+            result = await state.agent.learn(source, kind=kind)
+        except Exception as e:
+            result = f"[error] learn failed: {e!r}"
+    console.print(result)
+
+
 async def _cmd_skill(state: ReplState, arg: str) -> None:
     parts = arg.split(maxsplit=1) if arg else []
     subcmd = parts[0] if parts else "list"
@@ -960,6 +1065,8 @@ _COMMANDS: dict[str, tuple] = {
     "model": (_cmd_model, "Show or switch model (/model <name>)"),
     "history": (_cmd_history, "Show message history for current session"),
     "skill": (_cmd_skill, "Manage skills (/skill list|load|unload)"),
+    "memory": (_cmd_memory, "Manage memory (/memory [pending|approve <id>|reject <id>])"),
+    "learn": (_cmd_learn, "Learn a skill (/learn <chat|dir|url> <source>)"),
     "clear": (_cmd_clear, "Clear the screen"),
     "cost": (_cmd_cost, "Show token usage and cost for this session"),
     "models": (_cmd_models, "Show model pricing (/models [name|refresh|count])"),
