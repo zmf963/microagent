@@ -195,6 +195,20 @@ async def browser_navigate(
         await state.page.add_init_script(_CONSOLE_INTERCEPTOR_JS)
 
         await state.page.goto(url, timeout=30000)
+        # page.goto() FOLLOWS redirects, and the pre-launch check only saw
+        # the initial URL — a public attacker URL 302-ing to
+        # 169.254.169.254 (cloud metadata) or an RFC 1918 host would load
+        # internal content into snapshot/console output. Re-validate the
+        # FINAL url after navigation and refuse if it landed somewhere
+        # blocked.
+        final_url = state.page.url
+        final_error = await asyncio.to_thread(_check_navigate_url, final_url)
+        if final_error is not None:
+            await state.page.close()
+            state.page = None
+            return ToolResult.error(
+                f"navigate blocked: redirect target rejected — {final_error}"
+            )
         title = await state.page.title()
         return ToolResult.ok(f"Opened: {title}\n{state.page.url}")
     except ImportError as e:
