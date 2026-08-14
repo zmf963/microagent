@@ -276,6 +276,20 @@ class ClaudeSkillLoader:
         # do we re-read and re-parse.
         self._cached: tuple[Skill, ...] = ()
         self._fingerprint: tuple | None = None
+        self._instances.append(self)
+
+    # Live instances, so /learn (or skill_manage create/delete) can
+    # invalidate caches process-wide. The mtime fingerprint would pick the
+    # change up on the next load() anyway, but only if the mtime/size
+    # tuple actually changed — a rewrite within the same mtime granularity
+    # can be missed; explicit invalidation removes the race.
+    _instances: list[ClaudeSkillLoader] = []
+
+    @classmethod
+    def invalidate_all(cls) -> None:
+        for loader in cls._instances:
+            loader._fingerprint = None
+            loader._cached = ()
 
     def _scan_fingerprint(self) -> tuple:
         """Cheap stat-only fingerprint of every SKILL.md under the paths.
