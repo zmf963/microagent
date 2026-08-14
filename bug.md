@@ -787,3 +787,59 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - `LocalTerminal._wait_killed` 有界等待仍不读尽管道（macOS 上已验证无影响）
 - mcp_connect `_task=None` 的 manager 被视为 live——`_task` 未初始化即幂等跳过
   （正常路径无此形态，防御性处理留待下轮）
+
+---
+
+## 十七、第十四轮：memory 默认开启 + /learn 技能沉淀（Hermes 对齐）— 2026-08-14
+
+> 方法：参考 Hermes Agent（实测本机 `~/.hermes` 安装 + 官方 skill 文档）后对齐设计。
+> Hermes 哲学：**技能沉淀是刻意行为（/learn），不是自动后台循环**——例行维护
+> 零 token；memory 默认开启、每轮注入、cron 隔离。
+> 基线 1155 passed → 修复后 **1175 passed, 1 skipped**。
+> 6 个 feat commit：`46b6a9f`/`512f439`/`c7e76c0`/`d7697b8`/`c88e301`/`b8c0d35`。
+
+### 16.1 memory 默认开启 + 每轮注入 ✅ (512f439)
+- `Agent.from_config(memory=True)`（默认）构造 `SQLiteMemoryProvider(~/.microagent/memory.db)`
+  + LLM extractor（auxiliary model 优先）；`memory=False` 关闭 / 实例直用。
+- runner 每轮 `recall(last_user, k=5)` 注入 context block（与 skill 同通道，
+  过注入扫描）；recall 失败静默降级。
+- `Agent.close()` 关闭 provider 连接（不再泄漏 SQLite 连接）。
+
+### 16.2 write_approval 闸门 ✅ (46b6a9f)
+- 对齐 Hermes `write_approval`（默认 false = 直写）：True 时 batch_write 进
+  `pending_memories` 表，`approve_memory`/`reject_memory` 驱动闸门。
+- CLI `/memory [pending|approve <id>|reject <id>]`（Hermes /memory parity）。
+
+### 16.3 记忆滚动上限 ✅ (46b6a9f)
+- `MAX_MEMORIES = 500`：insert 超限驱逐最旧（category='context' 优先——原始
+  会话回响最不耐久）。Hermes 用 char_limit + LLM 压缩，SQLite 形态用行数语义。
+
+### 16.4 cron skip_memory 隔离 ✅ (512f439)
+- runner 新增 `skip_memory`；cron `_execute_job` 置位/恢复——后台 tick 不注入
+  记忆上下文、不写记忆（Hermes 不变式："cron sessions pass skip_memory=True"）。
+- 子代理不继承 parent memory（SubagentManager 构造未传）——上下文防火墙语义保持。
+
+### 16.5 /learn 技能沉淀（chat/dir/url）✅ (c7e76c0, c88e301)
+- 新模块 `skill/learner.py`：一次性蒸馏——auxiliary model 优先生成 SKILL.md，
+  写入 `~/.microagent/skills` + `.provenance.json(agent)` + curator usage 条目
+  （与 skill_manage 同磁盘形态，Curator 统一管理生命周期）。
+- `Agent.learn(source, kind=)` 库级 API；CLI `/learn chat .` 从**当前会话**学习。
+- `ClaudeSkillLoader.invalidate_all()`：learn/create/delete 后立即可匹配。
+- **agent-created skills 目录（~/.microagent/skills）现在始终在默认搜索路径**——
+  之前 skill_manage 写进去的 skill 从未被加载（需手动配 skills_path）。
+- 安全：name 过 `is_safe_name`、URL 走 SSRF 检查、同名拒绝覆盖。
+
+### 16.6 curator 归档备份 + pin ✅ (d7697b8)
+- 归档前 tar.gz 备份到 `.archive/`（Hermes parity：永不丢失，rename 非 delete）。
+- `.usage.json` 支持 `pinned`；`Curator.set_pinned()`；skill_manage 的 usage
+  touch 保留 pinned。
+
+### 与 Hermes 的差异（有意为之）
+| 维度 | Hermes | MicroAgent（本轮） |
+|------|--------|-------------------|
+| 记忆存储 | MEMORY.md/USER.md 文件 | SQLite+FTS5（保留,库场景多进程安全） |
+| 记忆抽取 | 工具驱动 | 每轮自动 LLM 抽取（保留,更先进） |
+| 上限 | char_limit + LLM 压缩 | 500 行驱逐 |
+| 沉淀触发 | /learn（人工） | /learn（人工,对齐） |
+| 例行维护 | 零 token | 零 token（对齐） |
+| LLM 密集维护 | consolidate opt-in | 未实现（候选:重叠技能合并） |
