@@ -299,15 +299,21 @@ class CronScheduler:
 
                 # Run under the job's own session id so its history neither
                 # pollutes nor reads other sessions. The shared runner's
-                # original id is restored afterwards.
+                # original id is restored afterwards. Memory is skipped
+                # (Hermes invariant: cron sessions pass skip_memory=True) —
+                # scheduled background ticks must not write memories of
+                # themselves or inject unrelated memory context.
                 runner = getattr(self.agent, "runner", None)
                 if runner is not None:
                     prev_sid = runner.session_id
+                    prev_skip = getattr(runner, "skip_memory", False)
                     runner.session_id = self._session_id_for(job)
+                    runner.skip_memory = True
                     try:
                         result = await self.agent.arun(messages)
                     finally:
                         runner.session_id = prev_sid
+                        runner.skip_memory = prev_skip
                 else:
                     result = await self.agent.arun(messages)
             logger.info(f"Cron job '{job.name}' completed: {result[:200]}")

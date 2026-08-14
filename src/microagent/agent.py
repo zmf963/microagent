@@ -46,7 +46,19 @@ class Agent:
         enable_cron: bool = False,
         skills_path: str | None = None,
         permission_engine: PermissionEngine | None = None,
+        memory: Any | None | bool = True,
+        memory_write_approval: bool = False,
     ) -> Agent:
+        """Build an Agent.
+
+        ``memory``: True (default) enables persistent cross-session memory
+        — a SQLiteMemoryProvider at ~/.microagent/memory.db plus the
+        LLM extractor, injected into every turn (Hermes-style default-on).
+        Pass a MemoryProvider instance to use a custom backend, or False
+        to disable. ``memory_write_approval`` (default False) routes
+        extracted memories through the pending/approve gate — the CLI's
+        /memory command drives it (Hermes write_approval semantics).
+        """
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
         if tools:
@@ -55,7 +67,11 @@ class Agent:
 
         # Build skill loader from built-in + user paths
         # Built-in skills ship under src/microagent/skills/ — always loaded.
-        # User paths are colon-separated extras.
+        # User paths are colon-separated extras. Agent-created skills land
+        # in ~/.microagent/skills (skill_manage's write dir) — ALWAYS in
+        # the search path, so runtime-created skills are actually loadable
+        # (before, they were written but the loader never searched there
+        # unless the user manually configured skills_path).
         _builtin_skills = Path(__file__).resolve().parent / "skills"
         search_paths: list[Path] = [_builtin_skills] if _builtin_skills.is_dir() else []
 
@@ -68,10 +84,28 @@ class Agent:
                     # converts to Path here, so expand here to cover ~.)
                     search_paths.append(Path(p).expanduser())
 
+        agent_skills_dir = Path.home() / ".microagent" / "skills"
+        if agent_skills_dir not in search_paths:
+            search_paths.append(agent_skills_dir)
+
         skill_loader = ClaudeSkillLoader(search_paths=tuple(search_paths)) if search_paths else None
 
         llm = OpenAIChatClient(llm_config)
         budget = Budget.root(max_iterations=max_iterations)
+
+        # Memory: default-enabled (Hermes parity). True → construct the
+        # default SQLite provider; instance → use as-is; False/None → off.
+        memory_provider = None
+        if memory is True:
+            from .memory.provider import SQLiteMemoryProvider
+
+            memory_provider = SQLiteMemoryProvider(
+                Path.home() / ".microagent" / "memory.db"
+            )
+            memory_provider.write_approval = bool(memory_write_approval)
+        elif memory is not None and memory is not False:
+            memory_provider = memory
+
         runner = SessionRunner(
             llm=llm,
             registry=registry,
@@ -81,6 +115,7 @@ class Agent:
             session_id=session_id,
             skill_loader=skill_loader,
             permission_engine=permission_engine,
+            memory=memory_provider,
         )
         agent = cls(runner=runner, registry=registry)
 
@@ -176,3 +211,38 @@ class Agent:
         # second call, so the double-close is harmless.
         if self.runner.store is not None and hasattr(self.runner.store, "close"):
             self.runner.store.close()
+        # Close the memory provider connection (Hermes parity: default-on
+        # memory opens a SQLite connection per agent — release it).
+        if self.runner.memory is not None and hasattr(self.runner.memory, "close"):
+            try:
+                self.runner.memory.close()
+            except Exception:
+                pass
+
+    async def learn(
+        self,
+        source: str,
+        *,
+        kind: str = "chat",
+    ) -> str:
+        """Learn a reusable skill from a source (Hermes /learn parity).
+
+        ``kind``:
+          - "chat": ``source`` is conversation text (or "this conversation"
+            is handled by the CLI, which passes the session history).
+          - "dir": ``source`` is a directory path whose contents are
+            distilled into a skill.
+          - "url": ``source`` is a URL whose fetched text is distilled.
+
+        Uses the auxiliary model when configured (cheaper), writes
+        SKILL.md + .provenance.json (created_by="agent") + curator usage
+        entry into ~/.microagent/skills — same write path as the
+        skill_manage tool. Returns a status string.
+        """
+        from .skill.learner import learn_skill
+
+        return await learn_skill(
+            source=source,
+            kind=kind,
+            llm=self.runner.llm,
+        )

@@ -86,6 +86,7 @@ class SessionRunner:
         self.context_sources = context_sources
         self.skill_loader = skill_loader
         self.memory = memory
+        self.skip_memory = False  # cron turns set this (Hermes: skip_memory=True)
         self.compression_threshold = compression_threshold
         self.permission_engine = permission_engine
 
@@ -626,6 +627,29 @@ class SessionRunner:
                     except Exception:
                         pass
 
+            # Memory recall injection (Hermes-style: persistent memory is
+            # injected every turn). Sits in the same context block as
+            # skills, so it flows through the existing injection scanner
+            # before reaching the LLM. Skip when memory is disabled or the
+            # turn runs under a cron job (skip_memory — background ticks
+            # must not pollute the user's memory context, Hermes invariant).
+            if self.memory is not None and not self.skip_memory:
+                last_user = next((m for m in reversed(messages) if m.role == "user"), None)
+                if last_user and last_user.content.strip():
+                    try:
+                        recalled = await self.memory.recall(last_user.content, k=5)
+                        if recalled:
+                            lines = [
+                                f"- [{m.category}] {m.content}" for m in recalled
+                            ]
+                            context_parts.append(
+                                "## Memory\n\n" + "\n".join(lines)
+                            )
+                    except Exception:
+                        # Memory recall failing must never crash the turn —
+                        # same fault-tolerance contract as the skill loader.
+                        logger.warning("memory recall failed", exc_info=True)
+
             for src in self.context_sources:
                 try:
                     contribution = await src.contribute(None)
@@ -888,7 +912,11 @@ class SessionRunner:
                     await self.event_bus.emit(
                         "turn_complete", sid, assistant_msg.content
                     )
-                if self._extractor is not None:
+                # Memory extraction runs fire-and-forget per turn. Skipped
+                # for cron ticks (skip_memory): scheduled background work
+                # must not write memories of itself into the user's store
+                # (Hermes invariant: cron sessions pass skip_memory=True).
+                if self._extractor is not None and not self.skip_memory:
                     try:
                         history = tuple(
                             {"role": m.role, "content": m.content} for m in messages[-10:]
