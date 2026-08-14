@@ -262,3 +262,56 @@ class TestCompositeSkillLoader:
         matches = await loader.match("x")
         # highest score first
         assert matches[0].skill.name == "b"
+
+
+async def test_load_caches_until_mtime_changes(tmp_path):
+    """Regression: load() re-parsed every SKILL.md on every call (the runner
+    calls it up to 3x/turn). Now it caches by an mtime/size fingerprint and
+    only re-parses when a file changes."""
+    from microagent.skill.loader import ClaudeSkillLoader
+
+    skill_dir = tmp_path / "demo"
+    skill_dir.mkdir()
+    md = skill_dir / "SKILL.md"
+    md.write_text("---\nname: demo\ndescription: hello world\n---\nbody v1\n")
+
+    loader = ClaudeSkillLoader((tmp_path,))
+    first = await loader.load()
+    assert len(first) == 1 and first[0].name == "demo"
+    # Same content, no mtime change → cached, identical tuple object.
+    second = await loader.load()
+    assert second is first, "cache missed on identical fingerprint"
+
+    # Edit the skill (updates mtime) → cache invalidates, body changes.
+    import time as _time
+    _time.sleep(0.01)  # ensure mtime tick on coarse filesystems
+    md.write_text("---\nname: demo\ndescription: hello world\n---\nbody v2\n")
+    third = await loader.load()
+    assert third is not first, "cache not invalidated on mtime change"
+    assert third[0].body == "body v2"
+
+
+async def test_load_offloads_to_thread_not_blocking_loop(tmp_path):
+    """load() must not run sync disk I/O on the event loop thread."""
+    import asyncio
+    from microagent.skill.loader import ClaudeSkillLoader
+
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "SKILL.md").write_text(
+        "---\nname: x\ndescription: d\n---\nb\n"
+    )
+    loader = ClaudeSkillLoader((tmp_path,))
+
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future()
+
+    def _block_loop():
+        # If load() ran on the loop thread, this scheduled callback could
+        # not make progress until load() returned. Run it via call_soon.
+        loop.call_soon_threadsafe(fut.set_result, "loop-alive")
+
+    loop.run_in_executor(None, _block_loop)
+    await loader.load()
+    # If load() had blocked the loop synchronously the executor callback
+    # would still be pending; this awaits it within a tight timeout.
+    await asyncio.wait_for(fut, timeout=2.0)

@@ -227,8 +227,35 @@ class ClaudeSkillLoader:
             Path(p).expanduser() if isinstance(p, str) else p
             for p in search_paths
         )
+        # mtime-based cache. The runner calls load() up to three times per
+        # turn (catalog build + match + loaded-bodies injection), and each
+        # call used to rglob + read_text every SKILL.md synchronously on the
+        # event loop. With a large skill tree that blocks the loop and
+        # re-parses identical files every turn. The fingerprint is the
+        # sorted (path, mtime, size) of every SKILL.md; only when it changes
+        # do we re-read and re-parse.
+        self._cached: tuple[Skill, ...] = ()
+        self._fingerprint: tuple | None = None
 
-    async def load(self) -> tuple[Skill, ...]:
+    def _scan_fingerprint(self) -> tuple:
+        """Cheap stat-only fingerprint of every SKILL.md under the paths.
+
+        No file reads — just rglob + stat. Used to decide whether the cached
+        parse is still valid.
+        """
+        entries: list[tuple[str, float, int]] = []
+        for base in self._paths:
+            if not base.exists():
+                continue
+            for p in sorted(base.rglob("SKILL.md")):
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                entries.append((str(p), st.st_mtime, st.st_size))
+        return tuple(entries)
+
+    def _parse_all(self) -> tuple[Skill, ...]:
         skills: list[Skill] = []
         for base in self._paths:
             if not base.exists():
@@ -238,6 +265,21 @@ class ClaudeSkillLoader:
                 if s is not None:
                     skills.append(s)
         return tuple(skills)
+
+    async def load(self) -> tuple[Skill, ...]:
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        # Offload the disk scan/parse to a worker thread so a large skill
+        # tree does not block the event loop (the previous sync rglob +
+        # read_text ran on the loop thread).
+        fingerprint = await loop.run_in_executor(None, self._scan_fingerprint)
+        if fingerprint == self._fingerprint and self._cached:
+            return self._cached
+        skills = await loop.run_in_executor(None, self._parse_all)
+        self._fingerprint = fingerprint
+        self._cached = skills
+        return skills
 
     async def match(self, user_input: str) -> tuple[LoadedSkill, ...]:
         skills = await self.load()
