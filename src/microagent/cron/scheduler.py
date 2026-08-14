@@ -9,13 +9,22 @@ v1.0: fcntl file lock for cross-process safety + result persistence.
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+
+# fcntl is POSIX-only. The rest of MicroAgent guards Windows-portable
+# modules (readline, termios, tty) with try/except so `import microagent`
+# succeeds on Windows; cron/scheduler is imported unconditionally from
+# __init__.py, so an unguarded `import fcntl` made the whole package
+# fail to import on Windows. Fall back to no-op locking there.
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +46,19 @@ def _try_acquire_lock(lock_file: Path, return_fd: bool = False):
     mode, if flock succeeds but fd.close() raises, the lock is released
     (fd closed by GC) but the exception propagates — this is intentional
     since a failed close indicates a deeper I/O problem.
+
+    On platforms without fcntl (Windows) locking is unavailable, so this
+    degrades to a permissive check (returns True / an fd that does nothing)
+    rather than crashing the scheduler — cross-process cron dedup then
+    relies on the caller's own guards.
     """
+    if fcntl is None:
+        # No cross-process lock available; pretend acquired so single-
+        # process scheduling still works.
+        if return_fd:
+            fd = open(lock_file, "w")
+            return fd
+        return True
     lock_file.parent.mkdir(parents=True, exist_ok=True)
     fd = None
     try:
@@ -62,15 +83,15 @@ def _release_lock(fd) -> None:
     Releases the lock first, then closes the fd. If closing fails,
     the fd is still unlocked but may leak — we log a warning.
     """
-    try:
-        fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-    except Exception:
-        pass
-    finally:
+    if fcntl is not None:
         try:
-            fd.close()
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
         except Exception:
-            logger.warning("Failed to close cron lock file descriptor")
+            pass
+    try:
+        fd.close()
+    except Exception:
+        logger.warning("Failed to close cron lock file descriptor")
 
 
 # ---------------------------------------------------------------------------
