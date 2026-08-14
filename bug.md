@@ -656,3 +656,36 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - CJK 技能匹配仍字面匹配（需 embedding 语义检索）
 - 流错误重试消耗迭代（默认 25 次下影响极小）
 - question 超时后 input 线程无法 kill（Python 限制）
+
+---
+
+## 十五、第十二轮遗留项处理（Round 12b，2026-08-14）
+
+> 处理 bug.md 第十四轮末尾记录的 3 个 🔵 遗留项。基线 1134 passed → **1142 passed, 1 skipped**。
+
+### 15.1 流错误重试消耗迭代 ✅ **已修复 (a83ef48)**
+- **现象**：重试 pass 重新进入外层循环，命中循环顶部的无条件 `budget.consume(iterations=1)`——
+  一次一次性重试为**同一次逻辑 LLM 调用**消耗 2 个迭代。网关抖动时默认 25 次预算实际
+  只剩 ~12 次真实调用。
+- **修复**：`_stream_retry_free` 标志在重试分支置位，下一次循环 pass 跳过 consume 恰好一次
+  （turn 开始时与 `_stream_retried` 一起重置）。重试不产生新输出，免费才是正确记账。
+
+### 15.2 question 工具 input 线程与 ESC watcher 冲突 ✅ **已修复 (c3017bd)**
+- **现象（比"线程无法 kill"更严重的真实 bug）**：watcher 整轮处于 cbreak 模式——
+  (a) input() 的 ICANON 被关，readline 敲第一个键就返回，答案被截断成单字符；
+  (b) watcher 的读线程和 input() 竞争同一 stdin fd，持续偷走用户按键。
+- **修复**：
+  - question 工具置位线程安全 `_QUESTION_ACTIVE` 标志；watcher 改为 0.2s 有界读轮询该
+    标志，提问期间暂停读键。
+  - watcher 启动时把原始 cooked termios 设置发布给 question 工具；question 在 input()
+    前**自己恢复 cooked 模式**（不等 watcher 轮询到，消除答案开头被截断的窗口）。
+  - 超时提示用户按 Enter 清理滞留线程（Python 无法 kill 线程——这是语言硬限制，
+    现已无害且可恢复）。
+
+### 15.3 CJK 技能匹配语序不敏感 ✅ **已改进 (bea0e37)**
+- **现象**：bigram **集合**覆盖无法区分"测试驱动"与"驱动测试"——同样 bigram 倒序得分相同，
+  语序在中文里改变语义。
+- **改进**：新增有序 bigram **子序列**覆盖（LCS over bigram sequences，允许间隙），
+  混合进 `max(coverage, lcs_ratio, subseq_ratio)`。不相关查询仍 0.0 零误报；
+  同序匹配高于倒序；容忍自然语言查询中的同义插入。
+- **仍遗留**：完整语义检索需要 embedding 模型——超出零依赖范围，文档已注明。
