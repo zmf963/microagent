@@ -47,7 +47,7 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
                 if tc.name in ("read_file", "write_file", "edit_file", "grep", "glob", "bash"):
                     for arg_val in tc.arguments.values():
                         if isinstance(arg_val, str):
-                            for candidate in _parse_paths_from_string(arg_val):
+                            for candidate in _parse_paths_from_string(arg_val, trusted=True):
                                 paths[candidate] = i
 
         # Content-based fallback — scan message text for explicit path
@@ -55,8 +55,11 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
         # untrusted (web pages, command output) and a poisoned result could
         # name sensitive local files (~/.ssh/config, ~/.aws/credentials)
         # that would then be read from disk and sent to the LLM API.
+        # User/assistant TEXT is also potentially prompt-injected, so
+        # system paths (/etc/...) are refused there — tool-call args went
+        # through the permission layer and may legitimately reference them.
         if msg.content and msg.role in ("user", "assistant"):
-            for candidate in _parse_paths_from_string(msg.content):
+            for candidate in _parse_paths_from_string(msg.content, trusted=False):
                 paths[candidate] = max(paths.get(candidate, 0), i)
 
     # Sort by recency (last seen first), preferring files that actually
@@ -68,13 +71,19 @@ def _extract_file_paths(messages: tuple[Message, ...]) -> dict[str, int]:
     return dict((existing + missing)[:MAX_FILES])
 
 
-def _parse_paths_from_string(text: str) -> list[str]:
+def _parse_paths_from_string(text: str, *, trusted: bool = True) -> list[str]:
     """Extract plausible file paths from a string.
 
     Uses a character-class approach: a path is a contiguous run of
     non-whitespace, non-punctuation characters that starts with ``/``,
     ``./``, ``~/``, a drive letter, or an alpha-numeric identifier
     containing a dot (extension).  Returns deduplicated list.
+
+    ``trusted=False`` marks content scanned from user/assistant message
+    text (potentially prompt-injected): system paths (/etc/, /var/, ...)
+    are refused there so a poisoned message cannot exfiltrate them into
+    LLM context. Tool-call args passed the permission layer and keep the
+    full path space.
     """
     if not text:
         return []
@@ -101,11 +110,31 @@ def _parse_paths_from_string(text: str) -> list[str]:
                 continue
             if _is_version_number(p):
                 continue  # 5.00, 1.2.3, v1.2.3 — not file paths
-            if _is_readable_file(p):
+            if _is_readable_file(p) and (trusted or not _is_system_path(p)):
                 seen.add(p)
                 result.append(p)
 
     return result
+
+
+def _is_system_path(path: str) -> bool:
+    """Whether an absolute path points into a system directory.
+
+    These are refused when the path came from user/assistant message text
+    (prompt-injectable) rather than permission-checked tool-call args.
+    """
+    if not path.startswith("/"):
+        return False
+    # /var/folders (macOS tmp_path) is deliberately NOT here — tests and
+    # real work legitimately live there.
+    return any(
+        p in path
+        for p in (
+            "/bin/", "/sbin/", "/usr/lib/", "/usr/share/", "/usr/bin/",
+            "/usr/sbin/", "/dev/", "/proc/", "/sys/", "/etc/", "/root/",
+            "/var/log/", "/var/lib/", "/var/run/",
+        )
+    )
 
 
 _VERSION_RE = re.compile(r"^v?\d+(?:\.\d+)+$")
@@ -143,7 +172,9 @@ def _is_readable_file(path: str) -> bool:
     # Absolute paths with no extension but that look like files
     if filename and not filename.endswith("/"):
         if path.startswith("/") and len(filename) < 60:
-            # Skip binary/system paths
+            # Skip binary/system paths (the prompt-injection gate for
+            # user/assistant TEXT is in _is_system_path; this list is the
+            # always-blocked binary junk).
             if any(
                 p in path
                 for p in ("/bin/", "/sbin/", "/usr/lib/", "/usr/share/", "/dev/", "/proc/")
