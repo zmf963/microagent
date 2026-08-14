@@ -9,6 +9,8 @@ same privileges as the agent process.
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import sys
 from typing import Annotated
 
@@ -16,6 +18,22 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+
+def _kill_proc_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the process group so grandchildren die too (not just python).
+
+    Requires start_new_session=True at spawn (mirrors bash.py). Without it,
+    user code that spawns its own subprocess (Popen([...])) leaves that
+    grandchild running after the timeout kills only the python parent.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 @tool(
@@ -33,26 +51,49 @@ async def execute_code(
 
     MAX_OUTPUT = 100_000  # 100 KB cap — matches bash.py
 
-    proc = None
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        code,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        # New process group so a timeout/cancel can SIGKILL the whole
+        # group — otherwise a Popen([...]) inside the user's code survives
+        # as an orphan after we kill only the python parent.
+        start_new_session=True,
+    )
+
+    # Stream stdout incrementally so a runaway producer (e.g.
+    # `while True: print('x'*10**6)`) is bounded by MAX_OUTPUT in memory,
+    # not just by the timeout. communicate() buffers the ENTIRE output
+    # before returning, so it could OOM the agent process before the
+    # timeout ever fires. Drop chunks once the budget is exceeded.
+    chunks: list[bytes] = []
+    total = 0
+
+    async def _read_all() -> None:
+        nonlocal total
+        while True:
+            chunk = await proc.stdout.read(8192)
+            if not chunk:
+                break
+            if total < MAX_OUTPUT:
+                chunks.append(chunk)
+                total += len(chunk)
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-c",
-            code,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            await asyncio.wait_for(_read_all(), timeout=timeout)
         except TimeoutError:
+            _kill_proc_group(proc)
             try:
-                proc.kill()
                 await proc.wait()
             except Exception:
                 pass
             return ToolResult.error(f"execution timed out after {timeout}s")
 
-        output = stdout.decode("utf-8", errors="replace").strip()
+        await proc.wait()
+        output = b"".join(chunks).decode("utf-8", errors="replace").strip()
         if len(output) > MAX_OUTPUT:
             output = (
                 output[:MAX_OUTPUT]
@@ -66,16 +107,14 @@ async def execute_code(
             )
 
         return ToolResult.ok(output if output else "(no output)")
-    except BaseException as e:
+    except BaseException:
         # CancelledError (interrupt, budget exhausted, Ctrl-C) is a
         # BaseException — bare `except Exception` misses it, leaving the
-        # subprocess orphaned. Kill before re-raising (mirrors bash.py).
-        if isinstance(e, asyncio.CancelledError):
-            if proc is not None and proc.returncode is None:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except Exception:
-                    pass
-            raise
-        return ToolResult.error(f"execution failed: {e!r}")
+        # subprocess orphaned. Kill the whole group before re-raising
+        # (mirrors bash.py).
+        _kill_proc_group(proc)
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise
