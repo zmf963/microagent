@@ -123,3 +123,43 @@ async def test_cmd_resume_rebinds_messages():
     assert len(state.messages) == 2, f"expected 2 loaded msgs, got {len(state.messages)}"
     assert state.messages[0].content == "seed user"
     await state.agent.close()
+
+
+@pytest.mark.asyncio
+async def test_cmd_new_reopens_sqlite_store_after_close(tmp_path):
+    """Regression: /new closed the SQLite store (via Agent.close) then reused
+    the same closed connection — the next store.append raised
+    sqlite3.ProgrammingError. The handler must reopen a fresh store on the
+    same path."""
+    from microagent.surface import cli
+    from microagent.agent import Agent
+    from microagent.core.store import SQLiteStore
+    from microagent.core.tool import ToolRegistry, _default_builtins
+    from microagent.session.runner import SessionRunner
+    from microagent.session.budget import Budget
+    from tests.unit.fake_llm import FakeLLMClient, text_response
+
+    db = tmp_path / "sessions.db"
+    fake = FakeLLMClient([text_response("ok")])
+    runner = SessionRunner(
+        llm=fake, registry=ToolRegistry(_default_builtins()), budget=Budget.root(),
+        store=SQLiteStore(db),
+    )
+    agent = Agent(runner=runner, registry=runner.registry)
+    config = type("C", (), {
+        "llm": fake.config, "system_prompt": "test", "skills_path": None,
+    })()
+    state = cli.ReplState(
+        agent=agent, config=config, store=runner.store,
+        session_id="s1", db_path=db, messages=[],
+    )
+
+    await cli._cmd_new(state, "")
+
+    # The new agent must have a LIVE store (a fresh SQLiteStore), and a
+    # write must not raise ProgrammingError.
+    from microagent.core.types import Message as _Msg
+    await state.store.append(state.session_id, _Msg.user("after /new"))
+    assert isinstance(state.store, SQLiteStore)
+    assert state.store is not runner.store, "store was reused (still the closed one)"
+    await state.agent.close()

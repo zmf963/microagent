@@ -115,6 +115,7 @@ class ReplState:
     config: Config
     store: object
     session_id: str
+    db_path: object = None  # Path — set by the CLI so handlers can reopen after agent.close()
     messages: list[Message] = field(default_factory=list)
     usage_tracker: _UsageTracker = field(default_factory=_UsageTracker)
     disabled_skills: set[str] = field(default_factory=set)
@@ -285,6 +286,7 @@ async def _main():
         agent=agent,
         config=config,
         store=store,
+        db_path=db_path,
         session_id=session_id,
         messages=messages,
         usage_tracker=usage_tracker,
@@ -640,16 +642,37 @@ def _make_agent(config, store, session_id: str) -> Agent:
     )
 
 
+def _reopen_store(db_path):
+    """Open a fresh SQLiteStore on the same path after Agent.close().
+
+    Agent.close() closes the store connection it was given (so library
+    users don't leak one connection per agent). The CLI reuses one store
+    instance across /new, /resume, /compact — but those handlers close
+    the old agent (and thus the store) before building a new one, so the
+    store must be reopened. Reusing a closed connection raises
+    sqlite3.ProgrammingError: Cannot operate on a closed database. WAL
+    mode guarantees the new connection sees all prior committed writes.
+    """
+    from ..core.store import SQLiteStore
+
+    return SQLiteStore(db_path)
+
+
 async def _cmd_new(state: ReplState, arg: str) -> None:
     agent = state.agent
     await agent.close()
     config = state.config
-    store = state.store
+    # agent.close() closed the SQLite connection it was handed; reopen on
+    # the same path so the new agent gets a live store. (Skipped when
+    # db_path is unset — e.g. tests with an InMemoryStore that has no
+    # close() and is never closed by Agent.close().)
+    if state.db_path is not None:
+        state.store = _reopen_store(state.db_path)
     state.session_id = f"cli-{int(time.time())}-{uuid4().hex[:6]}"
     state.messages = []
     state.usage_tracker.reset()
     state.disabled_skills.clear()
-    state.agent = _make_agent(config, store, state.session_id)
+    state.agent = _make_agent(config, state.store, state.session_id)
     console.print(f"[success]✓[/] New session: {state.session_id}")
 
 
@@ -679,8 +702,11 @@ async def _cmd_resume(state: ReplState, arg: str) -> None:
             state.session_id = target
             state.usage_tracker.reset()
             config = state.config
-            store = state.store
-            state.agent = _make_agent(config, store, target)
+            # agent.close() closed the SQLite connection; reopen on the
+            # same path so the resumed agent gets a live store.
+            if state.db_path is not None:
+                state.store = _reopen_store(state.db_path)
+            state.agent = _make_agent(config, state.store, target)
             console.print(f"[success]✓[/] Resumed: {target} ({len(history)} messages)")
         else:
             console.print(f"[error]✗[/] Session not found: {target}")
@@ -716,8 +742,11 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
     messages[:] = list(compressed)
     await agent.close()
     config = state.config
-    store = state.store
-    state.agent = _make_agent(config, store, state.session_id)
+    # agent.close() closed the SQLite connection; reopen on the same path
+    # so the rebuilt agent gets a live store.
+    if state.db_path is not None:
+        state.store = _reopen_store(state.db_path)
+    state.agent = _make_agent(config, state.store, state.session_id)
     state.agent.runner._compaction_state = state_obj
     after_count = len(messages)
     after_tokens = count_tokens(tuple(messages))
