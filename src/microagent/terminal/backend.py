@@ -71,6 +71,28 @@ class TerminalBackend(Protocol):
 class LocalTerminal:
     """Execute commands via local subprocess."""
 
+    @staticmethod
+    async def _wait_killed(proc: asyncio.subprocess.Process) -> None:
+        """Wait for a killed subprocess, bounded.
+
+        ``proc.wait()`` resolves only after the stdout/stderr pipe
+        transports drain. A command that filled its pipes (or spawned a
+        grandchild holding the write end — ``sh -c 'sleep 300 & sleep 30'``)
+        has no reader after communicate() was cancelled, so wait() never
+        returns and the tool call hangs forever even though the process is
+        dead. Drain whatever is buffered, then bound the wait.
+        """
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                try:
+                    await asyncio.wait_for(pipe.read(), timeout=1.0)
+                except Exception:
+                    pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except Exception:
+            pass  # killed — returncode set; pipe drain may remain stuck
+
     async def run(
         self,
         command: str,
@@ -107,7 +129,7 @@ class LocalTerminal:
             if proc is not None:
                 try:
                     proc.kill()
-                    await proc.wait()
+                    await self._wait_killed(proc)
                 except Exception:
                     pass
             return TerminalResult.ok(
@@ -124,7 +146,7 @@ class LocalTerminal:
             if proc is not None:
                 try:
                     proc.kill()
-                    await proc.wait()
+                    await self._wait_killed(proc)
                 except Exception:
                     pass
             raise
@@ -190,7 +212,7 @@ class DockerTerminal:
             if proc is not None:
                 try:
                     proc.kill()
-                    await proc.wait()
+                    await LocalTerminal._wait_killed(proc)
                 except Exception:
                     pass
             # Killing the local docker CLI does not stop the container —
@@ -209,7 +231,7 @@ class DockerTerminal:
             if proc is not None:
                 try:
                     proc.kill()
-                    await proc.wait()
+                    await LocalTerminal._wait_killed(proc)
                 except Exception:
                     pass
             await self._force_remove_container()

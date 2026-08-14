@@ -234,7 +234,18 @@ async def process(
                 return ToolResult.error("process has no stdin")
             try:
                 p.stdin.write((data + "\n").encode())
-                await p.stdin.drain()
+                # drain() has no internal timeout — a target that never
+                # reads stdin (sleep 100, servers that ignore input) leaves
+                # the pipe full and drain() blocked forever, hanging the
+                # whole agent turn. Bound it; on timeout report what was
+                # actually delivered so the LLM can react.
+                try:
+                    await asyncio.wait_for(p.stdin.drain(), timeout=5.0)
+                except TimeoutError:
+                    return ToolResult.error(
+                        "write timed out: process is not reading stdin "
+                        "(data may be partially delivered)"
+                    )
                 return ToolResult.ok("written")
             except Exception as e:
                 return ToolResult.error(f"write failed: {e!r}")
