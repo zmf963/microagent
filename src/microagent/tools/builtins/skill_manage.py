@@ -61,6 +61,9 @@ def _touch_curator_usage(name: str) -> None:
     entry["use_count"] = entry.get("use_count", 0) + 1
     if "state" not in entry:
         entry["state"] = "active"
+    # Preserve pinned through touches — the curator skips pinned skills
+    # and a usage touch must not silently unpin them.
+    entry.setdefault("pinned", False)
     data[name] = entry
     try:
         usage_file.write_text(json.dumps(data, indent=2))

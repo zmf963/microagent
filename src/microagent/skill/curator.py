@@ -73,12 +73,44 @@ class Curator:
 
     @staticmethod
     def _archive(skill_dir: Path) -> None:
+        """Move a skill to .archive/, with a tar.gz backup first.
+
+        Hermes parity: the curator takes a pre-archive backup so nothing
+        is ever lost — the archive move is reversible (backup + rename),
+        never a delete.
+        """
         archive = skill_dir.parent / ".archive"
         archive.mkdir(exist_ok=True)
+        backup_name = f"{skill_dir.name}-{int(time.time())}.tar.gz"
+        backup_path = archive / backup_name
+        try:
+            import tarfile
+
+            with tarfile.open(backup_path, "w:gz") as tar:
+                tar.add(skill_dir, arcname=skill_dir.name)
+        except Exception:
+            # Backup failure must not block the archive transition, but
+            # the skill is NOT deleted either way — rename keeps it safe.
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         dest = archive / skill_dir.name
         if dest.exists():
             shutil.rmtree(dest)
         skill_dir.rename(dest)
+
+    @staticmethod
+    def set_pinned(usage_file: Path, name: str, pinned: bool) -> None:
+        """Pin/unpin a skill in the usage file (pinned skills are exempt
+        from every auto-transition — Hermes parity)."""
+        data = Curator._load_usage(usage_file)
+        entry = data.get(name, {})
+        entry["pinned"] = bool(pinned)
+        if "state" not in entry:
+            entry["state"] = "active"
+        data[name] = entry
+        Curator._save_usage(usage_file, data)
 
     @staticmethod
     def _load_usage(usage_file: Path) -> dict:
