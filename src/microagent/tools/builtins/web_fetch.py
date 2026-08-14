@@ -1,10 +1,16 @@
 """web_fetch builtin tool — fetch a URL and return text content.
 
 SSRF protection: blocks literal internal IPs, internal hostnames,
-and resolves hostnames to IPs before connecting to prevent DNS rebinding.
-Redirects are NOT followed: a 3xx response is returned as-is (usually an
-empty body), so a redirect can never smuggle the agent to an unchecked
-target.
+and resolves hostnames to IPs before connecting. Redirects are NOT
+followed: a 3xx response is returned as-is (usually an empty body), so a
+redirect can never smuggle the agent to an unchecked target.
+
+Known limitation: the resolve-then-connect check has a TOCTOU window —
+httpx re-resolves the hostname at connect time, so an attacker-controlled
+domain with split-horizon DNS (public answer to the check query,
+internal answer to httpx's query) could in theory bypass the blocklist.
+Closing this requires pinning the validated IP with an SNI/Host override;
+kept out of scope for now because it needs a custom httpx transport.
 """
 
 from __future__ import annotations
