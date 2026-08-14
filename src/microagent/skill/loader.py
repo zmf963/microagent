@@ -48,7 +48,22 @@ def _cjk_aware_ratio(query: str, target: str) -> float:
         coverage = len(q_bigrams & t_bigrams) / len(q_bigrams)
         # Longest common substring ratio — rewards contiguous matches.
         lcs_ratio = _lcs_len(q_joined, t_joined) / len(q_joined) if q_joined else 0.0
-        cjk_score = max(coverage, lcs_ratio)
+        # ORDERED bigram-subsequence coverage: the query's bigrams must
+        # appear in the target IN ORDER (gaps allowed). Set coverage alone
+        # cannot tell "测试驱动" (tests → drive) from "驱动测试" (drive →
+        # tests) — the order swap is a semantic change. Subsequence
+        # coverage preserves order while still tolerating the synonym
+        # insertions common in natural-language queries vs long
+        # descriptions. This is the closest zero-dependency approximation
+        # of semantic matching; embedding retrieval would go further.
+        q_bigram_seq = _bigram_sequence(q_joined)
+        t_bigram_seq = _bigram_sequence(t_joined)
+        subseq_ratio = (
+            _lcs_subseq_len(q_bigram_seq, t_bigram_seq) / len(q_bigram_seq)
+            if q_bigram_seq
+            else 0.0
+        )
+        cjk_score = max(coverage, lcs_ratio, subseq_ratio)
 
         # Blend with Latin SequenceMatcher for the remaining text
         latin_query = _CJK_RE.sub("", query).strip().lower()
@@ -85,6 +100,31 @@ def _lcs_len(a: str, b: str) -> int:
 def _bigrams(text: str) -> set[str]:
     """Extract character bigrams from text."""
     return {text[i : i + 2] for i in range(len(text) - 1)} if len(text) >= 2 else {text}
+
+
+def _bigram_sequence(text: str) -> list[str]:
+    """Character bigrams as an ORDERED list (duplicates preserved)."""
+    return [text[i : i + 2] for i in range(len(text) - 1)]
+
+
+def _lcs_subseq_len(a: list[str], b: list[str]) -> int:
+    """Length of the longest common SUBSEQUENCE (order-preserving, gaps ok).
+
+    Unlike _lcs_len (substring), this tolerates unrelated bigrams between
+    matched ones — natural-language queries against long descriptions are
+    rarely verbatim, but word order still carries meaning.
+    """
+    m, n = len(a), len(b)
+    prev = [0] * (n + 1)
+    for i in range(1, m + 1):
+        cur = [0] * (n + 1)
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+            else:
+                cur[j] = max(prev[j], cur[j - 1])
+        prev = cur
+    return prev[n]
 
 
 # ---------------------------------------------------------------------------

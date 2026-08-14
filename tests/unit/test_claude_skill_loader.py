@@ -315,3 +315,36 @@ async def test_load_offloads_to_thread_not_blocking_loop(tmp_path):
     # If load() had blocked the loop synchronously the executor callback
     # would still be pending; this awaits it within a tight timeout.
     await asyncio.wait_for(fut, timeout=2.0)
+
+
+class TestCJKOrderSensitivity:
+    """Subsequence coverage preserves word order — set coverage alone
+    scored '测试驱动' against a '驱动测试' description identically."""
+
+    def test_order_preserving_subsequence_boosts_in_order(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+
+        in_order = _cjk_aware_ratio("测试驱动开发", "测试先行驱动开发流程")
+        reversed_target = _cjk_aware_ratio("测试驱动开发", "开发驱动先行测试流程")
+        # In-order subsequence must outscore the reversed-target score.
+        assert in_order > reversed_target, f"{in_order} !> {reversed_target}"
+
+    def test_subseq_tolerates_interleaved_bigrams(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+
+        # The query's bigrams all appear in the target but NOT as a
+        # contiguous run — subsequence (not substring) must still score.
+        r = _cjk_aware_ratio("测试驱动", "测试方法是先写驱动")
+        assert r > 0
+
+    def test_unrelated_still_zero(self):
+        from microagent.skill.loader import _cjk_aware_ratio
+
+        assert _cjk_aware_ratio("今天天气", "代码审查流程") == 0.0
+
+
+def test_lcs_subseq_len_helper():
+    from microagent.skill.loader import _lcs_subseq_len
+
+    assert _lcs_subseq_len(["a", "b", "c"], ["a", "x", "b", "y", "c"]) == 3
+    assert _lcs_subseq_len(["a", "b"], ["b", "a"]) == 1  # order matters
