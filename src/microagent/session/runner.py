@@ -97,6 +97,12 @@ class SessionRunner:
         # for LRU eviction. Replaces the prior hand-rolled set+list pair.
         self._loaded_skills: OrderedDict[str, None] = OrderedDict()
         self._max_loaded_skills: int = 10  # cap to prevent unbounded growth
+        # Skill names disabled at runtime (CLI /skill unload). The CLI's
+        # ReplState.disabled_skills was a dead write — nothing consumed it,
+        # so unloaded skills kept being matched and injected every turn.
+        # The runner is the consumer; matching and body injection both
+        # filter on this set.
+        self.disabled_skills: set[str] = set()
         self._cached_mode: str = "build"
         # Compaction state — initialized here (not lazily in run_turn) so the
         # hasattr checks and lazy-init branches in the loop are unnecessary.
@@ -137,6 +143,14 @@ class SessionRunner:
         # can disconnect them. Without this, every mcp_connect() leaked a
         # subprocess (npx/uvx/...) for the lifetime of the Python process.
         self._mcp_managers: dict[str, object] = {}
+        # Lock serializing mcp_connect's idempotency check+connect for THIS
+        # runner. Owned by the runner (not ContextVar-lazy) because anyio
+        # start_soon gives each _settle task a fresh context: a lazily
+        # created ContextVar lock is per-TASK, so concurrent mcp_connect
+        # calls in one turn each got their own lock and the double-spawn
+        # race stayed open. Bound per-task in _settle like the managers
+        # dict.
+        self._mcp_connect_lock = asyncio.Lock()
 
         # Bind unconditionally — including None. Conditional binding leaks
         # the previous runner's values: two runners created in the same
@@ -211,7 +225,15 @@ class SessionRunner:
                         _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
                     except (ProcessLookupError, PermissionError, OSError):
                         proc.kill()  # fallback: kill just the shell
-                    await proc.wait()
+                    # proc.wait() resolves only after the pipe transports
+                    # drain. A process that filled its stdout/stderr pipes
+                    # (yes, tail -f) has no reader here, so wait() never
+                    # returns — Agent.close() and CLI exit would hang
+                    # forever. Bound it; the process is dead either way.
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    except TimeoutError:
+                        pass  # killed; pipe drain may be stuck — proceed
                 except Exception:
                     pass
         self._proc_registry.procs.clear()
@@ -253,10 +275,16 @@ class SessionRunner:
     # bash is NOT in this set — plan mode allows read-only shell commands
     # (ls, cat, grep, find, git, etc.); destructive bash commands are
     # denied at execution time by _plan_bash_violation().
+    # git (the tool) and mcp_connect are blocked too: the git tool
+    # whitelists `commit`/`add` (repository mutation), and mcp_connect's
+    # raw:<command> form executes arbitrary commands — both violate the
+    # plan-mode read-only guarantee that _plan_bash_violation enforces
+    # for bash.
     _PLAN_BLOCKED_TOOLS = frozenset({
         "write_file", "edit_file", "execute_code", "process",
         "browser_click", "browser_type", "browser_navigate",
         "browser_back", "browser_scroll", "browser_press",
+        "git", "mcp_connect",
     })
 
     # First-token blocklist for plan-mode bash. Heuristic, not a sandbox:
@@ -294,8 +322,8 @@ class SessionRunner:
         "   or install packages.\n"
         "3. Produce a clear analysis — findings, root causes, affected files,\n"
         "   and a recommended plan of action.\n"
-        "4. Do NOT use write_file, edit_file, execute_code, or process. Use the\n"
-        "   plan tool to document your multi-step action plan.\n"
+        "4. Do NOT use write_file, edit_file, execute_code, process, git, or\n"
+        "   mcp_connect. Use the plan tool to document your multi-step action plan.\n"
         "5. When you're done analyzing, end your final message with the exact\n"
         "   text '/build' on its own line so the user can switch to build mode\n"
         "   to execute your plan."
@@ -560,6 +588,8 @@ class SessionRunner:
 
             # Skill matching: keywords + CJK-aware fuzzy.
             # Once matched, skills stay loaded for the session (persistent).
+            # disabled_skills (CLI /skill unload) filters both matching and
+            # body injection — without it the unload command was cosmetic.
             if self.skill_loader is not None and messages:
                 last_user = next((m for m in reversed(messages) if m.role == "user"), None)
                 if last_user:
@@ -567,6 +597,8 @@ class SessionRunner:
                         matched = await self.skill_loader.match(last_user.content)
                         for m in matched:
                             key = f"{m.skill.namespace}:{m.skill.name}"
+                            if m.skill.name in self.disabled_skills or key in self.disabled_skills:
+                                continue
                             # LRU via OrderedDict: move_to_end on access,
                             # popitem(last=False) to evict oldest.
                             if key in self._loaded_skills:
@@ -582,6 +614,8 @@ class SessionRunner:
                             loaded_bodies = []
                             for key in self._loaded_skills:
                                 ns, name = key.split(":", 1)
+                                if name in self.disabled_skills or key in self.disabled_skills:
+                                    continue
                                 s = all_skills.get(name)
                                 if s is not None:
                                     loaded_bodies.append(s.body)
@@ -819,6 +853,33 @@ class SessionRunner:
                 try:
                     await self.budget.consume_usage(usage)
                 except BudgetExceeded as e:
+                    # The assistant message with its tool_calls was ALREADY
+                    # persisted at this point. If we return now, the store
+                    # holds orphaned tool_calls with no matching tool
+                    # results, and the OpenAI API rejects the resumed
+                    # session ("messages must contain tool results for all
+                    # tool calls"). The interrupt path (BaseException
+                    # handler below) persists error results for exactly
+                    # this reason — the budget path must not skip that
+                    # contract. Persist an error result for every tool
+                    # call and strip them from the in-memory assistant
+                    # message so the turn state stays consistent too.
+                    for tc in tool_calls:
+                        msg = Message.tool_result(
+                            ToolResult.error("budget exhausted: tool not executed"),
+                            tool_call_id=tc.id,
+                        )
+                        messages.append(msg)
+                        if self.store is not None:
+                            await self._append(sid, msg)
+                    # In-memory assistant message: drop the never-executed
+                    # tool calls so it matches the store (text preserved).
+                    if assistant_msg in messages:
+                        idx = messages.index(assistant_msg)
+                        messages[idx] = Message.assistant(
+                            text=assistant_msg.content,
+                            usage=assistant_msg.usage,
+                        )
                     yield TurnFailed(str(e))
                     return
 
@@ -946,6 +1007,7 @@ class SessionRunner:
                 _lsp_module._current_state.set(self._lsp_state)
                 _task_module._current_runner.set(self)
                 _mcp_module._current_managers.set(self._mcp_managers)
+                _mcp_module._current_lock.set(self._mcp_connect_lock)
                 from ..tools.builtins import session_search as _ss
                 _ss._current_store.set(self.store)
                 _sl_mod._set_loader(self.skill_loader)

@@ -64,6 +64,7 @@ class _MCPConnectionManager:
         self._task: asyncio.Task | None = None
         self._tools: list[dict] = []
         self._connected: bool = False  # track connect state independent of tool count
+        self._registered_tool_names: list[str] = []  # for unregister on disconnect
 
     async def connect(self) -> None:
         """Start the MCP connection in a background task."""
@@ -132,8 +133,23 @@ class _MCPConnectionManager:
             await self.disconnect()
             raise RuntimeError("MCP server connection timed out")
 
-    async def disconnect(self) -> None:
-        """Shut down the MCP connection."""
+    async def disconnect(self, registry: ToolRegistry | None = None) -> None:
+        """Shut down the MCP connection.
+
+        ``registry``: when given, the adapter tools this manager
+        registered are unregistered first. mcp_connect's dead-server
+        reconnect path MUST pass it — the stale adapters would otherwise
+        stay registered, and register_tools() on the fresh connection
+        raises "duplicate tool" on the first name, making reconnect
+        permanently fail.
+        """
+        if registry is not None and self._registered_tool_names:
+            for name in self._registered_tool_names:
+                try:
+                    registry.unregister(name)
+                except Exception:
+                    pass
+            self._registered_tool_names = []
         if self._task is not None:
             self._task.cancel()
             try:
@@ -167,6 +183,8 @@ class _MCPConnectionManager:
             for name in registered:
                 registry.unregister(name)
             raise
+        else:
+            self._registered_tool_names = registered
 
 
 async def connect_mcp_stdio(

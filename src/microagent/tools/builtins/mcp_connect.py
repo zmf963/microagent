@@ -22,6 +22,13 @@ _current_managers, _get_managers = session_state("mcp_connect_managers", dict)
 # Per-session lock serializing the idempotency check + connect, so two
 # concurrent mcp_connect("git") calls in the same turn's TaskGroup cannot
 # both pass the check and leak one orphaned subprocess.
+# NOTE: a ContextVar-backed lazy lock does NOT work here — anyio's
+# start_soon spawns each _settle task with a fresh context copy, so each
+# task lazily creates its OWN lock (verified: 3 concurrent mcp_connect
+# calls → 3 subprocess spawns). The runner owns the lock and binds it
+# per-task in _settle (same pattern as _current_managers); the factory
+# fallback below only serves direct tool use outside a runner, where a
+# fresh per-call lock is harmless (no concurrency to serialize).
 _current_lock, _get_lock = session_state("mcp_connect_lock", asyncio.Lock)
 
 
@@ -96,9 +103,13 @@ async def mcp_connect(
                 return ToolResult.ok(
                     f"MCP server '{mgr_id}' already connected (idempotent)."
                 )
-            # task is done — clean up the stale entry and reconnect
+            # task is done — clean up the stale entry and reconnect.
+            # Pass the registry so the dead manager's adapters are
+            # unregistered — they reference the corpse and would make the
+            # fresh connection's register_tools() fail with "duplicate
+            # tool" on the first name.
             try:
-                await existing.disconnect()
+                await existing.disconnect(runner.registry)
             except Exception:
                 pass
             managers.pop(mgr_id, None)
