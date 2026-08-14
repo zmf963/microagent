@@ -419,13 +419,13 @@ async def browser_get_images(
                 if (results.length >= maxResults) break;
                 const rect = img.getBoundingClientRect();
                 if (rect.width === 0 && rect.height === 0) continue;
-                results.push({{
+                results.push({
                     src: img.src.substring(0, 200),
                     alt: (img.alt || '').substring(0, 100),
                     width: Math.round(rect.width),
                     height: Math.round(rect.height),
-                }});
-            }}
+                });
+            }
             return results;
         }""", [max_results])
         if not images:
