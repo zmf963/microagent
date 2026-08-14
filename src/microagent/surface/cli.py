@@ -853,6 +853,13 @@ async def _cmd_skill(state: ReplState, arg: str) -> None:
             console.print("[error]✗[/] Usage: /skill unload <name>")
             return
         disabled.add(skill_name)
+        # Push into the runner so it actually takes effect. Previously the
+        # name only landed in ReplState.disabled_skills — nothing read it,
+        # and the runner kept injecting the skill body every turn (the
+        # command was cosmetic). Also drop the skill from already-loaded
+        # bodies so the NEXT turn immediately stops injecting it.
+        state.agent.runner.disabled_skills.add(skill_name)
+        state.agent.runner._loaded_skills.pop(skill_name, None)
         console.print(f"[success]✓[/] Skill '{skill_name}' disabled (will be filtered from matches)")
 
     elif subcmd == "load":
@@ -861,6 +868,7 @@ async def _cmd_skill(state: ReplState, arg: str) -> None:
             return
         if skill_name in disabled:
             disabled.discard(skill_name)
+            state.agent.runner.disabled_skills.discard(skill_name)
             console.print(f"[success]✓[/] Skill '{skill_name}' re-enabled")
         else:
             console.print(f"[dim]Skill '{skill_name}' is already enabled[/]")
