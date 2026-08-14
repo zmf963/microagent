@@ -579,3 +579,80 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - **修复**：`env` 参数合并到 `os.environ.copy()` 之上，不再整体替换。
 - **现象**：传 `env={"FOO": "bar"}` 导致 PATH 丢失，子进程找不到基本命令。
 
+
+---
+
+## 十四、第十二轮疯狂测试（Round 12，3 并行审查 agent + 探针验证）— 2026-08-14
+
+> 方法：3 个 explore agent 分模块组深读（core/session、tools/terminal/mcp/cron、memory/skill/llm/cli），
+> **每项发现都用探针/读源码逐条验证**（剔除误报 ~9 项）。基线 1128 passed → 修复后 **1134 passed, 1 skipped**。
+
+### 🔴 严重（全部已修复）
+
+**14.1 FTS5 session 搜索从未真正工作** ✅ **已修复 (c8cda65)**
+- 双重根因：(a) `messages_fts` 用 `content=messages` external-content 模式，但 messages 表无
+  `role/content/session_id` 列（在 JSON `data` 里）→ 任何 MATCH 查询抛 `no such column: T.role`；
+  (b) 查询 `SELECT data FROM messages_fts` 引用了 FTS 表不存在的列。两层 `except` 静默吞掉，
+  永远退回 LIKE。两次 /tmp 探针实测复现。修复：自包含表 + `rowid→messages.id` JOIN +
+  `ensure_fts5` 自愈迁移（检测旧 schema 并 drop+rebuild+backfill）。
+
+**14.2 `browser_get_images` JS 死工具** ✅ **已修复 (7e05fa4)**
+- `browser.py:422` `results.push({{` 三引号非 f-string，字面 `{{` 传给 JS → node 实测
+  `Unexpected token '{'`，每次调用必失败。改回单大括号。
+
+**14.3 vision 结果被 output_store 静默截断** ✅ **已修复 (af24aa6)**
+- `runner.py` 对所有工具结果无条件走 `_process_tool_output_async`；>50KB 的 base64 截图被
+  head/tail 500 字符预览替换，LLM 收到坏图片无报错。新增 `_OUTPUT_STORE_EXEMPT`
+  （browser_vision/vision_analyze）豁免。
+
+**14.4 CLI `/new` `/resume` `/compact` 复用已关闭的 store** ✅ **已修复 (453b909)**
+- `Agent.close()` 关 store（library 不泄漏连接），但 CLI 三条命令复用同一 store 实例 →
+  下次写库 `sqlite3.ProgrammingError`。修复：ReplState 记 db_path，`agent.close()` 后
+  `_reopen_store()` 在同路径重开（WAL 保证新连接可见历史）。
+
+### 🟡 应修复（全部已修复）
+
+**14.5 execute_code 内存无界 + 孙进程孤儿** ✅ **已修复 (433dc5c)**
+- `communicate()` 全量缓冲后再截断 → `while True: print('x'*10**6)` 在 timeout 前 OOM；
+  且无 `start_new_session`，超时 kill 只杀 python 父进程。改为 bash.py 同款流式读取 +
+  killpg。
+
+**14.6 process wait 动作 `communicate()` 无超时** ✅ **已修复 (05f3057)**
+- `p.wait()` 后 `p.communicate()` 无超时，孙进程占管道时永久挂起（kill 动作已有 5s bound，
+  wait 漏了）。加 5s bound。
+
+**14.7 mcp_connect 幂等竞态 + 死连接不重连** ✅ **已修复 (5689685)**
+- 检查非原子：并发 TaskGroup 两次 `mcp_connect("git")` 都过检查 → 泄漏 npx 进程；
+  且 manager 一旦入 dict 永不清理，server 崩溃后永远 "already connected"。加 per-session
+  Lock 串行化 check+connect；`_task.done()` 时清理重连。
+
+**14.8 skill loader 每 turn 全量重扫 + 阻塞事件循环** ✅ **已修复 (4cf861b)**
+- `load()` 是 async 但同步 rglob+read_text 跑在事件循环，且 runner 每 turn 调用最多 3 次
+  （catalog + match + bodies）。加 mtime 指纹缓存 + `run_in_executor` 卸载到线程。
+
+**14.9 skill loader YAML frontmatter 非 dict 中断 load** ✅ **已修复 (466d9a6)**
+- `safe_load` 返回 list/scalar 时 `front.get` 抛 AttributeError（非 YAMLError 未捕获），
+  一个坏 SKILL.md 拖垮全部技能加载。加 isinstance 守卫（对齐 config.py）。
+
+**14.10 cron scheduler 顶层 `import fcntl` 无守卫** ✅ **已修复 (3f2ac9a)**
+- `__init__.py` 无条件导入 cron.scheduler → Windows 上 `import microagent` 直接 ImportError
+  （readline/termios/tty 已有守卫，fcntl 漏了）。改 try/except，无 fcntl 时降级为 no-op 锁。
+
+### 剔除的误报（已逐项验证，不报告）
+
+| 原 claim | 验证结果 |
+|----------|---------|
+| budget 耗尽 TurnFailed 被丢弃 | ❌ `arun` 的 async for 正常消费 |
+| `_persist_user_tail` store=None 崩溃 | ❌ runner.py:431 有 `if self.store is not None` 守卫 |
+| budget 子节点能 set 共享 cancel_event | ❌ 即 11.1 修复后的 `_tree_exhausted()` 设计契约 |
+| 流重试 `continue` 无限/泄漏 | ❌ `_stream_retried` 一次性保护，逻辑正确 |
+| `_process_tool_output` 丢 denied metadata | ❌ 347 行 `metadata=result.metadata` 保留（vision 截断是独立项 14.3） |
+| `_watch_esc` 线程不安全 | ❌ 全在事件循环线程，无跨线程写 |
+| tx-d4p 模板"与注释不符" | ❌ skill 已验证 `'Flash' not in template('tx-d4p')` 是预期 |
+| 凭证轮换 service_tier/reasoning_effort 丢失 | ⚠️ 真实但极边缘（pool 通常同模型族），降级未修 |
+| memory sync_turn mem_id 时间戳碰撞 | ⚠️ 真实但内容哈希去重已缓解，降级未修 |
+
+### 遗留未修（🔵，非本轮目标）
+- CJK 技能匹配仍字面匹配（需 embedding 语义检索）
+- 流错误重试消耗迭代（默认 25 次下影响极小）
+- question 超时后 input 线程无法 kill（Python 限制）

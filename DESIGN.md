@@ -1,6 +1,6 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~11,450 行核心代码 | 34 内置工具 | 1139 测试
+> 版本 1.0.0 | Python ≥3.14 | ~11,700 行核心代码 | 34 内置工具 | 1145 测试
 
 **MicroAgent 是一个将 AI Agent 的核心循环压缩到 11,500 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
@@ -337,12 +337,12 @@ system_prompt: "你是一个Python专家。"
 
 | 优先级 | 问题 | 现状 | 方案 |
 |:---:|------|------|------|
-| 🔴 | 多级子代理嵌套 | 单级 `task.spawn()`，子代理不能创建孙子代理 | 引入 orchestrator 角色，允许子代理再 spawn |
-| 🔴 | 增量压缩 | 每次全量 LLM 摘要，旧摘要被丢弃 | `CompactionState.previous_summary` 迭代更新 |
-| 🟡 | 文件附件恢复 | L3 摘要后 Agent 丢失文件上下文 | 压缩时记录最近 N 个文件，自动 re-attach |
-| 🟡 | Session 搜索 | LIKE 查询，无 ranking | 升级 FTS5（同 memory provider） |
+| 🔴 | 多级子代理嵌套 | 保持单级 `task.spawn()`（用户明确不扩展） | — |
+| ✅ | 增量压缩 | 已实现：`CompactionState.previous_summary` 迭代更新 | — |
+| ✅ | 文件附件恢复 | 已实现：`recover_file_attachments`（L3 摘要后恢复最近文件） | — |
+| ✅ | Session 搜索 | 已修复：FTS5 + BM25（此前 external-content schema 从未生效，已自愈迁移） | — |
 | 🟡 | 终端多后端 | local/docker/ssh | 按需增加 modal/daytona（非核心） |
-| 🟡 | 浏览器 page 类型标注 | `page: object` 导致 Pyright 报错 | `TYPE_CHECKING` 下导入 Playwright Page 类型 |
+| ✅ | 浏览器 page 类型标注 | 已修复：`TYPE_CHECKING` 下导入 Playwright Page 类型 | — |
 | 🟢 | 完整插件框架 | 3 Protocol（PreLLM/ToolHook/ContextSource） | 按需扩展（非核心） |
 | 🟢 | Skill hub 远程安装 | 仅本地文件 | 增加 `skills install` 命令（非核心） |
 
@@ -354,7 +354,7 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~11,450 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心代码量 | ~11,700 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
 | 核心循环模块 | 1008 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 734 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
@@ -537,4 +537,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,450 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,700 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
