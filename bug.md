@@ -689,3 +689,101 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
   混合进 `max(coverage, lcs_ratio, subseq_ratio)`。不相关查询仍 0.0 零误报；
   同序匹配高于倒序；容忍自然语言查询中的同义插入。
 - **仍遗留**：完整语义检索需要 embedding 模型——超出零依赖范围，文档已注明。
+
+---
+
+## 十六、第十三轮疯狂测试（Round 13，3 并行审查 agent + 全部探针验证）— 2026-08-14
+
+> 方法：3 个并行审查 agent 分模块组深读（runner/agent/core、tools/terminal/mcp、
+> llm/memory/skill/cli/cron），每项发现逐条探针实测后再修。
+> 基线 1142 passed → 修复后 **1155 passed, 1 skipped**。
+> 8 个 fix commit：`a42cbd0`/`e201903`/`1f1ba50`/`a12620f`/`64e30ce`/`99e2f4e`/`18e3920`/`6a3e39c`。
+
+### 🔴 严重（全部已修复 + 探针验证）
+
+**16.1 mcp_connect 幂等锁失效 — 并发调用全部 spawn 子进程** ✅ **已修复 (a42cbd0)**
+- **现象**：Round 14.7 的"原子幂等检查"修复实际无效——`session_state` 惰性创建的
+  `asyncio.Lock` 是 **per-task** 的：anyio `start_soon` 给每个 `_settle` 任务新 context，
+  每个任务惰性创建自己的锁。探针：一个 turn 内 3 个并发 `mcp_connect` 调用 → 3 次
+  `connect_mcp_stdio`（应为 2）→ 多 spawn 的 npx/uvx 子进程被覆盖为孤儿。
+- **修复**：runner 持有单一 `_mcp_connect_lock`，`_settle` 内 per-task 绑定
+  （与 `_current_managers` 同模式）。探针复验：3 并发 → 2 spawn ✅。
+
+**16.2 budget 在 consume_usage 耗尽 → store 留孤儿 tool_calls** ✅ **已修复 (a42cbd0)**
+- **现象**：assistant(tool_calls) 在 `consume_usage` 之前已持久化；BudgetExceeded
+  直接 return → store 状态 `assistant(tool_calls=[c1])` 无对应 tool 结果 → OpenAI
+  resume 时拒绝（"messages must contain tool results for all tool calls"）。
+  探针复现：`ORPHANED: ['c1']`。interrupt 路径早有此保护（persist error results），
+  budget 路径漏了。
+- **修复**：为每个 tool_call 持久化 error 结果 + 内存中 assistant 消息剥除 tool_calls。
+  探针复验：`ORPHANED: []` ✅。
+
+**16.3 `process write` 无界阻塞 — 非读 stdin 进程挂死整个回合** ✅ **已修复 (e201903)**
+- **现象**：`sleep 100` 等不读 stdin 的进程 + 10MB payload（data 字段无大小上限，
+  LLM 回显大文件即可触发）→ 管道填满后 `p.stdin.drain()` 永久阻塞。
+  探针：`WRITE HUNG CONFIRMED`。
+- **修复**：`wait_for(drain, 5s)`，超时返回"process is not reading stdin"错误。
+  探针复验：5.0s 返回错误 ✅。
+
+**16.4 `runner.close()` 挂死 — killpg 后 `await proc.wait()` 永不返回** ✅ **已修复 (a42cbd0)**
+- **现象**：asyncio 的 `proc.wait()` 要等管道 transport 排空才 resolve；`yes`/`tail -f`
+  刷满管道后 kill，无 reader → `Agent.close()`/CLI 退出永久挂起。探针：`CLOSE HUNG CONFIRMED`。
+- **修复**：`wait_for(proc.wait(), 5s)` 有界等待（进程已死，等待只是管道排空）。
+  探针复验：close() 正常完成 ✅。
+
+### 🟡 应修复（全部已修复）
+
+**16.5 mcp 死 server 重连必失败（duplicate tool）** ✅ **已修复 (a42cbd0)**
+- 死 manager 的 adapter 永远留在 registry；新连接 `register_tools` 首个同名工具即
+  `ValueError("duplicate tool")`。`disconnect()` 现可注销自己注册的工具
+  （`_registered_tool_names` 记录），mcp_connect 重连路径传 registry。
+
+**16.6 LocalTerminal/DockerTerminal 管道满 kill 挂死** ✅ **已修复 (e201903)**
+- 探针：`sh -c 'sleep 300 & sleep 30'`（孙进程持管道写端）超时后 `proc.wait()` 永不返回。
+  新增 `_wait_killed()`：排空缓冲 + 有界等待。探针复验：timeout 路径正常返回 ✅。
+
+**16.7 browser redirect SSRF** ✅ **已修复 (1f1ba50)**
+- `page.goto()` 跟随 redirect，但预检只看初始 URL——公网 URL 302 到
+  `169.254.169.254`/RFC1918 即加载内网内容。goto 后复检最终 URL，落在封禁段
+  即关闭页面并拒绝。
+
+**16.8 plan 模式放行 git 工具 + mcp_connect raw** ✅ **已修复 (a12620f)**
+- git 工具白名单含 commit/add（改写仓库）；`mcp_connect raw:<command>` 执行任意命令。
+  均加入 `_PLAN_BLOCKED_TOOLS`（执行层硬拦截 + LLM 工具清单过滤）。
+
+**16.9 `/skill unload` 是死命令** ✅ **已修复 (a12620f)**
+- 名字只进了 `ReplState.disabled_skills`，无人消费——被卸载的 skill 每轮照常注入
+  system context。runner 现持有 `disabled_skills`，匹配与注入双重过滤；CLI 推送并
+  清除已加载条目。
+
+**16.10 write_file 备份读无上限 + 同步 IO 阻塞事件循环** ✅ **已修复 (64e30ce)**
+- 备份路径 `read_bytes()` 整读已有文件（新内容 10MB 封顶但旧文件没封）→ 多 GB 文件
+  OOM。加 10MB 拒绝；整块 IO 移入 `asyncio.to_thread`。
+
+**16.11 attachments 从可注入文本读取系统文件** ✅ **已修复 (99e2f4e)**
+- 用户/助手消息文本可被 prompt-injected；命名 `/etc/hosts` 等系统路径即被读盘送
+  LLM API（tool 结果已排除，但 user/assistant 内容扫描是漏洞）。文本扫描路径新增
+  `_is_system_path` 拒绝（/etc、/var/log、/root 等）；工具调用参数保留完整路径空间
+  （已过权限层）。
+
+**16.12 web_fetch DNS rebinding TOCTOU** ✅ **已文档化 (18e3920)**
+- resolve-then-connect 存在窗口：httpx 连接时二次解析，split-horizon DNS 可绕过。
+  彻底修复需 SNI/Host 钉住的自定义 transport——超范围，docstring 如实注明。
+
+### 剔除的误报（已逐项探针验证，不报告）
+
+| 原 claim | 验证结果 |
+|----------|---------|
+| interrupt 丢已完成工具结果 + 孤儿 tool_calls | ❌ 探针：`_settle` 的 finally 持久化 error 占位，store 无孤儿（`not executed (cancelled)`） |
+| user steer 泄漏进 cron 会话 | ❌ 探针：steer 后 cron session 历史无泄漏文本（steer 仅注入内存中的 tool 消息） |
+| memory `_insert` 改内容重写抛 IntegrityError | ❌ 探针：external-content FTS5 值插入完全合法，现有测试 `test_rewrite_same_id_clears_stale_fts` 通过 |
+| Esc×2 计数永远到不了 2 | ❌ 步进模拟：两次 Esc 间隔 <0.5s 时计数正确到达 2（重置只发生在 sleep 之后） |
+| `_persist_user_tail` store=None 崩溃 | ❌ 有 `if self.store is not None` 守卫 |
+| search.py 孤儿触发器致 append 必败 | ❌ `CREATE TRIGGER IF NOT EXISTS` 覆盖重建，`_has_broken_fts_schema` 的 drop 路径同时删触发器 |
+
+### 遗留未修（🔵，非本轮目标）
+- CLI `_watch_esc` 每次 poll 泄漏一个阻塞的 to_thread 读线程（stdin 读不可 kill；
+  长流期间线程堆积，后续可用专用常驻 reader 线程修复）
+- `LocalTerminal._wait_killed` 有界等待仍不读尽管道（macOS 上已验证无影响）
+- mcp_connect `_task=None` 的 manager 被视为 live——`_task` 未初始化即幂等跳过
+  （正常路径无此形态，防御性处理留待下轮）

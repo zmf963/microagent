@@ -311,7 +311,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-1142 passed, 1 skipped, 0 failures  —  ~15,100 / 11,822 = 128% test/code ratio（unit+smoke+e2e）
+1155 passed, 1 skipped, 0 failures  —  ~15,100 / 12,022 = 128% test/code ratio（unit+smoke+e2e）
 ```
 
 | 测试文件 | 覆盖 |
@@ -354,12 +354,12 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~11,800 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心代码量 | ~12,000 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
 | 核心循环模块 | 1029 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 734 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
 | CLI 代码量 | 962 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 1143 unit+smoke+e2e（+10 integration） | ~17,000 | 闭源 |
+| 测试数量 | 1155 unit+smoke+e2e（+10 integration） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
