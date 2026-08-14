@@ -7,6 +7,7 @@ Active connections are tracked per-session and cleaned up on close.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from pydantic import Field
@@ -18,6 +19,10 @@ from .._session_state import session_state
 
 # Per-session MCP manager storage (kept alive to prevent GC)
 _current_managers, _get_managers = session_state("mcp_connect_managers", dict)
+# Per-session lock serializing the idempotency check + connect, so two
+# concurrent mcp_connect("git") calls in the same turn's TaskGroup cannot
+# both pass the check and leak one orphaned subprocess.
+_current_lock, _get_lock = session_state("mcp_connect_lock", asyncio.Lock)
 
 
 @tool(
@@ -72,24 +77,47 @@ async def mcp_connect(
     # Idempotency: if already connected to this server, don't spawn a
     # second subprocess — the first would be orphaned (its _task keeps
     # running but is no longer tracked, leaking the npx/uvx process).
-    if mgr_id in managers:
-        return ToolResult.ok(f"MCP server '{mgr_id}' already connected (idempotent).")
+    # The check + connect must be atomic under a per-session lock: two
+    # concurrent mcp_connect("git") calls in one turn's TaskGroup would
+    # both pass the check and both spawn. Also, a previously-recorded
+    # manager whose server process has since died must not pin the slot
+    # forever ("already connected" with a dead connection) — drop it and
+    # reconnect.
+    async with _get_lock():
+        existing = managers.get(mgr_id)
+        if existing is not None:
+            # A dead connection (server crashed) must not pin the slot
+            # forever, returning "already connected" against a corpse.
+            # Only reconnect when we can positively see the task is done;
+            # a manager without a _task attribute (or _task still running)
+            # is treated as live (idempotent skip).
+            task = getattr(existing, "_task", None)
+            if task is None or not task.done():
+                return ToolResult.ok(
+                    f"MCP server '{mgr_id}' already connected (idempotent)."
+                )
+            # task is done — clean up the stale entry and reconnect
+            try:
+                await existing.disconnect()
+            except Exception:
+                pass
+            managers.pop(mgr_id, None)
 
-    try:
-        before_count = len(runner.registry.names)
-        manager = await connect_mcp_stdio(command, runner.registry)
-        after_count = len(runner.registry.names)
+        try:
+            before_count = len(runner.registry.names)
+            manager = await connect_mcp_stdio(command, runner.registry)
+            after_count = len(runner.registry.names)
 
-        # Keep manager alive for session lifetime
-        managers[mgr_id] = manager
+            # Keep manager alive for session lifetime
+            managers[mgr_id] = manager
 
-        return ToolResult.ok(
-            f"Connected to MCP server '{mgr_id}'. "
-            f"Registered {after_count - before_count} new tool(s)."
-        )
-    except ImportError:
-        return ToolResult.error(
-            "mcp package not installed. Install with: pip install mcp"
-        )
-    except Exception as e:
-        return ToolResult.error(f"MCP connection failed: {e!r}")
+            return ToolResult.ok(
+                f"Connected to MCP server '{mgr_id}'. "
+                f"Registered {after_count - before_count} new tool(s)."
+            )
+        except ImportError:
+            return ToolResult.error(
+                "mcp package not installed. Install with: pip install mcp"
+            )
+        except Exception as e:
+            return ToolResult.error(f"MCP connection failed: {e!r}")

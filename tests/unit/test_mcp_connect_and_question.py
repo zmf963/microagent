@@ -192,3 +192,49 @@ async def _fake_to_thread(fn, *args):
 async def _fake_wait_for(awaitable, timeout=None):
     return await awaitable
 
+
+
+@pytest.mark.asyncio
+async def test_mcp_connect_reconnects_after_dead_manager(monkeypatch):
+    """Regression: once a manager was recorded it stayed forever, so a
+    server process that crashed kept returning 'already connected' and the
+    session could never reconnect. A manager whose _task is done must be
+    dropped and replaced."""
+    from microagent.tools.builtins import mcp_connect as mc
+    from microagent.tools.builtins import task as task_mod
+    from microagent.core.tool import ToolRegistry
+
+    class _Runner:
+        registry = ToolRegistry()
+
+    task_mod._current_runner.set(_Runner())
+    mc._get_managers().clear()
+
+    call_count = {"n": 0}
+
+    class _DeadTask:
+        def done(self):
+            return True
+
+    class _ManagerWithDeadTask:
+        _task = _DeadTask()
+
+        async def disconnect(self):
+            pass
+
+    async def _connect(command, registry):
+        call_count["n"] += 1
+        return _ManagerWithDeadTask()
+
+    # Patch connect_mcp_stdio in the module mcp_connect imports from.
+    import sys
+    monkeypatch.setattr(
+        sys.modules["microagent.mcp.client"], "connect_mcp_stdio", _connect
+    )
+
+    r1 = await mc.mcp_connect.fn(name="git")
+    assert "Connected" in r1.content
+    # Second call: the recorded manager's task is done → reconnect, not skip.
+    r2 = await mc.mcp_connect.fn(name="git")
+    assert "Connected" in r2.content, f"dead manager not replaced: {r2.content}"
+    assert call_count["n"] == 2
