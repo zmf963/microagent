@@ -209,13 +209,6 @@ class Budget:
         root = self._root()
         return root._used_cost + root._descendants_cost
 
-    def summary(self) -> str:
-        return (
-            f"iterations={self._used_iter}/{self.max_iterations}, "
-            f"tokens={self._used_tokens}/{self.max_tokens}, "
-            f"cost=${self._used_cost:.4f}/${self.max_cost_usd}"
-        )
-
     def reset(self) -> None:
         """Reset all counters to zero.
 

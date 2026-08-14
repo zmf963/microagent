@@ -55,7 +55,6 @@ class ToolOutputStore:
         self,
         tool_call_id: str,
         content: str,
-        tool_name: str,
         session_id: str = "default",
     ) -> ProcessedOutput:
         """Async wrapper: runs the blocking disk write in a thread.
@@ -68,14 +67,13 @@ class ToolOutputStore:
         import asyncio
 
         return await asyncio.to_thread(
-            self.process, tool_call_id, content, tool_name, session_id
+            self.process, tool_call_id, content, session_id
         )
 
     def process(
         self,
         tool_call_id: str,
         content: str,
-        tool_name: str,
         session_id: str = "default",
     ) -> ProcessedOutput:
         """Check if output exceeds limits; if so, save to disk and return preview."""

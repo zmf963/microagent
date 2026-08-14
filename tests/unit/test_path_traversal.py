@@ -99,7 +99,6 @@ class TestOutputStoreTraversal:
         out = store.process(
             tool_call_id="../../etc/cron.d/evil",
             content=big,
-            tool_name="bash",
             session_id="../../../etc/cron.d/evil2",
         )
         assert out.saved_to_disk
@@ -114,7 +113,6 @@ class TestOutputStoreTraversal:
         out = store.process(
             tool_call_id="call_abc123",
             content=big,
-            tool_name="bash",
             session_id="sess-1",
         )
         assert out.saved_to_disk

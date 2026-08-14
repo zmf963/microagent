@@ -22,19 +22,15 @@ def _get_skills_dir() -> Path:
     return Path.home() / ".microagent" / "skills"
 
 
-def _provenance_file(skill_dir: Path) -> Path:
-    return skill_dir / ".provenance.json"
-
-
 def _record_provenance(name: str, created_by: str = "agent") -> None:
     skills_dir = _get_skills_dir()
-    pf = _provenance_file(skills_dir / name)
+    pf = skills_dir / name / ".provenance.json"
     pf.parent.mkdir(parents=True, exist_ok=True)
     pf.write_text(json.dumps({"created_by": created_by}))
 
 
 def _is_agent_created(name: str) -> bool:
-    pf = _provenance_file(_get_skills_dir() / name)
+    pf = _get_skills_dir() / name / ".provenance.json"
     if not pf.exists():
         return False
     try:

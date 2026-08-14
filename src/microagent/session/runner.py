@@ -376,7 +376,7 @@ class SessionRunner:
         if self._output_store is None:
             self._output_store = ToolOutputStore()
         processed = await self._output_store.process_async(
-            tool_call_id, result.content, result.metadata.get("tool_name", "unknown") if result.metadata else "unknown",
+            tool_call_id, result.content,
             session_id=sid,
         )
         if processed.saved_to_disk:

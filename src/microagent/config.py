@@ -28,7 +28,6 @@ class Config:
     llm: LLMConfig
     system_prompt: str = DEFAULT_TEMPLATE
     skills_path: str | None = None  # colon-separated list of skill directories
-    toolset: str = "core,extended"  # comma-separated toolset layers
 
     @classmethod
     def from_file(

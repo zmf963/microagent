@@ -36,13 +36,6 @@ class TestBudgetLimits:
         await b.consume(iterations=4)
         assert b.remaining == 6
 
-    async def test_summary(self):
-        b = Budget(max_iterations=25, max_tokens=1000, max_cost_usd=2.0)
-        await b.consume(iterations=5, tokens=200, cost_usd=0.5)
-        s = b.summary()
-        assert "iterations=5/25" in s
-        assert "$0.5000/$2" in s
-
     async def test_reset(self):
         b = Budget(max_iterations=10)
         await b.consume(iterations=8)

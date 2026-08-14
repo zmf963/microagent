@@ -122,7 +122,7 @@ def test_output_store_accepts_string_base_dir():
     # String path — must not crash
     store = ToolOutputStore(base_dir=tmp)
     big = "x" * (store.max_bytes + 100)
-    out = store.process("call-1", big, "bash", session_id="sess-1")
+    out = store.process("call-1", big, session_id="sess-1")
     assert out.saved_to_disk
     assert out.disk_path is not None
 
@@ -134,7 +134,7 @@ def test_output_store_accepts_path_base_dir():
     tmp = Path(tempfile.mkdtemp())
     store = ToolOutputStore(base_dir=tmp)
     big = "x" * (store.max_bytes + 100)
-    out = store.process("call-2", big, "bash", session_id="sess-2")
+    out = store.process("call-2", big, session_id="sess-2")
     assert out.saved_to_disk
 
 

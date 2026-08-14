@@ -125,12 +125,3 @@ class TestPlanBuildCommands:
         available = runner._get_available_tools()
         assert "process" not in available
         assert "write_file" not in available
-
-
-class TestConfigToolset:
-    def test_config_has_toolset_field(self):
-        """Config should have toolset field."""
-        from microagent.config import Config
-        config = Config(llm=LLMConfig("http://x", "k", "m"))
-        assert config.toolset == "core,extended"
-        assert hasattr(config, "toolset")

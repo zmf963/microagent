@@ -14,7 +14,7 @@ class TestToolOutputStore:
         """Output under all limits is returned unchanged."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ToolOutputStore(base_dir=Path(tmpdir))
-            result = store.process("call_1", "small output", "bash")
+            result = store.process("call_1", "small output")
             assert result.content == "small output"
             assert not result.saved_to_disk
 
@@ -23,7 +23,7 @@ class TestToolOutputStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ToolOutputStore(base_dir=Path(tmpdir))
             large_output = "x" * 60_000
-            result = store.process("call_1", large_output, "bash")
+            result = store.process("call_1", large_output)
             assert result.saved_to_disk
             assert result.content != large_output
             assert "full output saved to" in result.content
@@ -34,7 +34,7 @@ class TestToolOutputStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ToolOutputStore(base_dir=Path(tmpdir))
             many_lines = "\n".join(f"line {i}" for i in range(2500))
-            result = store.process("call_1", many_lines, "bash")
+            result = store.process("call_1", many_lines)
             assert result.saved_to_disk
 
     def test_head_tail_preview(self):
@@ -42,7 +42,7 @@ class TestToolOutputStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             store = ToolOutputStore(base_dir=Path(tmpdir))
             output = "HEAD_CONTENT_HERE" + "x" * 60_000 + "TAIL_CONTENT_HERE"
-            result = store.process("call_1", output, "bash")
+            result = store.process("call_1", output)
             assert "HEAD_CONTENT_HERE" in result.content
             assert "TAIL_CONTENT_HERE" in result.content
 
@@ -52,7 +52,7 @@ class TestToolOutputStore:
             base = Path(tmpdir)
             store = ToolOutputStore(base_dir=base)
             large_output = "y" * 60_000
-            result = store.process("call_1", large_output, "bash")
+            result = store.process("call_1", large_output)
             assert result.disk_path is not None
             assert Path(result.disk_path).exists()
             assert Path(result.disk_path).read_text() == large_output
@@ -81,7 +81,7 @@ class TestToolOutputStore:
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             store = ToolOutputStore(base_dir=base, retention_days=7)
-            store.process("call_1", "x" * 60_000, "bash")
+            store.process("call_1", "x" * 60_000)
             store.cleanup_expired()
             # The file should still exist
             files = list(base.rglob("*.txt"))
