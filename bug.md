@@ -843,3 +843,29 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 | 沉淀触发 | /learn（人工） | /learn（人工,对齐） |
 | 例行维护 | 零 token | 零 token（对齐） |
 | LLM 密集维护 | consolidate opt-in | 未实现（候选:重叠技能合并） |
+
+---
+
+## 十八、死代码清理 + 覆盖率冲刺 — 2026-08-14
+
+> 基线 1175 passed, 1 skipped, 覆盖率 **82%** → 交付 **1485 passed, 1 skipped, 覆盖率 90%**。
+> 2 个 commit：`a735be5`（死代码）、`8b8b446`（327 个新测试）。
+
+### 17.1 死代码清理 ✅ (a735be5)
+- **toolset 三件套**（`Config.toolset` / `TOOLSETS` / `resolve_toolset`）：Round 12 规划产物，
+  唯一消费路径（from_config 过滤）从未接线，零 src 引用 → 删除 + 移除对应测试。
+- **`ToolOutputStore.tool_name` 参数链**：body 从不读取（路径只用 id），runner 喂的
+  `metadata["tool_name"]` 无任何工具写过 → 全链删除。
+- **`skill_manage._provenance_file`**：零引用 helper → 内联删除。
+- **`Budget.summary()`**：仅测试引用、无文档 → 删除。
+- 保留（Protocol 契约面）：`MemoryProvider.prefetch/sync_turn/system_prompt_block`、
+  `Store.checkpoint`（README 文档化）、`SubagentSpec.description`。
+
+### 17.2 覆盖率 82% → 90% ✅ (8b8b446)
+- 327 个新测试,9 个文件:CLI 分支覆盖(48→66)、lsp 死亡路径(54→94)、
+  browser 分支(62→91)、learner 全路径(72→100)、cron scheduler(80→99)、
+  runner 边界(87→89)、pricing(81→100)、terminal/ssh 后端(83→91/78→97)。
+- permission/config/currency → 98-100%。
+- 3 连跑全绿(无新增 flake);覆盖率测量方式:pytest-cov(与 Makefile 的 coverage 工具一致)。
+- 有意不测:CLI TTY/termios 交互循环、真实 Playwright/gopls/docker/ssh、
+  防御性双重异常守卫(需抵抗 kill 的进程)。
