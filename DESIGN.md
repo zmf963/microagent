@@ -1,8 +1,8 @@
 # MicroAgent 设计说明
 
-> 版本 1.0.0 | Python ≥3.14 | ~11,700 行核心代码 | 34 内置工具 | 1145 测试
+> 版本 1.0.0 | Python ≥3.14 | ~11,800 行核心代码 | 34 内置工具 | 1153 测试
 
-**MicroAgent 是一个将 AI Agent 的核心循环压缩到 11,500 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
+**MicroAgent 是一个将 AI Agent 的核心循环压缩到 11,800 行以内的可嵌入 Python 库——它不做产品，只做引擎。**
 
 **核心机制只有三件事：一个 `while not budget.exhausted` 循环交替驱动 LLM 思考和工具执行，一套 4 层压缩金字塔在上下文溢出时自动做信息分级管理（零开销预处理 → Snip 裁剪 → LLM 结构化摘要 → 熔断），以及一层 Protocol 抽象让 Memory、Skill、Hook、Tool 全部可插拔替换而不改核心代码。**
 
@@ -14,7 +14,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 
 1. **最小内核** — 核心循环 LLM→Tool→LLM 是唯一必选路径，所有能力通过 Protocol 扩展
 2. **零依赖核心** — 必装仅 6 个（openai、pydantic、anyio、httpx、pyyaml、rich），其余 optional
-3. **TDD 全覆盖** — 1037 测试（unit + smoke + e2e + 10 integration），red-green-refactor 驱动
+3. **TDD 全覆盖** — 1153 测试（unit + smoke + e2e + 10 integration），red-green-refactor 驱动
 4. **信息分通道** — 借鉴 Claude Code，压缩走 4 层金字塔
 
 ### 架构全景
@@ -66,7 +66,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 
 ---
 
-## 二、核心类型 (`core/types.py` — 152 行)
+## 二、核心类型 (`core/types.py` — 197 行)
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -101,7 +101,7 @@ class Usage:
 
 ---
 
-## 三、工具系统 (`core/tool.py` — 220 行)
+## 三、工具系统 (`core/tool.py` — 414 行)
 
 ```python
 @tool("read_file", description="Read a file...")
@@ -129,7 +129,7 @@ registry.to_openai_tools()                     # → OpenAI function schema
 | 文件树 | `file_tree` | 目录结构可视化 |
 | MCP | `mcp_connect` | 运行时连接 MCP server |
 
-### 权限引擎 (`core/permission.py` — 190 行)
+### 权限引擎 (`core/permission.py` — 270 行)
 
 ```python
 DEFAULT_RULES = (
@@ -144,7 +144,7 @@ DEFAULT_RULES = (
 
 ---
 
-## 四、LLM 层 (`llm/client.py` — 260 行)
+## 四、LLM 层 (`llm/client.py` — 363 行)
 
 ### LLMConfig
 
@@ -187,7 +187,7 @@ deepseek-v4-flash, tx-d4p → deepseek-v4-pro）通过 `_ALIAS_TO_CANONICAL` 映
 
 ## 五、会话管理 (`session/`)
 
-### SessionRunner (`runner.py` — 1008 行)
+### SessionRunner (`runner.py` — 1029 行)
 
 核心循环：
 
@@ -218,7 +218,7 @@ while not budget.exhausted:
 
 **7 章节摘要模板**：请求和意图 | 技术决策 | 文件和代码 | 错误修复 | 所有用户消息 | 待办 | 当前进度
 
-### SQLiteStore (`core/store.py` — 225 行)
+### SQLiteStore (`core/store.py` — 271 行)
 
 ```python
 store = SQLiteStore("~/.microagent/sessions.db")  # WAL 模式
@@ -227,7 +227,7 @@ await store.load_history(session_id)               # → list[Message]（逐行�
 await store.list_sessions()                        # → list[str]
 ```
 
-### Budget 树形预算 (`session/budget.py` — 169 行)
+### Budget 树形预算 (`session/budget.py` — 240 行)
 
 ```python
 root = Budget.root(max_iterations=25, max_tokens=200_000, max_cost_usd=5.0)
@@ -271,7 +271,7 @@ class ContextSource(Protocol):
 
 ## 九、Surface 层
 
-### CLI (`surface/cli.py` — 911 行)
+### CLI (`surface/cli.py` — 962 行)
 
 ```
 ────── 💭 thinking ──────      思考过程（灰色分割线）
@@ -311,7 +311,7 @@ system_prompt: "你是一个Python专家。"
 ## 十一、测试覆盖
 
 ```
-1042 passed, 11 skipped, 0 failures  —  ~13,620 / 10,449 = 130% test/code ratio（unit+smoke+e2e，82% 行覆盖率）
+1142 passed, 1 skipped, 0 failures  —  ~15,100 / 11,822 = 128% test/code ratio（unit+smoke+e2e）
 ```
 
 | 测试文件 | 覆盖 |
@@ -354,12 +354,12 @@ system_prompt: "你是一个Python专家。"
 
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
-| 核心代码量 | ~11,700 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
-| 核心循环模块 | 1008 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
+| 核心代码量 | ~11,800 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
+| 核心循环模块 | 1029 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 734 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
-| CLI 代码量 | 911 行 | 16,304 行 | 闭源（产品级 CLI） |
-| 测试数量 | 1037（82% 行覆盖率） | ~17,000 | 闭源 |
+| CLI 代码量 | 962 行 | 16,304 行 | 闭源（产品级 CLI） |
+| 测试数量 | 1143 unit+smoke+e2e（+10 integration） | ~17,000 | 闭源 |
 
 ### 12.2 核心 Agent 能力逐项对比
 
@@ -425,10 +425,10 @@ system_prompt: "你是一个Python专家。"
 | 自动保存 | ✅ 每个 turn 自动 append | ✅ `sync_turn()` | ✅ 自动 |
 | 多会话 | ✅ `/new` `/list` `/resume` | ✅ sessions + profiles | ❌ 单会话 |
 | 会话恢复 | ✅ `SessionRunner.resume(store)` | ✅ `session_start` + 记忆 | ❌ 退出即丢失 |
-| Session 搜索 | ✅ `session_search` 工具 (LIKE) | ✅ `session_search` 工具 (FTS5) | — |
+| Session 搜索 | ✅ `session_search` 工具 (FTS5 + BM25，CJK LIKE fallback) | ✅ `session_search` 工具 (FTS5) | — |
 | 多 Profile | ❌ (product) | ✅ 多 profile 隔离 | ❌ |
 
-**关键差距**：Hermes 的 `SessionDB` 有 FTS5 全文索引（MicroAgent 用 LIKE），Hermes 支持多 profile 隔离（MicroAgent 不需要）。
+**关键差距**：Hermes 支持多 profile 隔离（MicroAgent 不需要）。Session 搜索两端均已 FTS5。
 
 #### 记忆系统
 
@@ -500,7 +500,7 @@ system_prompt: "你是一个Python专家。"
 |------|-----------|--------|-------------|
 | Python 版本 | 3.14+ | 3.11+ | N/A (Node.js) |
 | 类型系统 | ✅ 完整类型标注 + `slots=True` + `frozen=True` | ✅ 大规模类型系统 | ✅ TypeScript |
-| 测试策略 | ✅ TDD, 1037 测试（unit+smoke+e2e+integration） | ✅ ~17k 测试 + CI parity | N/A |
+| 测试策略 | ✅ TDD, 1153 测试（unit+smoke+e2e+integration） | ✅ ~17k 测试 + CI parity | N/A |
 | 测试隔离 | ✅ 子进程 per test file | ✅ 子进程 per test file | N/A |
 | 构建系统 | hatchling | setuptools + uv | npm/esbuild |
 | 依赖管理 | `>=floor,<next_major` 上限 | 同上 + SHA pinning | npm lock |
@@ -511,17 +511,17 @@ system_prompt: "你是一个Python专家。"
 
 | 优先级 | 差距项 | MicroAgent 现状 | 对标 | 差异说明 |
 |--------|--------|---------------|------|---------|
-| 🔴 高 | 多级子代理嵌套 | 单级 `task.spawn()` | Hermes orchestrator 角色 | 不支持子代理创建孙子代理 |
-| 🔴 高 | 增量压缩 | 每次全量 LLM 摘要 | Hermes iterative summary | 已有摘要被丢弃，浪费 token |
-| 🟡 中 | 文件附件恢复 | L3 摘要后无文件恢复 | Claude Code 最近 5 文件 | 压缩后 Agent 丢失文件上下文 |
+| 🔴 高 | 多级子代理嵌套 | 保持单级 `task.spawn()`（用户明确不扩展） | Hermes orchestrator 角色 | — |
+| ✅ | 增量压缩 | 已实现 `CompactionState.previous_summary` 迭代更新 | Hermes iterative summary | — |
+| ✅ | 文件附件恢复 | 已实现 `recover_file_attachments` | Claude Code 最近 5 文件 | — |
 | 🟡 中 | 终端多后端 | local + docker + ssh | Hermes 6 种 | 缺 modal/daytona/singularity |
-| 🟡 中 | Session 搜索 | LIKE 查询 | Hermes FTS5 | LIKE 性能差，不支持 ranking |
+| ✅ | Session 搜索 | 已修复：FTS5 + BM25 + CJK LIKE fallback | Hermes FTS5 | — |
 | 🟡 中 | 多 Provider 协议 | 仅 OpenAI 兼容 | Hermes 31 providers | 覆盖 ~90% 端点，但缺 Anthropic/Gemini 原生 |
-| 🟡 中 | 浏览器工具 | 10 个（含 back/scroll/press/console/get_images/vision） | Hermes 10 个 | 已对齐 |
-| 🟡 中 | LSP 代码智能 | 5 语言（py/ts/rs/go/cpp） | OpenCode 完整 LSP | 已对齐（真实 stdio） |
+| ✅ | 浏览器工具 | 10 个（含 back/scroll/press/console/get_images/vision） | Hermes 10 个 | 已对齐 |
+| ✅ | LSP 代码智能 | 5 语言（py/ts/rs/go/cpp） | OpenCode 完整 LSP | 已对齐（真实 stdio） |
 | 🟢 低 | 完整插件框架 | 3 Protocol | Hermes PluginManager | Protocol 覆盖 80% 场景 |
 | 🟢 低 | Skill hub 远程安装 | 仅本地文件 | Hermes `skills install official/...` | 用户需手动放置 skill 文件 |
-| 🟢 低 | MCP 运行时连接 | `mcp_connect` 工具 | Hermes 内置 MCP client | 已对齐 |
+| ✅ | MCP 运行时连接 | `mcp_connect` 工具 | Hermes 内置 MCP client | 已对齐 |
 | ⚪ N/A | Gateway 20+ 平台 | — | Hermes | 产品层，MicroAgent 不做 |
 | ⚪ N/A | Electron Desktop | — | Hermes / Claude Code | 产品层，MicroAgent 不做 |
 | ⚪ N/A | Kanban 多 Agent | — | Hermes | 产品层，MicroAgent 不做 |
@@ -537,4 +537,4 @@ Claude Code        — 闭源产品 (~50k+ LOC)，Anthropic 官方 AI 编程工�
 OpenCode           — 开源 CLI (~10k LOC)，专注编程场景的 Agent
 ```
 
-MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,700 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。
+MicroAgent 的设计哲学是**最小可用内核 + 可插拔扩展**。~11,800 行代码覆盖了 Agent 循环的每个关键环节——从 LLM 调用到工具执行，从会话持久化到上下文压缩——但把 Gateway/Desktop/Profiles/Kanban 留给集成方。这与 Hermes 的"全家桶"和 Claude Code 的"闭源精品"是不同的路线。

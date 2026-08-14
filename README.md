@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1042%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1142%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~11,700 LOC**, **34 built-in tools**, **62 public API symbols**, **1135 unit+smoke+e2e tests, 3 integration tests**.
+**~11,800 LOC**, **34 built-in tools**, **62 public API symbols**, **1143 unit+smoke+e2e tests, 3 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -412,20 +412,20 @@ await scheduler.stop()
 
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
-| `core/` | 6 | 1131 | types, tool registry, permission, store, event bus |
-| `tools/` | 28 | 3058 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
-| `session/` | 6 | 1905 | runner loop, 4-layer compression, budget, attachments, search |
-| `memory/` | 3 | 350 | FTS5 memory provider, LLM extractor |
-| `skill/` | 3 | 353 | Claude skill loader, curator lifecycle |
-| `surface/` | 2 | 888 | Rich CLI REPL with /slash commands (/models, /cost, /compact, …) |
-| `llm/` | 5 | 774 | OpenAI client, credential pool, models.dev pricing cache, templates |
-| `terminal/` | 2 | 286 | local + docker + SSH backends (library extension point) |
-| `mcp/` | 3 | 270 | MCP stdio client + catalog |
-| `cron/` | 2 | 248 | APScheduler-based cron jobs |
-| `security/` | 3 | 173 | streaming context scrubber, injection patterns (library extension point) |
-| `subagent/` | 2 | 190 | subagent manager with isolated budgets |
+| `core/` | 6 | 1203 | types, tool registry, permission, store, event bus |
+| `tools/` | 28 | 3494 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
+| `session/` | 6 | 2439 | runner loop, 4-layer compression, budget, attachments, search |
+| `memory/` | 3 | 520 | FTS5 memory provider, LLM extractor |
+| `skill/` | 3 | 455 | Claude skill loader, curator lifecycle |
+| `surface/` | 2 | 962 | Rich CLI REPL with /slash commands (/models, /cost, /compact, …) |
+| `llm/` | 5 | 812 | OpenAI client, credential pool, models.dev pricing cache, templates |
+| `terminal/` | 2 | 367 | local + docker + SSH backends (library extension point) |
+| `mcp/` | 3 | 305 | MCP stdio client + catalog |
+| `cron/` | 2 | 345 | APScheduler-based cron jobs |
+| `security/` | 3 | 181 | streaming context scrubber, injection patterns (library extension point) |
+| `subagent/` | 2 | 193 | subagent manager with isolated budgets |
 | `plugin/` | 2 | 46 | 3 extension Protocols (PreLLMHook, ToolHook, ContextSource) |
-| top-level | 2 | 460 | Agent facade, Config resolver, currency helper |
+| top-level | 3 | 367 | Agent facade, Config resolver, currency helper |
 
 ## Built-in Tools
 
@@ -480,17 +480,17 @@ await scheduler.stop()
 
 ```bash
 # Unit tests (mock LLM, no network)
-python -m pytest tests/unit/ -q          # 1017 unit tests
+python -m pytest tests/unit/ -q          # 1122 unit tests
 
 # Smoke tests (fast import + lifecycle sanity)
-python -m pytest tests/smoke/ -q          # 9 smoke tests
+python -m pytest tests/smoke/ -q          # 11 smoke tests
 
 # End-to-end tests (full agent turns with tools)
-python -m pytest tests/e2e/ -q            # 20 e2e tests
+python -m pytest tests/e2e/ -q            # 9 e2e tests
 
 # All fast tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
-# 1042 passed, 11 skipped
+# 1142 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
@@ -516,7 +516,7 @@ python -m coverage report                                # ~82% line coverage
 - **Skills dual ecosystem** — Claude Code SKILL.md format + composite loader with CJK-aware fuzzy matching
 - **Permission engine** — fnmatch rules + ScriptRule + ASK callback (library extension point, requires manual wiring)
 - **Extension points** — 3 Protocols (PreLLMHook, ToolHook, ContextSource) + EventBus (zero overhead when unused)
-- **Dual-track testing** — `FakeLLMClient` (1017 unit tests) + real API (integration)
+- **Dual-track testing** — `FakeLLMClient` (1122 unit tests) + real API (integration)
 
 ## License
 
