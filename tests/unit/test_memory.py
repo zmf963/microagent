@@ -47,6 +47,15 @@ class TestMemoryProviderProtocol:
             async def delete(self, memory_id: str) -> None:
                 pass
 
+            async def pending_memories(self):
+                return ()
+
+            async def approve_memory(self, memory_id: str) -> None:
+                pass
+
+            async def reject_memory(self, memory_id: str) -> None:
+                pass
+
             def system_prompt_block(self) -> str:
                 return ""
 

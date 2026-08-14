@@ -68,6 +68,18 @@ class MemoryProvider(Protocol):
         """Remove a single memory."""
         ...
 
+    async def pending_memories(self) -> tuple[Memory, ...]:
+        """Memories held for approval (write_approval mode)."""
+        ...
+
+    async def approve_memory(self, memory_id: str) -> None:
+        """Approve one pending memory into live storage."""
+        ...
+
+    async def reject_memory(self, memory_id: str) -> None:
+        """Reject (discard) one pending memory."""
+        ...
+
     def system_prompt_block(self) -> str:
         """Return a fixed block to inject into the system prompt."""
         ...
@@ -95,6 +107,16 @@ class SQLiteMemoryProvider:
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
         content, content='memories', content_rowid='rowid'
     );
+    CREATE TABLE IF NOT EXISTS pending_memories (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        category TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        session_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'private',
+        metadata TEXT,
+        content_hash TEXT
+    );
     """
 
     def __init__(self, path: Path | str):
@@ -116,6 +138,18 @@ class SQLiteMemoryProvider:
         # loop thread: recall() during a turn blocked streaming/tool calls,
         # and concurrent writers raced on the shared connection.
         self._lock = asyncio.Lock()
+        # Hermes-style write-approval gate. False (default): batch_write
+        # lands directly in memories (Hermes default write_approval: false).
+        # True: batch_write holds entries in pending_memories until
+        # approve_memory / reject_memory — the CLI's /memory command
+        # drives the gate (Hermes: /memory [pending|approve|reject]).
+        self.write_approval = False
+
+    # Rolling size cap. Hermes keeps MEMORY.md bounded by a char limit and
+    # asks the LLM to compact; the SQLite form uses a row cap and evicts
+    # the oldest entries (context-category first — they are the least
+    # durable, derived from raw conversation windows).
+    MAX_MEMORIES = 500
 
     @staticmethod
     def _normalize_content(content: str) -> str:
@@ -279,7 +313,113 @@ class SQLiteMemoryProvider:
 
     def _batch_write_sync(self, memories: tuple[Memory, ...]) -> None:
         for m in memories:
-            self._insert(m)
+            if self.write_approval:
+                self._insert_pending(m)
+            else:
+                self._insert(m)
+
+    def _evict_overflow(self) -> None:
+        """Rolling cap: delete oldest memories beyond MAX_MEMORIES.
+
+        Eviction order: oldest first, category='context' entries before
+        others at the same age (they are raw conversation-window echoes —
+        the least durable; facts/preferences are the distilled ones).
+        """
+        count = self._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        overflow = count - self.MAX_MEMORIES
+        if overflow <= 0:
+            return
+        rows = self._conn.execute(
+            "SELECT rowid, id, content, category FROM memories "
+            "ORDER BY created_at ASC, CASE category WHEN 'context' THEN 0 ELSE 1 END ASC"
+        ).fetchall()
+        for rowid, mem_id, content, _category in rows[:overflow]:
+            self._conn.execute(
+                "INSERT INTO memories_fts(memories_fts, rowid, content) "
+                "VALUES('delete', ?, ?)",
+                (rowid, content),
+            )
+            self._conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
+        if overflow:
+            self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Write-approval gate (Hermes /memory semantics)
+    # ------------------------------------------------------------------
+
+    async def pending_memories(self) -> tuple[Memory, ...]:
+        """List memories held for approval (write_approval=True mode)."""
+        async with self._lock:
+            return await asyncio.to_thread(self._pending_sync)
+
+    def _pending_sync(self) -> tuple[Memory, ...]:
+        rows = self._conn.execute(
+            "SELECT id, content, category, created_at, session_id, "
+            "visibility, metadata FROM pending_memories ORDER BY created_at"
+        ).fetchall()
+        return tuple(
+            Memory(
+                id=r[0], content=r[1], category=r[2], created_at=r[3],
+                session_id=r[4], visibility=r[5],
+                metadata=json.loads(r[6]) if r[6] else None,
+            )
+            for r in rows
+        )
+
+    async def approve_memory(self, memory_id: str) -> None:
+        """Approve one pending memory — move it into live memories."""
+        async with self._lock:
+            await asyncio.to_thread(self._approve_sync, memory_id)
+
+    def _approve_sync(self, memory_id: str) -> None:
+        row = self._conn.execute(
+            "SELECT id, content, category, created_at, session_id, "
+            "visibility, metadata, content_hash FROM pending_memories "
+            "WHERE id = ?", (memory_id,),
+        ).fetchone()
+        if not row:
+            return
+        self._conn.execute("DELETE FROM pending_memories WHERE id = ?", (memory_id,))
+        self._conn.commit()
+        self._insert(Memory(
+            id=row[0], content=row[1], category=row[2], created_at=row[3],
+            session_id=row[4], visibility=row[5],
+            metadata=json.loads(row[6]) if row[6] else None,
+        ))
+
+    async def reject_memory(self, memory_id: str) -> None:
+        """Reject one pending memory — discard it."""
+        async with self._lock:
+            await asyncio.to_thread(self._reject_sync, memory_id)
+
+    def _reject_sync(self, memory_id: str) -> None:
+        self._conn.execute("DELETE FROM pending_memories WHERE id = ?", (memory_id,))
+        self._conn.commit()
+
+    def _insert_pending(self, m: Memory) -> None:
+        """Insert into the pending table (write_approval mode).
+
+        The pending table is plain SQLite (no FTS) — entries only enter
+        the FTS index when approved via _insert.
+        """
+        content_hash = self._content_hash(m.content)
+        if self._conn.execute(
+            "SELECT id FROM pending_memories WHERE content_hash = ? LIMIT 1",
+            (content_hash,),
+        ).fetchone():
+            return  # same dedupe contract as _insert
+        self._conn.execute(
+            "INSERT INTO pending_memories "
+            "(id, content, category, created_at, session_id, visibility, metadata, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                m.id, m.content, m.category, m.created_at,
+                m.session_id, m.visibility,
+                json.dumps(m.metadata) if m.metadata else None,
+                content_hash,
+            ),
+        )
+        self._conn.commit()
 
     async def delete(self, memory_id: str) -> None:
         async with self._lock:
@@ -357,3 +497,4 @@ class SQLiteMemoryProvider:
         # defaults to a manual transaction; without commit(), close() rolls
         # back every insert and memory silently disappears across restarts.
         self._conn.commit()
+        self._evict_overflow()
