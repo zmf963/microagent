@@ -45,6 +45,13 @@ from .budget import Budget, BudgetExceeded
 
 logger = logging.getLogger(__name__)
 
+# Tools whose output is large by design (base64-encoded media) and must
+# reach the model verbatim. Routing them through ToolOutputStore would
+# replace the data URL with a head/tail preview — a typical full-page PNG
+# screenshot is 100-500 KB, well past the 50 KB gate, and the truncation
+# is silent, leaving the vision model with a corrupt image.
+_OUTPUT_STORE_EXEMPT = frozenset({"browser_vision", "vision_analyze"})
+
 
 class SessionRunner:
     """Core loop: LLM → tool calls → LLM → ... → text response."""
@@ -849,8 +856,13 @@ class SessionRunner:
                 yield pe
 
             for tc, result in zip(tool_calls, results):
-                # Apply output size management if result is large
-                processed = await self._process_tool_output_async(tc.id, result, sid)
+                # Apply output size management if result is large. Vision
+                # tools are exempt: their base64 data URLs must reach the
+                # model intact (see _OUTPUT_STORE_EXEMPT).
+                if tc.name in _OUTPUT_STORE_EXEMPT:
+                    processed = result
+                else:
+                    processed = await self._process_tool_output_async(tc.id, result, sid)
                 msg = Message.tool_result(processed, tool_call_id=tc.id)
                 messages.append(msg)
                 if self.store is not None:
