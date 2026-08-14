@@ -197,7 +197,19 @@ async def process(
             p = reg.procs[session_id]
             try:
                 await asyncio.wait_for(p.wait(), timeout=timeout)
-                stdout, stderr = await p.communicate()
+                # communicate() drains the stdout/stderr pipes. A grandchild
+                # that inherited the write end keeps the pipe open, so the
+                # read blocks forever even though the direct child has
+                # exited — same hazard the 'kill' action bounds at 5s. Cap
+                # it here too; on timeout report the exit without the
+                # undrained tail rather than hanging the agent.
+                try:
+                    stdout, stderr = await asyncio.wait_for(p.communicate(), timeout=5.0)
+                except TimeoutError:
+                    return ToolResult.ok(
+                        f"(exit {p.returncode})\n[output drain timed out — "
+                        f"a child process may still hold the pipe open]"
+                    )
                 out = stdout.decode("utf-8", errors="replace")
                 if stderr:
                     out += "\n[stderr]\n" + stderr.decode("utf-8", errors="replace")
