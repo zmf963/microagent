@@ -442,6 +442,7 @@ class SessionRunner:
 
         self._overflow_retried = False
         self._stream_retried = False  # one-shot stream-error retry per turn
+        self._stream_retry_free = False  # next loop pass is the retry — don't charge an iteration
         self._interrupt_requested = False
         # NOTE: _steer_pending is intentionally NOT cleared here. A steer
         # arriving during a pure-text turn is documented to "wait until the
@@ -461,11 +462,18 @@ class SessionRunner:
                 yield TurnFailed("interrupted by user")
                 return
 
-            try:
-                await self.budget.consume(iterations=1)
-            except BudgetExceeded as e:
-                yield TurnFailed(str(e))
-                return
+            # A stream-error retry re-enters the loop for the SAME logical
+            # LLM call. Without this skip the retry pass charges a second
+            # iteration, so every one-shot retry silently halved the turn
+            # budget available after a network blip (default 25 → ~12 real
+            # calls). The retry is free: it produces no new output.
+            if not self._stream_retry_free:
+                try:
+                    await self.budget.consume(iterations=1)
+                except BudgetExceeded as e:
+                    yield TurnFailed(str(e))
+                    return
+            self._stream_retry_free = False
 
             # System prompt is frozen (ADR-0005) — skills/memory/context
             # sources are injected into the user message, not system prompt.
@@ -787,6 +795,7 @@ class SessionRunner:
                 # caught here — it must keep propagating for interrupt.
                 if not self._stream_retried and not _stream_got_output:
                     self._stream_retried = True
+                    self._stream_retry_free = True  # don't charge the retry pass
                     continue  # retry the turn (re-enters the outer loop)
                 yield TurnFailed(f"LLM error: {e!r}")
                 return

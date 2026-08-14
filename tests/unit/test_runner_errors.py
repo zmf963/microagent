@@ -173,6 +173,28 @@ class TestLLMStreamErrors:
         texts = [e for e in events if isinstance(e, TextDelta) and e.kind == "content"]
         assert len(texts) == 1, f"partial content must not be duplicated: {len(texts)} TextDeltas"
 
+    async def test_stream_retry_does_not_burn_extra_iteration(self):
+        """A stream error before any output retries once, but the retry is
+        the SAME logical LLM call — it must not charge a second budget
+        iteration (previously every one-shot retry silently halved the
+        available turn budget after a network blip)."""
+        fallback = FakeLLMClient([text_response("recovered")])
+        llm = _ExplodingLLM(RuntimeError("connection reset"), fallback)
+        # max_iterations=2: pass 1 consumes (used=1) and the stream raises;
+        # the retry pass must be FREE, so the turn completes with used=1.
+        # With the old double-charge the retry pass would consume (used=2)
+        # and raise BudgetExceeded, failing the turn.
+        budget = Budget.root(max_iterations=2)
+        runner = SessionRunner(llm=llm, registry=ToolRegistry([]), budget=budget)
+        events = []
+        async for e in runner.run_turn([Message.user("hi")]):
+            events.append(e)
+        completes = [e for e in events if isinstance(e, TurnComplete)]
+        assert len(completes) == 1, f"expected completion, got {[type(e).__name__ for e in events]}"
+        assert "recovered" in completes[0].content
+        assert llm.calls == 2  # original + one retry
+        assert budget._used_iter == 1, f"retry charged extra iteration: {budget._used_iter}"
+
     async def test_arun_llm_error_returns_error_string(self):
         """Agent.arun returns '[error: ...]' on LLM failure instead of raising."""
         from microagent.agent import Agent
