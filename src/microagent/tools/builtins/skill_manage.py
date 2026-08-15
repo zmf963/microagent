@@ -22,9 +22,9 @@ def _get_skills_dir() -> Path:
     return Path.home() / ".microagent" / "skills"
 
 
-def _record_provenance(name: str, created_by: str = "agent") -> None:
-    skills_dir = _get_skills_dir()
-    pf = skills_dir / name / ".provenance.json"
+def _record_provenance(name: str, created_by: str = "agent", skills_dir: Path | None = None) -> None:
+    base = skills_dir or _get_skills_dir()
+    pf = base / name / ".provenance.json"
     pf.parent.mkdir(parents=True, exist_ok=True)
     pf.write_text(json.dumps({"created_by": created_by}))
 
@@ -40,11 +40,12 @@ def _is_agent_created(name: str) -> bool:
         return False
 
 
-def _touch_curator_usage(name: str) -> None:
+def _touch_curator_usage(name: str, skills_dir: Path | None = None) -> None:
     """Update curator usage tracking for a skill (last_activity timestamp)."""
     import time
 
-    usage_file = _get_skills_dir() / ".usage.json"
+    base = skills_dir or _get_skills_dir()
+    usage_file = base / ".usage.json"
     now = time.time()
     data = {}
     if usage_file.exists():

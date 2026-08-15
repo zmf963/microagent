@@ -179,19 +179,18 @@ def _write_skill(skills_dir: Path, name: str, content: str) -> None:
     """Write SKILL.md + provenance + curator usage entry.
 
     Mirrors skill_manage's create path so both routes produce identical
-    on-disk shapes (Curator treats them the same).
+    on-disk shapes (Curator treats them the same). ALL three artifacts
+    (SKILL.md, .provenance.json, .usage.json) land in the CALLER-provided
+    skills_dir — provenance/usage previously ignored the parameter and
+    wrote to the real ~/.microagent/skills, corrupting the user's curator
+    state when a custom dir was passed (e.g. test fixtures).
     """
-    from ..tools.builtins.skill_manage import (
-        _get_skills_dir,
-        _record_provenance,
-        _touch_curator_usage,
-    )
+    from ..tools.builtins.skill_manage import _record_provenance, _touch_curator_usage
 
-    skills_dir = skills_dir or _get_skills_dir()
     skill_path = skills_dir / name / "SKILL.md"
     if skill_path.exists():
         raise ValueError(f"skill {name!r} already exists — delete it first")
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(content)
-    _record_provenance(name, created_by="agent")
-    _touch_curator_usage(name)
+    _record_provenance(name, created_by="agent", skills_dir=skills_dir)
+    _touch_curator_usage(name, skills_dir=skills_dir)
