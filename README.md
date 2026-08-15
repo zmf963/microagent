@@ -5,7 +5,7 @@
 [![Tests](https://img.shields.io/badge/tests-1547%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~13,000 LOC**, **34 built-in tools**, **66 public API symbols**, **1547 unit+smoke+e2e tests, 3 integration tests**.
+**~13,100 LOC**, **34 built-in tools**, **66 public API symbols**, **1547 unit+smoke+e2e tests, 3 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -346,9 +346,10 @@ class GitSource:
     async def contribute(self, ctx):
         return f"\ngit: main branch, 3 files changed"
 
-# Observe events
+# Observe events (duplicate registrations deduped; off() unregisters)
 bus = EventBus()
 bus.on("turn_complete", lambda sid, resp: log_to_file(sid, resp))
+bus.off("turn_complete", handler)  # long-lived agents release observers
 
 runner = SessionRunner(
     llm=client,
@@ -419,7 +420,7 @@ scheduler.add_job(CronJob(
 ))
 scheduler.start()
 # ... app runs ...
-await scheduler.stop()
+await scheduler.stop()  # graceful: waits for in-flight jobs (bounded) before releasing the lock
 ```
 
 ---

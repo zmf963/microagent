@@ -275,10 +275,17 @@ class AuditHook:
         print(f"执行完毕: {call.name} → {result.content[:50]}")
         return result
 
-# 注入额外上下文
+# 注入额外上下文（注入 user message context——ADR-0005 system prompt 冻结）
 class GitContext:
     async def contribute(self, ctx):
         return f"\n当前分支: main\n最近提交: {subprocess.check_output(['git', 'log', '-1', '--oneline']).decode()}"
+
+# 事件观测（重复注册去重；off() 注销——长驻 agent 需释放观察者）
+from microagent import EventBus
+bus = EventBus()
+def on_done(sid, content): ...
+bus.on("turn_complete", on_done)
+bus.off("turn_complete", on_done)
 
 agent = Agent.from_config(config)
 runner = SessionRunner(
@@ -286,7 +293,21 @@ runner = SessionRunner(
     pre_llm_hooks=(MyPreLLMHook(),),
     tool_hooks=(AuditHook(),),
     context_sources=(GitContext(),),
+    event_bus=bus,
 )
+```
+
+## Cron（定时任务）
+
+```python
+from microagent import CronScheduler, CronJob
+
+scheduler = CronScheduler(agent=agent)
+scheduler.add_job(CronJob(name="daily", schedule="0 9 * * *", prompt="..."))
+scheduler.start()
+await scheduler.stop()
+# stop() 优雅关闭：有界等待 in-flight job 完成后才释放锁返回——
+# 不会出现"job 还在跑、runner 已被 close"的竞态
 ```
 
 ## Extras

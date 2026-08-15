@@ -21,11 +21,11 @@ _Avoid_: limit, quota, cap
 _Avoid_: frontend, interface, client
 
 **Skill**:
-可复用的过程性知识，以 SKILL.md 格式存储，按需匹配并注入 system prompt。
+可复用的过程性知识，以 SKILL.md 格式存储，按需匹配并注入 user message context（ADR-0005：system prompt 冻结）。沉淀是刻意行为（`/learn`），不是自动后台循环。
 _Avoid_: plugin, module, template, playbook
 
 **ContextSource**:
-独立扩展点——往 system prompt 注入动态内容（如 git 状态、LSP 符号信息）。
+独立扩展点——往当前 turn 的 user message context 注入动态内容（如 git 状态、LSP 符号信息）。system prompt 冻结，所有动态内容都走 user 通道。
 _Avoid_: context provider, system injector
 
 **Subagent**:
@@ -47,7 +47,7 @@ _Avoid_: pre_llm_call, transform hook, interceptor
 _Avoid_: tool interceptor, guard, middleware
 
 **EventBus**:
-仅观测的 pub/sub 事件总线——注册 `on()`、发射 `emit()`，异常吞掉不阻断主流程。
+仅观测的 pub/sub 事件总线——注册 `on()`/注销 `off()`、发射 `emit()`，异常吞掉不阻断主流程。同回调同事件重复注册会被去重。
 _Avoid_: PluginBus, hook registry, event dispatcher
 
 ## Reliability
