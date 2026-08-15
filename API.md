@@ -160,14 +160,16 @@ agent2 = Agent.from_config(config, store=store, session_id="project-debug")
 response = await agent2.arun(list(history) + [Message.user("继续之前的工作")])
 ```
 
-## 记忆（默认开启）
+## 记忆
 
 ```python
-# 默认：Agent.from_config(memory=True) → SQLiteMemoryProvider(~/.microagent/memory.db)
-# + LLM 提取器（每轮后台抽取）+ 每轮 recall 注入上下文（Hermes 对齐）
-
-agent = Agent.from_config(config)                     # memory 默认开启
-agent = Agent.from_config(config, memory=False)       # 关闭
+# CLI 默认开启（Hermes 对齐）；库默认关闭——嵌入方必须显式 opt-in，
+# 避免库构造在未预期位置创建 ~/.microagent/memory.db：
+agent = Agent.from_config(config, memory=True)          # SQLiteMemoryProvider(~/.microagent/memory.db)
+                                                        # + LLM 提取器（每轮后台抽取）
+                                                        # + 每轮 recall 注入上下文
+agent = Agent.from_config(config)                       # 库默认关闭（MICROAGENT_MEMORY=1 可环境开启）
+agent = Agent.from_config(config, memory=False)         # 明确关闭
 agent = Agent.from_config(config, memory=custom_provider)  # 自定义后端
 
 # write_approval 闸门（Hermes write_approval 语义，默认 False 直写）

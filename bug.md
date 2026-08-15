@@ -920,3 +920,91 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
   PresentCard 渲染意图(库不承载)。
 - **候选(下轮)**:SubagentBackend 接缝(in-process/fork/acp)、
   bash/process 消费 TerminalBackend 实现能力族迁移、Landlock 沙箱 extra。
+
+---
+
+## 二十、第十七轮疯狂测试(3 并行审查 + 全探针验证)— 2026-08-15
+
+> 方法:三路审查(R14-16 新代码 / 从未深审模块 / 生命周期与并发),
+> 40+ 项发现全部经探针/源码逐条验证(证伪 7 项误报)。
+> 基线 1504 passed → 修复后 **1547 passed, 1 skipped**。
+> 6 个 fix commit:`50c51fa`/`e62a64e`/`3a9d2ca`/`8f14257`/`2cdb256`/`72a14a0`。
+
+### 🔴 严重(全部已修复 + 探针验证)
+
+**19.1 scrubber/patterns 注入绕过三件套** ✅ (50c51fa)
+- 探针实测:注入 `<context attr=x>` 或 `<context data-x='>' >` **原样穿透** patterns.py
+  (仅 system-reminder 家族有属性模式)与 scrubber——runner 用真实 `<context>` 包裹注入
+  内容,走私标签之后的内容全被重标记为可信 runner 上下文。
+- 修复:两家族补齐 `<X\b[^>]*/?>` + 空白容忍闭合标签,14 项探针矩阵全 BLOCK;
+  scrubber 改正则匹配(属性/大小写/自闭合)——嵌套 span 在**第一个**闭合处结束
+  (其后内容保留),正文中的字面 `</Context>` 不再截断合法输出。
+
+**19.2 watch_idle 泄漏 httpx 连接池** ✅ (e62a64e)
+- 超时/取消路径抛弃生成器无 aclose——活 httpx 响应与池化连接挂到 GC,
+  每次看门狗触发永久收缩一个连接(该功能正是为反复挂死网关而存在)。
+- 修复:finally + shield 的 aclose。探针:timeout/normal/cancel 三路径 closed=True。
+
+**19.3 测试污染真实 home** ✅ (2cdb256)
+- Round 14 的 `memory=True` 默认让所有 `from_config` 测试在开发者真实 home 创建
+  `~/.microagent/memory.db`(+wal/shm),且测试回合可 recall 真实记忆进入断言。
+- 修复:`memory=None` 默认 + `MICROAGENT_MEMORY=1` 环境开关(库 opt-in);
+  CLI 显式传 `memory=True`(用户面行为不变)。
+
+### 🟡 应修复(全部已修复)
+
+**19.4 httpx.ReadTimeout 误分类 → 重试被跳过** ✅ (e62a64e)
+- httpx ReadTimeout/ConnectTimeout/PoolTimeout 的 str() 为空,启发式看不到
+  "timeout" → unknown → 一次性重试被跳过。类名回退置前;CancelledError→aborted。
+
+**19.5 EventBus gather 取消级联 + BaseException 逃逸** ✅ (e62a64e)
+- 裸协程 gather 中一个被外部取消会取消其余全部;sync 观察者的
+  KeyboardInterrupt 穿透 emit。异步观察者包 Task 隔离,sync 侧 except BaseException。
+
+**19.6 [SESSION_EXIT] 标记撞车** ✅ (3a9d2ca)
+- 任何工具结果内容等于标记文本即结束回合——read_file 读到内容为
+  `[SESSION_EXIT]` 的文件也触发。现在要求工具名 == 'exit'。
+
+**19.7 todo/task_plan 并发竞态** ✅ (3a9d2ca)
+- 两者共享 SessionState 列表原地变更,10 并发回合中 add/remove 交错。
+  标记 exclusive=True 由 runner 屏障串行。
+
+**19.8 file_tree 符号链接祖先递归** ✅ (8f14257)
+- `tmp/a/b/loop → tmp` 使子树指数级重复输出。resolve 后的 visited 集 +
+  '(already shown)' 标记;遍历中 10K 字符硬上限(不再先建多 MB 列表再截断)。
+
+**19.9 web_search 摘要错位 + 无大小上限** ✅ (8f14257)
+- DDG lite 页面的 chrome 链接(logo/反馈)让第 N 个锚点≠第 N 个摘要;
+  空标题跳过不推进索引加剧漂移。chrome 链接过滤 + 摘要按产出顺序消费;
+  响应体 2MB 上限。
+
+**19.10 context7 截断 JSON 当成功返回** ✅ (8f14257)
+- 2MB 截断后返回 50KB 破碎 JSON 且 is_error=False——模型把语法错误的
+  片段当可信文档。改为 error;非 dict 条目跳过而非 AttributeError。
+
+**19.11 skills_list description=None 崩溃** ✅ (8f14257)
+**19.12 safe_id 放行 Windows 保留设备名** ✅ (8f14257) — CON/NUL/COM1/LPT1/aux/prn
+  写入时指向设备而非文件,现全部拒绝。
+**19.13 deepseek-v4-pro 模板缺失** ✅ (8f14257) — tx-d4p 落到泛型 deepseek-v4
+  模板(与注释声称的修复矛盾),补齐专属模板。
+
+### 剔除的误报(已逐项探针验证,不报告)
+
+| 原 claim | 验证结果 |
+|----------|---------|
+| cron arun 异常毒化 skip_memory | ❌ 探针:finally 恢复 prev 值,两 tick 后仍 False |
+| `_is_exclusive` 对幻觉工具名崩溃 | ❌ get→None→False,execute_stream 优雅返回 unknown tool |
+| interrupt 取消 Semaphore 等待者卡死 | ❌ anyio _deliver_cancellation 正确取消 waiter |
+| `_evict_overflow` FTS delete 契约错误 | ❌ rowid+content 正确 |
+| 死锁(exec_lock/turn_lock/subagents_lock 环) | ❌ 无环;slots→exclusive 全序一致 |
+| 子代理继承 skip_memory 污染 | ❌ memory=None,无注入/抽取通道 |
+| watch_idle 取消后 StopAsyncIteration 误吞 | ❌ CPython 语义下不存在 |
+
+### 遗留未修(🔵,下轮候选)
+- `CronScheduler.stop()` 的 `shutdown(wait=False)` 与 in-flight job 竞争
+  (关闭后 cron 回合写入已关 runner)——需要 wait=True 或任务追踪
+- interrupt 时取消工具的结果以占位文本落库(模型 resume 可见)——语义打磨
+- `learn_skill(skills_dir=...)` 的 provenance/usage 仍写真实 home(skill_manage
+  硬编码)——参数契约修复
+- ClaudeSkillLoader._instances 泄漏(agent 数线性)
+- EventBus 无 off()/去重注册

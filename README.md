@@ -2,10 +2,10 @@
 
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1504%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1547%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~12,800 LOC**, **34 built-in tools**, **66 public API symbols**, **1504 unit+smoke+e2e tests, 3 integration tests**.
+**~13,000 LOC**, **34 built-in tools**, **66 public API symbols**, **1547 unit+smoke+e2e tests, 3 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -227,14 +227,16 @@ mgr2 = SubagentManager(specs=(
 
 ### Memory
 
-**Default-on** (Hermes parity): `Agent.from_config()` enables persistent
-memory automatically — SQLite store + LLM extractor (fire-and-forget per
-turn) + per-turn recall injection. Disable with `memory=False`.
+**CLI default-on** (Hermes parity); **library opt-in**: `Agent.from_config()`
+does NOT create state in the caller's home — pass `memory=True` (or set
+`MICROAGENT_MEMORY=1`) to enable the SQLite store + LLM extractor
+(fire-and-forget per turn) + per-turn recall injection.
 
 ```python
-# Default path: ~/.microagent/memory.db (created automatically)
-agent = Agent.from_config(config)              # memory ON by default
-agent = Agent.from_config(config, memory=False)  # opt out
+# Default path: ~/.microagent/memory.db (created only when opted in)
+agent = Agent.from_config(config, memory=True)     # library opt-in
+agent = Agent.from_config(config)                  # off (env MICROAGENT_MEMORY=1 turns it on)
+agent = Agent.from_config(config, memory=False)    # explicit opt-out
 
 # Custom backend or the low-level API
 from microagent import SQLiteMemoryProvider, Memory
@@ -521,7 +523,7 @@ python -m pytest tests/e2e/ -q            # 9 e2e tests
 
 # All fast tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
-# 1504 passed, 1 skipped
+# 1547 passed, 1 skipped
 
 # Integration tests (requires real LLM API)
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
