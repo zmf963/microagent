@@ -24,9 +24,18 @@ _INJECTION_PATTERNS = [
     re.compile(r"</system>", re.IGNORECASE),
     re.compile(r"<system\b[^>]*>", re.IGNORECASE),
     re.compile(r"<context>.*?</context>", re.DOTALL | re.IGNORECASE),
-    re.compile(r"</?context>", re.IGNORECASE),
+    # Attribute-capable single-tag patterns: an injected <context attr=1>
+    # or self-closing <context/> previously sailed through the exact-form
+    # pattern — and the runner wraps injected context in a real <context>
+    # block, so the injected opening tag re-tagged attacker content as
+    # trusted runner context. Same family-wide pattern as <system…>
+    # above; verified probe matrix (attrs, attr-embedded '>', self-close,
+    # space-before-'>', attrs on closer) all block now.
+    re.compile(r"<context\b[^>]*/?>", re.IGNORECASE),
+    re.compile(r"</context\s*>", re.IGNORECASE),
     re.compile(r"<memory-context>.*?</memory-context>", re.DOTALL | re.IGNORECASE),
-    re.compile(r"</?memory-context>", re.IGNORECASE),
+    re.compile(r"<memory-context\b[^>]*/?>", re.IGNORECASE),
+    re.compile(r"</memory-context\s*>", re.IGNORECASE),
 ]
 
 _BLOCKED_PLACEHOLDER = "[BLOCKED: injection pattern detected]"
