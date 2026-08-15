@@ -1214,7 +1214,20 @@ class SessionRunner:
             for idx, call in enumerate(calls):
                 tg.start_soon(_settle, idx, call)
 
-        return (
-            [r if r is not None else ToolResult.error("not executed (cancelled)") for r in results],
-            progress_events,
-        )
+        # Interrupt semantics: a watcher-cancelled tool was NOT executed —
+        # its placeholder result must be distinguishable from a completed
+        # tool. The runner below persists these results into the store
+        # before yielding TurnFailed(interrupted); on resume the model
+        # must see "interrupted: tool execution cancelled", not a bare
+        # "not executed (cancelled)" that reads like an ordinary error.
+        if self._interrupt_requested:
+            final = [
+                r if r is not None else ToolResult.error("interrupted: tool execution cancelled")
+                for r in results
+            ]
+        else:
+            final = [
+                r if r is not None else ToolResult.error("not executed (cancelled)")
+                for r in results
+            ]
+        return (final, progress_events)
