@@ -104,6 +104,15 @@ async def my_tool(param: Annotated[str, Field(description="...")]) -> ToolResult
 Register in `_default_builtins()` (in `core/tool.py`) and add a `Rule` in
 `DEFAULT_RULES` (in `core/permission.py`).
 
+Tool conventions (deepseek-harness parity):
+- Schema descriptions must NOT reference other tools by name — the model
+  hallucinates calls to tools that don't exist in its current toolset.
+- Tools that share per-session state (browser page, LSP servers) must be
+  declared `exclusive=True` — the runner serializes them against each
+  other (concurrency barrier).
+- Tool execution is globally capped at 10 concurrent calls per turn
+  (`MAX_PARALLEL_TOOL_CALLS` in `runner._run_tool_calls`).
+
 ### 3. Protocols > inheritance
 
 Every extension point uses `typing.Protocol`:
