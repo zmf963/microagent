@@ -661,6 +661,7 @@ def _make_agent(config, store, session_id: str) -> Agent:
         session_id=session_id,
         skills_path=config.skills_path,
         permission_engine=_make_permission_engine(),
+        memory=True,  # the CLI ships with Hermes-parity memory default-on
     )
 
 

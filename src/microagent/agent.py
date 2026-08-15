@@ -46,19 +46,26 @@ class Agent:
         enable_cron: bool = False,
         skills_path: str | None = None,
         permission_engine: PermissionEngine | None = None,
-        memory: Any | None | bool = True,
+        memory: Any | None | bool = None,
         memory_write_approval: bool = False,
     ) -> Agent:
         """Build an Agent.
 
-        ``memory``: True (default) enables persistent cross-session memory
-        — a SQLiteMemoryProvider at ~/.microagent/memory.db plus the
-        LLM extractor, injected into every turn (Hermes-style default-on).
-        Pass a MemoryProvider instance to use a custom backend, or False
-        to disable. ``memory_write_approval`` (default False) routes
-        extracted memories through the pending/approve gate — the CLI's
-        /memory command drives it (Hermes write_approval semantics).
+        ``memory``: None (default) enables persistent memory when
+        MICROAGENT_MEMORY=1 (opt-in for the library — tests and embedders
+        must not silently create ~/.microagent/memory.db in the real home;
+        the CLI passes memory=True explicitly). True forces the default
+        SQLiteMemoryProvider at ~/.microagent/memory.db plus the LLM
+        extractor (Hermes-style default-on for the CLI). A MemoryProvider
+        instance is used as-is; False disables. ``memory_write_approval``
+        (default False) routes extracted memories through the
+        pending/approve gate — the CLI's /memory command drives it
+        (Hermes write_approval semantics).
         """
+        import os
+
+        if memory is None:
+            memory = os.environ.get("MICROAGENT_MEMORY") in ("1", "true", "on")
         # Build registry with default builtins + any extra tools
         all_tools = _default_builtins()
         if tools:

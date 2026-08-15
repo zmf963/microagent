@@ -103,13 +103,12 @@ class _FakeProvider:
 
 
 class TestAgentMemoryDefault:
-    def test_memory_true_default(self, monkeypatch, tmp_path):
-        """from_config memory=True constructs a SQLiteMemoryProvider."""
+    def test_memory_env_opt_in(self, monkeypatch, tmp_path):
+        """MICROAGENT_MEMORY=1 opts the library into default memory."""
         from microagent.agent import Agent
 
-        monkeypatch.setattr(
-            "pathlib.Path.home", lambda: tmp_path
-        )
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("MICROAGENT_MEMORY", "1")
         agent = Agent.from_config(
             LLMConfig("fake", "fake-key", "fake-model"),
             store=None,
@@ -119,6 +118,33 @@ class TestAgentMemoryDefault:
 
         assert isinstance(agent.runner.memory, SQLiteMemoryProvider)
         assert agent.runner._extractor is not None
+
+    def test_memory_true_forces_on(self, monkeypatch, tmp_path):
+        """Explicit memory=True enables the default provider."""
+        from microagent.agent import Agent
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.delenv("MICROAGENT_MEMORY", raising=False)
+        agent = Agent.from_config(
+            LLMConfig("fake", "fake-key", "fake-model"),
+            store=None,
+            memory=True,
+        )
+        assert agent.runner.memory is not None
+
+    def test_memory_default_off_without_env(self, monkeypatch, tmp_path):
+        """Library default is OFF unless MICROAGENT_MEMORY is set — tests
+        and embedders must not create ~/.microagent in the real home."""
+        from microagent.agent import Agent
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.delenv("MICROAGENT_MEMORY", raising=False)
+        agent = Agent.from_config(
+            LLMConfig("fake", "fake-key", "fake-model"),
+            store=None,
+        )
+        assert agent.runner.memory is None
+        assert agent.runner._extractor is None
 
     def test_memory_false_disables(self, tmp_path):
         from microagent.agent import Agent
