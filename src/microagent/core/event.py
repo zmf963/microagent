@@ -37,15 +37,22 @@ class EventBus:
             try:
                 result = cb(*args, **kwargs)
                 if asyncio.iscoroutine(result):
-                    pending.append(result)
-            except Exception:
+                    # Wrap in a Task: a gather() of raw coroutines cancels
+                    # EVERY other pending coroutine when one of them is
+                    # externally cancelled — a slow observer's work was
+                    # silently discarded. Tasks isolate each observer.
+                    pending.append(asyncio.create_task(result))
+            except BaseException:
+                # BaseException (not just Exception): a KeyboardInterrupt/
+                # SystemExit raised by a sync observer must not terminate
+                # the main loop at the emit point.
                 logger.warning(
                     "EventBus observer failed for event %s", event, exc_info=True
                 )
         if pending:
             results = await asyncio.gather(*pending, return_exceptions=True)
             for r in results:
-                if isinstance(r, Exception):
+                if isinstance(r, BaseException):
                     logger.warning(
                         "EventBus observer failed for event %s", event, exc_info=r
                     )

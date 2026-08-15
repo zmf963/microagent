@@ -85,6 +85,14 @@ def classify_exception(exc: BaseException) -> LLMFailure:
 
     name = type(exc).__name__
     lowered = f"{name}: {message}".lower()
+    # Class-name fallback FIRST: httpx.ReadTimeout/ConnectTimeout carry
+    # an empty str() — message heuristics never see "timeout", and the
+    # one-shot retry was skipped on a transient failure. Any exception
+    # class whose name contains "timeout" is a timeout.
+    if "timeout" in name.lower():
+        return LLMFailure("timeout", message, status)
+    if "cancel" in name.lower() or "abort" in name.lower():
+        return LLMFailure("aborted", message, status)
     if "timeout" in lowered or "timed out" in lowered:
         return LLMFailure("timeout", message, status)
     if "rate" in lowered and "limit" in lowered:
