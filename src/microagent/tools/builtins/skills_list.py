@@ -46,9 +46,10 @@ async def skills_list(
     query_lower = query.lower().strip() if query else ""
     lines = []
     for s in skills:
-        if query_lower and query_lower not in s.name.lower() and query_lower not in s.description.lower():
+        desc_text = s.description or ""  # user-authored skills may lack a description
+        if query_lower and query_lower not in s.name.lower() and query_lower not in desc_text.lower():
             continue
-        desc = s.description[:100] if s.description else "(no description)"
+        desc = desc_text[:100] if desc_text else "(no description)"
         lines.append(f"  [{s.namespace}] {s.name} — {desc}")
 
     if not lines:

@@ -35,9 +35,16 @@ async def file_tree(
         return ToolResult.error(f"not a directory: {path}")
 
     lines: list[str] = [root.name + "/"]
+    # A symlink pointing at an ancestor (tmp/a/b/loop -> tmp) recursed the
+    # subtree repeatedly until max_depth, duplicating output exponentially
+    # and blowing the 10,000-char cap with wasted traversal. Track visited
+    # real paths (resolve()) so each directory is walked exactly once.
+    visited: set[Path] = {root}
+    truncated = False
 
     def _walk(dir_path: Path, prefix: str, depth: int) -> None:
-        if depth > max_depth:
+        nonlocal truncated
+        if depth > max_depth or truncated:
             return
 
         try:
@@ -60,11 +67,24 @@ async def file_tree(
             connector = "└── " if is_last else "├── "
 
             if entry.is_dir():
+                try:
+                    real = entry.resolve()
+                except OSError:
+                    real = entry
+                if real in visited:
+                    lines.append(f"{prefix}{connector}{entry.name}/ (already shown)")
+                    continue
+                visited.add(real)
                 lines.append(f"{prefix}{connector}{entry.name}/")
                 extension = "    " if is_last else "│   "
                 _walk(entry, prefix + extension, depth + 1)
             else:
                 lines.append(f"{prefix}{connector}{entry.name}")
+            # Hard cap during traversal: a huge tree must not build a
+            # multi-MB list before the final truncation runs.
+            if sum(len(l) for l in lines) > 10_000:
+                truncated = True
+                return
 
     _walk(root, "", 1)
 

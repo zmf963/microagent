@@ -63,11 +63,13 @@ async def context7(
                 if not truncated:
                     raise
                 # The 2MB cap cut the payload mid-JSON — unparseable by
-                # definition. Return the raw text prefix instead of failing
-                # the whole query (which made every large response an error).
-                raw = b"".join(chunks).decode("utf-8", errors="replace")
-                return ToolResult.ok(
-                    raw[:50_000] + "\n...[response truncated at 2MB, partial JSON omitted]..."
+                # definition. Report it as an ERROR, not a success: a
+                # syntactically broken JSON fragment with is_error=False
+                # would be treated as trustworthy documentation by the
+                # model (previously returned as ok()).
+                return ToolResult.error(
+                    "context7 response truncated at 2MB — partial JSON is "
+                    "not parseable; narrow the query or reduce max_results"
                 )
     except Exception as e:
         return ToolResult.error(f"context7 query failed: {e!r}")
@@ -83,6 +85,11 @@ def _parse_results(data: dict, max_results: int) -> str:
 
     lines = []
     for i, r in enumerate(results[:max_results], 1):
+        # A malformed-but-parseable payload ({"results": ["oops"]}) used
+        # to raise AttributeError out of the tool; treat non-dict entries
+        # as skippable noise instead.
+        if not isinstance(r, dict):
+            continue
         title = r.get("title", "Untitled")
         snippet = r.get("snippet", "")
         url = r.get("url", "")
@@ -95,4 +102,4 @@ def _parse_results(data: dict, max_results: int) -> str:
             lines.append(f"   {url}")
         lines.append("")
 
-    return "\n".join(lines).strip()
+    return "\n".join(lines).strip() or "(no results)"

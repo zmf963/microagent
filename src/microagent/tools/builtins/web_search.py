@@ -35,7 +35,10 @@ async def web_search(
                 headers={"User-Agent": "MicroAgent/0.1"},
             )
             resp.raise_for_status()
-            html = resp.text
+            # Cap the body: a hostile/misconfigured upstream returning a
+            # multi-MB page previously fed re.findall across the whole
+            # string. 2 MB covers any realistic result page.
+            html = resp.text[:2_000_000]
     except Exception as e:
         return ToolResult.error(f"search failed: {e!r}")
 
@@ -59,20 +62,35 @@ def _parse_ddg_lite(html: str, max_results: int) -> list[dict]:
     results = []
 
     # DDG lite format: <a href="URL">title</a> ... <span class="link-text">snippet</span>
-    # Simpler approach: extract all <a> with href containing "//" and their following text
+    # Chrome links (logo, feedback, spread, the ddg homepage) appear
+    # between result anchors — pairing the N-th anchor with the N-th
+    # snippet misaligned every snippet after such a link. Filter obvious
+    # chrome and consume snippets in emission order (not raw index), so
+    # skipped empty titles no longer shift the pairing either.
+    _CHROME_LINK_RE = re.compile(
+        r"(^https?://(www\.)?duckduckgo\.com/?$|/feedback|spread\.duckduckgo\.com)"
+    )
     links = re.findall(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', html, re.DOTALL)
+    result_links = [
+        (url, title) for url, title in links if not _CHROME_LINK_RE.search(url)
+    ]
     snippets = re.findall(r'<td[^>]*class="result-snippet"[^>]*>(.*?)</td>', html, re.DOTALL)
 
-    for i, (url, title) in enumerate(links):
-        if i >= max_results:
+    emitted = 0
+    for url, title in result_links:
+        if emitted >= max_results:
             break
         # Clean HTML from title
         title = re.sub(r"<[^>]+>", "", title).strip()
         if not title or not url:
             continue
+        # Snippets align 1:1 with RESULT links (not chrome links) — but
+        # tolerate drift (skipped empty titles etc.) by consuming the
+        # next available snippet instead of indexing by raw position.
         snippet = ""
-        if i < len(snippets):
-            snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
+        if snippets:
+            snippet = re.sub(r"<[^>]+>", "", snippets.pop(0)).strip()
         results.append({"title": title, "url": url, "snippet": snippet})
+        emitted += 1
 
     return results

@@ -25,6 +25,13 @@ MODEL_TEMPLATES: dict[str, str] = {
         "When writing code, prefer clarity and correctness over brevity. "
         "Use markdown code blocks with language specifiers."
     ),
+    "deepseek-v4-pro": (
+        "You are a helpful assistant powered by DeepSeek-V4 Pro. "
+        "You handle complex, multi-step reasoning and deep analysis. "
+        "When writing code, prefer clarity and correctness over brevity; "
+        "break large problems into verifiable steps. "
+        "Use markdown code blocks with language specifiers."
+    ),
     "glm-5.2": (
         "You are a helpful assistant powered by GLM-5.2. "
         "You are proficient in both Chinese and English. "
