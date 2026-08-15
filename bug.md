@@ -869,3 +869,54 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - 3 连跑全绿(无新增 flake);覆盖率测量方式:pytest-cov(与 Makefile 的 coverage 工具一致)。
 - 有意不测:CLI TTY/termios 交互循环、真实 Playwright/gopls/docker/ssh、
   防御性双重异常守卫(需抵抗 kill 的进程)。
+
+---
+
+## 十九、第十六轮:吸收 deepseek-harness 设计(3 commits)— 2026-08-15
+
+> 方法:深读 dsh architecture-map(skill `deepseek-harness-dev` 的通读笔记),
+> 对照 MicroAgent 信条(窄腰/零 token 例行维护/库非产品)筛选 8 项,
+> 本轮吸收 5 项低成本硬骨头(全部是 Round 13 遗留的真实缺口)。
+> 基线 1485 passed → **1504 passed, 1 skipped**。
+> commits:`2bad48c`(错误分类)/`a268929`(并发+审计)/`6548cb1`(测试+规范)。
+
+### 18.1 TurnFailed 结构化 code ✅ (2bad48c)
+- `TurnFailed.reason` 保留,新增 `code` 字段(interrupted|budget|overflow|
+  llm_timeout|llm_error|compaction|error)——dsh TurnEndReason 对齐。
+  runner 全部 13 个失败点分类,调用方可程序化分支,不再匹配自由文本。
+
+### 18.2 LLM 错误归一化分类器 ✅ (2bad48c)
+- 新 `llm/errors.py`:`LLMFailure{code,status}` + 可重试/不可重试词表
+  (timeout/rate_limit/overloaded/server_error/network_error/empty_response
+  可重试;auth/bad_request/context_exceeded/aborted 不可)。
+- HTTP status + 消息启发式分类;**流重试改为按可重试性门控**——
+  之前任何异常都烧一次 one-shot 重试,401/400 白烧预算。
+
+### 18.3 LLM 流空闲看门狗 ✅ (2bad48c)
+- 新 `llm/watchdog.py`:`watch_idle`(默认 300s,0 禁用)——dsh
+  streamIdleTimeoutMs 对齐。网关挂起时不产事件也不抛异常,此前回合
+  永久卡死(Round 13 修了工具挂死,LLM 流挂死未修)。超时分类 llm_timeout。
+
+### 18.4 有界工具并发池 + exclusive 屏障 ✅ (a268929)
+- `_run_tool_calls` 全局 `Semaphore(10)`(dsh maxParallelToolCalls)——LLM
+  一次发 30 个 bash 调用不再 fork 30 个并发进程。
+- `@tool(exclusive=True)`(browser×10 + lsp):共享 per-session 状态的工具
+  经组级锁串行——browser_snapshot+browser_click 不再在共享 page 上竞态
+  (Round 13 🔵 遗留)。
+
+### 18.5 模型可见 ⟺ 已记录审计 ✅ (a268929)
+- `_audit_invariants`(env `MICROAGENT_AUDIT_INVARIANTS` 门控,默认关):
+  消息发给模型前校验持久化历史无孤儿 tool_calls、无连续 user 消息——
+  R13/R10/R7 反复破裂的两条 API 不变量,违反时响亮失败而非
+  "发给模型一段它从未经历过的对话"。测试套件开启后全量回归。
+
+### 18.6 工具规范写入 AGENTS.md ✅ (6548cb1)
+- schema 描述不得跨工具引用其他工具名(dsh 约定:模型会幻觉调用不存在的工具);
+  exclusive 标记义务;10 并发上限记录。
+
+### 有意不吸收(信条冲突,留档)
+- Cordis 插件框架/万物皆插件(推翻"窄腰+Protocol"定位)、事件溯源重写
+  (SQLite append 已覆盖需求)、配置分层+HMR(产品级复杂度)、
+  PresentCard 渲染意图(库不承载)。
+- **候选(下轮)**:SubagentBackend 接缝(in-process/fork/acp)、
+  bash/process 消费 TerminalBackend 实现能力族迁移、Landlock 沙箱 extra。
