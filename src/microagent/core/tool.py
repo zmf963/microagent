@@ -60,12 +60,17 @@ class FunctionTool:
     ``AsyncIterator[str]`` (i.e. is an async generator), the
     tool yields ``ToolProgressDelta`` events for each chunk and
     returns a final ``ToolResult``.
+
+    ``exclusive=True`` marks tools that share per-session state
+    (browser page, LSP servers): the runner serializes them against
+    each other (deepseek-harness concurrency-barrier parity).
     """
 
     name: str
     fn: Callable[..., Any]
     parameters: dict[str, Any]
     description: str
+    exclusive: bool = False
 
     def _bad_arguments_error(self, call: ToolCall, e: TypeError) -> ToolResult:
         """Build a diagnostic ToolResult for malformed tool-call arguments.
@@ -193,6 +198,7 @@ def tool(
     name: str,
     *,
     description: str = "",
+    exclusive: bool = False,
 ) -> Callable[[Callable[..., Any]], FunctionTool]:
     """Register an async function as a Tool.
 
@@ -221,7 +227,9 @@ def tool(
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         desc = description or (fn.__doc__ or "").strip().split("\n")[0]
         params = _infer_schema_from_signature(fn)
-        ft = FunctionTool(name=name, fn=fn, parameters=params, description=desc)
+        ft = FunctionTool(
+            name=name, fn=fn, parameters=params, description=desc, exclusive=exclusive
+        )
         _registry[name] = ft
         return ft
 

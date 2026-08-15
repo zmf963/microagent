@@ -532,6 +532,7 @@ async def _get_client(filepath: str) -> LSPClient | None:
 @tool(
     "lsp",
     description="Code navigation via real LSP: symbols, definition, references, hover.",
+    exclusive=True,
 )
 async def lsp(
     action: Annotated[

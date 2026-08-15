@@ -167,7 +167,7 @@ window.__microagent_console = [];
 """
 
 
-@tool("browser_navigate", description="Open a URL in the browser. Must be called first.")
+@tool("browser_navigate", description="Open a URL in the browser. Must be called first.", exclusive=True)
 async def browser_navigate(
     url: Annotated[str, Field(description="URL to navigate to")],
 ) -> ToolResult:
@@ -217,7 +217,7 @@ async def browser_navigate(
         return ToolResult.error(f"navigate failed: {e!r}")
 
 
-@tool("browser_snapshot", description="Get a text-based snapshot of the current page showing interactive elements.")
+@tool("browser_snapshot", description="Get a text-based snapshot of the current page showing interactive elements.", exclusive=True)
 async def browser_snapshot(
     full: Annotated[
         bool, Field(description="If true, return complete page text. Default: compact (interactive elements only).")
@@ -268,7 +268,7 @@ async def browser_snapshot(
         return ToolResult.error(f"snapshot failed: {e!r}")
 
 
-@tool("browser_click", description="Click an element by CSS selector, ref ID from snapshot, or visible text.")
+@tool("browser_click", description="Click an element by CSS selector, ref ID from snapshot, or visible text.", exclusive=True)
 async def browser_click(
     ref: Annotated[
         str, Field(description="CSS selector (e.g. '#id', '.class', 'button'), ref ID (@e5), or link text")
@@ -294,7 +294,7 @@ async def browser_click(
         return ToolResult.error(f"click failed: {e!r}")
 
 
-@tool("browser_type", description="Type text into an input field identified by CSS selector.")
+@tool("browser_type", description="Type text into an input field identified by CSS selector.", exclusive=True)
 async def browser_type(
     ref: Annotated[str, Field(description="CSS selector for the input field")],
     text: Annotated[str, Field(description="Text to type")],
@@ -313,7 +313,7 @@ async def browser_type(
         return ToolResult.error(f"type failed: {e!r}")
 
 
-@tool("browser_back", description="Navigate back to the previous page.")
+@tool("browser_back", description="Navigate back to the previous page.", exclusive=True)
 async def browser_back() -> ToolResult:
     try:
         page = _require_page()
@@ -328,7 +328,7 @@ async def browser_back() -> ToolResult:
         return ToolResult.error(f"back failed: {e!r}")
 
 
-@tool("browser_scroll", description="Scroll the page up or down.")
+@tool("browser_scroll", description="Scroll the page up or down.", exclusive=True)
 async def browser_scroll(
     direction: Annotated[str, Field(description="'up' or 'down'")],
     amount: Annotated[int, Field(description="Pixels to scroll", ge=1, le=10000)] = 500,
@@ -359,7 +359,7 @@ _VALID_KEYS = frozenset({
 })
 
 
-@tool("browser_press", description="Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.).")
+@tool("browser_press", description="Press a keyboard key (Enter, Tab, Escape, ArrowDown, etc.).", exclusive=True)
 async def browser_press(
     key: Annotated[str, Field(description="Key to press: Enter, Tab, Escape, ArrowDown, ArrowUp, Backspace, etc.")],
 ) -> ToolResult:
@@ -381,7 +381,7 @@ async def browser_press(
         return ToolResult.error(f"press failed: {e!r}")
 
 
-@tool("browser_console", description="Get browser console output or evaluate JavaScript on the page.")
+@tool("browser_console", description="Get browser console output or evaluate JavaScript on the page.", exclusive=True)
 async def browser_console(
     expression: Annotated[
         str, Field(description="JavaScript expression to evaluate. Omit to read console messages.")
@@ -416,7 +416,7 @@ async def browser_console(
         return ToolResult.error(f"console failed: {e!r}")
 
 
-@tool("browser_get_images", description="Get a list of images on the current page with URLs and alt text.")
+@tool("browser_get_images", description="Get a list of images on the current page with URLs and alt text.", exclusive=True)
 async def browser_get_images(
     max_results: Annotated[int, Field(description="Maximum images to return", ge=1, le=50)] = 20,
 ) -> ToolResult:
@@ -456,7 +456,7 @@ async def browser_get_images(
         return ToolResult.error(f"get_images failed: {e!r}")
 
 
-@tool("browser_vision", description="Take a screenshot of the current page for visual inspection.")
+@tool("browser_vision", description="Take a screenshot of the current page for visual inspection.", exclusive=True)
 async def browser_vision(
     question: Annotated[str, Field(description="What to look for in the screenshot")] = "Describe this page.",
     annotate: Annotated[
