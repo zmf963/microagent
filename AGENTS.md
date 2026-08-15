@@ -10,7 +10,7 @@ nothing else. No gateway, no desktop, no dashboard. It is a library, not a produ
 
 The single most important principle: **the core is a narrow waist; capability
 lives in tools and extension points, not in the core loop.** SessionRunner
-(~1029 LOC) is the sole execution path. Everything else — memory, skills,
+(~1214 LOC) is the sole execution path. Everything else — memory, skills,
 compression, permissions, subagents — plugs in through Protocols.
 
 ## Project Structure
@@ -19,7 +19,7 @@ compression, permissions, subagents — plugs in through Protocols.
 microagent/
 ├── pyproject.toml          # hatchling build, 6 deps, 5 optional extras
 ├── src/microagent/
-│   ├── __init__.py          # Public API surface (~62 symbols)
+│   ├── __init__.py          # Public API surface (~66 symbols)
 │   ├── agent.py             # Agent facade — from_config(), run(), arun()
 │   ├── config.py            # Config resolution — CLI > env > file > default
 │   ├── core/
@@ -35,7 +35,7 @@ microagent/
 │   │   ├── templates.py     # Model-specific system prompt templates
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
-│   │   ├── runner.py        # SessionRunner — the core loop (~1029 LOC)
+│   │   ├── runner.py        # SessionRunner — the core loop (~1214 LOC)
 │   │   ├── compress.py      # 4-layer compression pyramid
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
@@ -72,7 +72,7 @@ microagent/
 
 ### 1. The core loop is sacred
 
-`SessionRunner.run_turn()` is the only execution path. It is ~1029 LOC and
+`SessionRunner.run_turn()` is the only execution path. It is ~1214 LOC and
 every line traces to the core contract:
 
 ```
@@ -216,4 +216,6 @@ Keep commits small and focused. One logical change per commit.
 | New Protocol | `plugin/types.py` |
 | Pricing/context window | `llm/pricing.py` (models.dev cache) + `llm/models_cache.json` (seed) |
 | Currency display (CNY) | `currency.py` + `MICROAGENT_CURRENCY_RATE` env var |
+| LLM failure handling | `llm/errors.py` (taxonomy) + `llm/watchdog.py` (idle timeout) |
+| Store invariant audit | `MICROAGENT_AUDIT_INVARIANTS=1` env — runner asserts no orphaned tool_calls / consecutive users before each turn |
 | Public API | `__init__.py` |

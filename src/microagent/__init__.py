@@ -29,6 +29,8 @@ from .core.types import (
 )
 from .cron.scheduler import CronJob, CronScheduler
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
+from .llm.errors import LLMFailure, NON_RETRYABLE_CODES, RETRYABLE_CODES
+from .llm.watchdog import IdleTimeoutError
 from .mcp.catalog import (
     BUILTIN_MCP_SERVERS,
     MCPServerSpec,
@@ -91,6 +93,10 @@ __all__ = [
     "OpenAIChatClient",
     "StreamDone",
     "StreamEvent",
+    "LLMFailure",
+    "RETRYABLE_CODES",
+    "NON_RETRYABLE_CODES",
+    "IdleTimeoutError",
     # Config
     "Config",
     # Extension points

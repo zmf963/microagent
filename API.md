@@ -134,6 +134,10 @@ async for event in runner.run_turn(messages):
         print(f"\n🔧 {event.name}({event.arguments})")
     elif isinstance(event, TurnComplete):
         print(f"\n✅ Done")
+    elif isinstance(event, TurnFailed):
+        print(f"\n❌ {event.reason} (code={event.code})")
+        # code ∈ interrupted|budget|overflow|llm_timeout|llm_error|compaction|error
+        # 按 code 程序化分支，不要匹配 reason 文本
 ```
 
 ## 会话管理
@@ -156,6 +160,36 @@ agent2 = Agent.from_config(config, store=store, session_id="project-debug")
 response = await agent2.arun(list(history) + [Message.user("继续之前的工作")])
 ```
 
+## 记忆（默认开启）
+
+```python
+# 默认：Agent.from_config(memory=True) → SQLiteMemoryProvider(~/.microagent/memory.db)
+# + LLM 提取器（每轮后台抽取）+ 每轮 recall 注入上下文（Hermes 对齐）
+
+agent = Agent.from_config(config)                     # memory 默认开启
+agent = Agent.from_config(config, memory=False)       # 关闭
+agent = Agent.from_config(config, memory=custom_provider)  # 自定义后端
+
+# write_approval 闸门（Hermes write_approval 语义，默认 False 直写）
+provider = SQLiteMemoryProvider("mem.db")
+provider.write_approval = True
+pending = await provider.pending_memories()
+await provider.approve_memory(pending[0].id)
+await provider.reject_memory(pending[1].id)
+# CLI: /memory [pending|approve <id>|reject <id>]
+```
+
+## 技能学习（/learn）
+
+```python
+# Hermes 对齐：技能沉淀是刻意行为，不是自动后台循环
+result = await agent.learn("我们从对话中总结的流程", kind="chat")
+result = await agent.learn("./src/my_tool", kind="dir")
+result = await agent.learn("https://example.com/guide", kind="url")
+# CLI: /learn chat . 从当前会话学习
+# 写入 ~/.microagent/skills（provenance: agent）→ curator 管理生命周期
+```
+
 ## 自定义工具
 
 ```python
@@ -174,9 +208,37 @@ async def calculate(
     except Exception as e:
         return ToolResult.error(f"计算失败: {e}")
 
+# 共享 per-session 状态的工具声明 exclusive=True：
+# runner 会经组级锁串行它们（浏览器 page / LSP server 等）
+@tool("my_browser_op", description="操作共享页面", exclusive=True)
+async def my_browser_op(ref: str) -> ToolResult: ...
+
 # 注册工具
 from microagent.core.tool import ToolRegistry
 registry = ToolRegistry([calculate])
+```
+
+工具约定：
+- schema 描述**不得**引用其他工具名（模型会幻觉调用不存在的工具）
+- 每轮工具执行全局并发上限 **10**（`_run_tool_calls` 内 Semaphore）
+- LLM 流默认 **300s 空闲看门狗**（`runner.llm_stream_idle_timeout`，0 禁用）
+
+## LLM 失败分类
+
+```python
+from microagent import LLMFailure, RETRYABLE_CODES, IdleTimeoutError
+from microagent.llm.errors import classify_exception
+
+# TurnFailed.code 是给事件消费者的稳定分类；嵌入方需要更细控制时
+# 用 classify_exception 归一化底层异常：
+try:
+    ...
+except Exception as e:
+    failure = classify_exception(e)
+    if failure.code in RETRYABLE_CODES:
+        # timeout | rate_limit | overloaded | server_error | network_error | empty_response
+        retry()
+    # 非可重试:auth_error | bad_request | context_exceeded | aborted | unknown
 ```
 
 ## 权限控制

@@ -97,11 +97,18 @@ class Usage:
 - `ToolCallDelta(id, name, arguments)` — 完整工具调用
 - `ToolResultDelta(id, name, content, is_error)` — 工具结果摘要
 - `TurnComplete(content)` — 对话轮次结束
-- `TurnFailed(reason)` — 预算耗尽/错误（含 LLM 流异常：未产生任何输出时自动重试一次，重试仍失败或已有部分内容流出 → `TurnFailed("LLM error: ...")`；interrupt 的 CancelledError 不受影响）
+- `TurnFailed(reason, code)` — 预算耗尽/错误。`code` 是稳定分类
+  （`interrupted`|`budget`|`overflow`|`llm_timeout`|`llm_error`|`compaction`|`error`），
+  调用方可程序化分支；`reason` 保留人类可读消息。LLM 流异常经
+  `llm/errors.py` 归一化（`LLMFailure{code,status}`），**只有可重试失败**
+  （timeout/rate_limit/overloaded/server_error/network_error/empty_response）
+  且未产生任何输出时自动重试一次；auth/bad-request 不重试；interrupt 的
+  CancelledError 不受影响。LLM 流带空闲看门狗（`llm/watchdog.py`，默认 300s，
+  0 禁用）——网关挂起时回合不再永久卡死，超时分类为 `llm_timeout`。
 
 ---
 
-## 三、工具系统 (`core/tool.py` — 414 行)
+## 三、工具系统 (`core/tool.py` — 360 行)
 
 ```python
 @tool("read_file", description="Read a file...")
@@ -187,18 +194,20 @@ deepseek-v4-flash, tx-d4p → deepseek-v4-pro）通过 `_ALIAS_TO_CANONICAL` 映
 
 ## 五、会话管理 (`session/`)
 
-### SessionRunner (`runner.py` — 1029 行)
+### SessionRunner (`runner.py` — 1214 行)
 
 核心循环：
 
 ```
 while not budget.exhausted:
     ├─ 压缩检查 → L1→L2→L3→L4 (context window 感知)
-    ├─ Skill 匹配 → 注入 system prompt
+    ├─ 不变量审计（MICROAGENT_AUDIT_INVARIANTS 开启时）：孤儿 tool_calls / 连续 user 即失败
+    ├─ Skill 匹配 → 注入 user context（system prompt 冻结）
+    ├─ Memory recall → 注入 user context（与 skill 同通道，过注入扫描）
     ├─ Context sources + pre_llm_hooks
-    ├─ LLM.stream(system, messages, tools) ← prompt caching
+    ├─ LLM.stream(system, messages, tools) ← prompt caching + 空闲看门狗(300s)
     ├─ 构建 assistant Message → 自动持久化
-    ├─ 工具执行 → 并发 TaskGroup → hook.before/after
+    ├─ 工具执行 → 并发 TaskGroup（上限 10）+ exclusive 屏障 → hook.before/after
     └─ TurnComplete → memory extraction (fire-and-forget)
 ```
 
@@ -206,6 +215,11 @@ while not budget.exhausted:
 - **prompt caching**：system prompt + tools schema 缓存，字节稳定前缀
 - **自动持久化**：user/assistant/tool_result 自动写入 store
 - **压缩**：`compression_threshold=0` 时自动用 60% 窗口计算
+- **有界工具并发**（deepseek-harness 对齐）：每轮最多 10 个工具并发执行；
+  `@tool(exclusive=True)` 标记的共享状态工具（browser×10、lsp）经组级锁串行
+- **模型可见 ⟺ 已记录**：`MICROAGENT_AUDIT_INVARIANTS=1` 时每轮校验持久化
+  历史无孤儿 tool_calls、无连续 user 消息——违反即 RuntimeError 而非静默
+  发送模型从未经历过的序列
 
 ### 4 层压缩金字塔 (`compress.py` — 734 行)
 
@@ -227,7 +241,7 @@ await store.load_history(session_id)               # → list[Message]（逐行�
 await store.list_sessions()                        # → list[str]
 ```
 
-### Budget 树形预算 (`session/budget.py` — 240 行)
+### Budget 树形预算 (`session/budget.py` — 233 行)
 
 ```python
 root = Budget.root(max_iterations=25, max_tokens=200_000, max_cost_usd=5.0)
@@ -355,7 +369,7 @@ system_prompt: "你是一个Python专家。"
 | 维度 | MicroAgent | Hermes Agent | Claude Code |
 |------|-----------|-------------|-------------|
 | 核心代码量 | ~12,800 LOC | ~50,000+ LOC (含 gateway) | 闭源（估计 ~50k+ LOC） |
-| 核心循环模块 | 1029 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
+| 核心循环模块 | 1214 行 `runner.py` | 6,055 行 `run_agent.py` | 闭源 |
 | 工具数量 | 34 | 69（30+ 为核心工具） | 10+（read/write/bash/grep/glob/edit） |
 | 压缩代码量 | 734 行 `compress.py` | 3,342 行 `context_compressor.py` | 闭源（5 层金字塔） |
 | CLI 代码量 | 962 行 | 16,304 行 | 闭源（产品级 CLI） |

@@ -5,7 +5,7 @@
 [![Tests](https://img.shields.io/badge/tests-1504%20passed-brightgreen.svg)]()
 
 A Python-implemented, embeddable universal AI agent core library.
-**~12,800 LOC**, **34 built-in tools**, **62 public API symbols**, **1504 unit+smoke+e2e tests, 3 integration tests**.
+**~12,800 LOC**, **34 built-in tools**, **66 public API symbols**, **1504 unit+smoke+e2e tests, 3 integration tests**.
 
 > *"narrow waist + thick edges"* — the core agent loop (`SessionRunner.run_turn`) is one focused method. Capability lives in tools and extension points, not in the core.
 
@@ -142,7 +142,7 @@ msg = Message.tool_result(
 
 ```python
 from microagent import SessionRunner, ToolRegistry
-from microagent.core.types import TextDelta, TurnComplete
+from microagent.core.types import TextDelta, TurnComplete, TurnFailed
 
 runner = SessionRunner(llm=client, registry=ToolRegistry())
 messages = [Message.user("Write a poem.")]
@@ -152,11 +152,19 @@ async for event in runner.run_turn(messages):
         print(event.text, end="", flush=True)  # real-time output
     elif isinstance(event, TurnComplete):
         print(f"\n--- done, full response: {event.content}")
+    elif isinstance(event, TurnFailed):
+        # event.code ∈ interrupted|budget|overflow|llm_timeout|llm_error|compaction|error
+        print(f"\n--- failed [{event.code}]: {event.reason}")
 ```
+
+Turn hardening (deepseek-harness parity): transient LLM stream failures
+retry once when no output was produced; a 300s idle watchdog turns a hung
+gateway into `llm_timeout`; tool execution is capped at 10 concurrent
+calls; `@tool(exclusive=True)` tools serialize against each other.
 
 ### Permissions
 
-> **Library extension point.** `PermissionEngine` is NOT wired into `SessionRunner` by default — tool calls bypass permission enforcement unless a library user wires it in via a `ToolHook.before`. The CLI runs without permission enforcement.
+> **Library extension point.** `PermissionEngine` can be wired into `SessionRunner` via the `permission_engine=` constructor argument — the runner evaluates rules before every tool execution (DENY → `ToolResult.denied`). The CLI wires `DEFAULT_RULES` + an interactive ask callback.
 
 ```python
 from microagent import PermissionEngine, Rule, Decision, ScriptRule
@@ -219,26 +227,36 @@ mgr2 = SubagentManager(specs=(
 
 ### Memory
 
+**Default-on** (Hermes parity): `Agent.from_config()` enables persistent
+memory automatically — SQLite store + LLM extractor (fire-and-forget per
+turn) + per-turn recall injection. Disable with `memory=False`.
+
 ```python
+# Default path: ~/.microagent/memory.db (created automatically)
+agent = Agent.from_config(config)              # memory ON by default
+agent = Agent.from_config(config, memory=False)  # opt out
+
+# Custom backend or the low-level API
 from microagent import SQLiteMemoryProvider, Memory
 
 store = SQLiteMemoryProvider("~/.microagent/memory.db")
-
-# Write memories
 await store.batch_write((
     Memory(id="m1", content="User prefers Python.", category="preference", created_at=time.time()),
-    Memory(id="m2", content="Project is at /home/user/app.", category="fact", created_at=time.time()),
 ))
 
-# FTS5 full-text search
+# FTS5 full-text search (CJK via LIKE substring fallback)
 results = await store.recall("Python project", k=5)
-for r in results:
-    print(f"[{r.category}] {r.content} (score: {r.relevance_score:.2f})")
 
-# Delete
-await store.delete("m1")
+# Write-approval gate (Hermes write_approval; default False = direct write)
+store.write_approval = True
+pending = await store.pending_memories()
+await store.approve_memory(pending[0].id)
+
+# Rolling cap: 500 memories, oldest evicted first (context-category first)
 store.close()
 ```
+
+CLI: `/memory [pending|approve <id>|reject <id>]` — drives the gate.
 
 ### Skills
 
@@ -257,6 +275,19 @@ for m in matches:
 # Combine multiple loaders, deduplicate, rank by score
 composite = CompositeSkillLoader(backends=(claude_loader, custom_loader))
 top = await composite.match("deploy to production")
+```
+
+**Learning new skills** (Hermes `/learn` parity — a deliberate act, not a
+background loop): `Agent.learn()` distills a SKILL.md from chat text, a
+directory tree, or a URL via the auxiliary model and writes it to
+`~/.microagent/skills` with agent provenance. The Curator then manages its
+lifecycle (stale → archive with tar.gz backup; pinned exempt). CLI:
+`/learn chat .` learns from the current conversation.
+
+```python
+result = await agent.learn("run make demo to verify", kind="chat")
+result = await agent.learn("./src/tool", kind="dir")
+result = await agent.learn("https://example.com/guide", kind="url")
 ```
 
 ### Budget Tree
@@ -412,20 +443,20 @@ await scheduler.stop()
 
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
-| `core/` | 6 | 1203 | types, tool registry, permission, store, event bus |
-| `tools/` | 28 | 3494 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
-| `session/` | 6 | 2439 | runner loop, 4-layer compression, budget, attachments, search |
-| `memory/` | 3 | 520 | FTS5 memory provider, LLM extractor |
-| `skill/` | 3 | 455 | Claude skill loader, curator lifecycle |
-| `surface/` | 2 | 962 | Rich CLI REPL with /slash commands (/models, /cost, /compact, …) |
-| `llm/` | 5 | 812 | OpenAI client, credential pool, models.dev pricing cache, templates |
-| `terminal/` | 2 | 367 | local + docker + SSH backends (library extension point) |
-| `mcp/` | 3 | 305 | MCP stdio client + catalog |
-| `cron/` | 2 | 345 | APScheduler-based cron jobs |
+| `core/` | 6 | 1155 | types, tool registry, permission, store, event bus |
+| `tools/` | 28 | 3551 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
+| `session/` | 6 | 2648 | runner loop, 4-layer compression, budget, attachments, search |
+| `memory/` | 3 | 661 | FTS5 memory provider, LLM extractor, write-approval gate |
+| `skill/` | 4 | 698 | Claude skill loader, curator lifecycle, /learn distiller |
+| `surface/` | 2 | 1077 | Rich CLI REPL with /slash commands (/models, /cost, /memory, /learn, …) |
+| `llm/` | 7 | 967 | OpenAI client, credential pool, pricing cache, templates, failure taxonomy, idle watchdog |
+| `terminal/` | 2 | 389 | local + docker + SSH backends (library extension point) |
+| `mcp/` | 3 | 323 | MCP stdio client + catalog |
+| `cron/` | 2 | 351 | APScheduler-based cron jobs |
 | `security/` | 3 | 181 | streaming context scrubber, injection patterns (library extension point) |
 | `subagent/` | 2 | 193 | subagent manager with isolated budgets |
 | `plugin/` | 2 | 46 | 3 extension Protocols (PreLLMHook, ToolHook, ContextSource) |
-| top-level | 3 | 367 | Agent facade, Config resolver, currency helper |
+| top-level | 4 | 569 | Agent facade, Config resolver, currency helper, public API surface |
 
 ## Built-in Tools
 
