@@ -15,7 +15,6 @@ from pydantic import Field
 from ...core.tool import tool
 from ...core.types import ToolResult
 from .._session_state import session_state
-from ...core.types import ToolResult
 
 # ---------------------------------------------------------------------------
 # Per-session in-process state (ContextVar — same pattern as process.py)
@@ -40,7 +39,7 @@ _current_state, _get_state = session_state(
 # ---------------------------------------------------------------------------
 
 
-@tool("todo", description="Manage a TODO list. Actions: list, add, update, remove.")
+@tool("todo", description="Manage a TODO list. Actions: list, add, update, remove.", exclusive=True)
 async def todo(
     action: Annotated[str, Field(description="Action: list | add | update | remove")],
     item_id: Annotated[int, Field(description="Item index (0-based) for update/remove", ge=0)] = 0,
@@ -90,7 +89,7 @@ async def todo(
 # ---------------------------------------------------------------------------
 
 
-@tool("task_plan", description="Create or view a multi-step action plan (does not execute).")
+@tool("task_plan", description="Create or view a multi-step action plan (does not execute).", exclusive=True)
 async def plan(
     action: Annotated[str, Field(description="Action: show | set | clear")],
     steps: Annotated[str, Field(description="Newline-separated steps (for set action)")] = "",

@@ -1056,7 +1056,13 @@ class SessionRunner:
             # [SESSION_EXIT] marker must actually terminate the turn here.
             # Previously NOTHING consumed the marker: the loop continued,
             # the LLM got another iteration, and the exit call was a no-op.
-            if any(r.content.strip() == "[SESSION_EXIT]" for r in results):
+            # Gated on the tool NAME too: any tool result whose content
+            # happens to be the literal marker (read_file on such a file,
+            # bash echo) used to kill the turn with a misleading message.
+            if any(
+                tc.name == "exit" and r.content.strip() == "[SESSION_EXIT]"
+                for tc, r in zip(tool_calls, results)
+            ):
                 yield TurnComplete("(session ended by exit tool)")
                 return
 
