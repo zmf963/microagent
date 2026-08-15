@@ -9,6 +9,7 @@ v1.0: fcntl file lock for cross-process safety + result persistence.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -195,6 +196,13 @@ class CronScheduler:
         # runner's session_id to its own cron-scoped id, and overlapping
         # ticks must not interleave that swap.
         self._exec_lock = asyncio.Lock()
+        # In-flight job tasks, tracked so stop() can await them. Without
+        # this, shutdown(wait=False) returned while a job was mid-turn —
+        # Agent.close() then closed the runner (store/LSP/processes) under
+        # the still-running job, and the job's finally-restore ran against
+        # a closed runner. stop() waits for these tasks (bounded) before
+        # returning.
+        self._running_jobs: set[asyncio.Task] = set()
         if not self.lock_path:
             self.lock_path = str(Path.home() / ".microagent" / "cron.lock")
 
@@ -252,10 +260,25 @@ class CronScheduler:
         self._scheduler.start()
 
     async def stop(self) -> None:
-        """Stop the scheduler gracefully and release the lock."""
+        """Stop the scheduler gracefully and release the lock.
+
+        Waits (bounded) for in-flight job tasks before returning: a job
+        mid-turn when Agent.close() proceeds would run against a closed
+        runner (store/LSP/process teardown under it) — its finally-restore
+        would then corrupt shutdown order. The wait is bounded so a stuck
+        job cannot hang shutdown forever.
+        """
         self._started = False
         if self._scheduler is not None:
             self._scheduler.shutdown(wait=False)
+        if self._running_jobs:
+            pending = list(self._running_jobs)
+            done, _pending = await asyncio.wait(pending, timeout=10.0)
+            for t in _pending:
+                t.cancel()
+            if _pending:
+                await asyncio.gather(*_pending, return_exceptions=True)
+            self._running_jobs.clear()
         if self._lock_fd is not None:
             _release_lock(self._lock_fd)
             self._lock_fd = None
@@ -271,12 +294,26 @@ class CronScheduler:
             trigger = CronTrigger.from_crontab(job.schedule)
 
         self._scheduler.add_job(
-            self._execute_job,
+            self._tracked_job_wrapper,
             trigger=trigger,
             args=[job],
             id=job.name,
             replace_existing=True,
         )
+
+    async def _tracked_job_wrapper(self, job: CronJob) -> None:
+        """Run _execute_job inside a tracked task so stop() can await it.
+
+        APScheduler calls the job function as a plain coroutine — there is
+        no handle to await at stop() time. The wrapper registers the task
+        in _running_jobs (discarded on completion); stop() waits on these
+        handles (bounded) before the agent closes the runner.
+        """
+        task = asyncio.current_task()
+        if task is not None:
+            self._running_jobs.add(task)
+            task.add_done_callback(self._running_jobs.discard)
+        await self._execute_job(job)
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a scheduled job: run the agent with the prompt.
