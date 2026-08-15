@@ -1008,3 +1008,46 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
   硬编码)——参数契约修复
 - ClaudeSkillLoader._instances 泄漏(agent 数线性)
 - EventBus 无 off()/去重注册
+
+---
+
+## 二十一、第十八轮:逐个修复全部遗留问题(7 项)— 2026-08-15
+
+> 将第十七轮遗留清单逐项闭环。基线 1547 passed → **1547 passed, 1 skipped**
+> (无新增测试文件——修复均为既有路径的语义修正,回归由全量套件覆盖)。
+> 6 个 fix commit:`17581b6`/`cc82991`/`66a0b68`/`fb19883`/`09aedc9`/`c3db10f`。
+
+### 20.1 cron stop 与 in-flight job 竞争 ✅ (17581b6)
+- `shutdown(wait=False)` 在 job 半途返回 → Agent.close() 关闭 runner
+  (store/LSP/进程)压着仍在运行的 job,job 的 finally 恢复对着尸体执行。
+- 修复:job 经 `_tracked_job_wrapper` 注册进 `_running_jobs`(task 句柄 +
+  done-callback 自动丢弃);`stop()` 等待句柄(10s 上限,超时 cancel + gather)
+  再释放锁返回。语义变化:stop() 现在真正优雅关闭。
+
+### 20.2 interrupt 占位结果语义 ✅ (cc82991)
+- watcher 取消的工具落库裸 `not executed (cancelled)`,resume 后模型
+  读成普通错误。现在 interrupt 路径使用与硬取消 persist handler 一致的
+  `interrupted: tool execution cancelled` 措辞,resume 可区分"被中断"与"执行失败"。
+
+### 20.3 learn_skill skills_dir 参数契约 ✅ (66a0b68)
+- SKILL.md 尊重调用者目录,但 provenance/usage 经 skill_manage helper
+  硬编码真实 home——自定义目录调用者(测试 fixture/嵌入方)污染用户
+  curator 状态。`_record_provenance`/`_touch_curator_usage` 增加
+  `skills_dir` 覆盖参数,learner 全链路传参。
+
+### 20.4 ClaudeSkillLoader._instances 泄漏 ✅ (fb19883)
+- 实例列表永不清理,长驻进程每个 agent 泄漏一份解析缓存。改 weakref,
+  `invalidate_all()` 迭代时剪除死引用。
+
+### 20.5 EventBus off() + 去重 ✅ (09aedc9)
+- 长驻 agent 的观察者只增不减。`on()` 同回调同事件去重;新增 `off()`
+  注销(空列表顺带清理)。
+
+### 20.6 mcp_connect `_task=None` ✅ 已记录为不可达(分析后不修)
+- 真实路径中 manager 入 dict 前必先 `connect()` 置 `_task`;连接失败不入
+  dict。`_task=None` 仅出现在测试假对象——保持幂等跳过语义,注释说明
+  (改为"视为 dead 重连"会破坏 `test_idempotent_reconnect` 契约且无真实收益)。
+
+### 20.7 `_migrate_content_hash` 并发 DDL 竞态 ✅ (c3db10f)
+- 双进程同时初始化新 DB:双双见列缺失,ALTER 落败方构造崩溃
+  ("duplicate column name")。捕获该 OperationalError 视为已迁移。
