@@ -23,8 +23,26 @@ class EventBus:
     subscribers: dict[str, list[Callable[..., Any]]] = field(default_factory=dict)
 
     def on(self, event: str, cb: Callable[..., Any]) -> None:
-        """Register a callback for an event."""
-        self.subscribers.setdefault(event, []).append(cb)
+        """Register a callback for an event. Duplicate registrations of
+        the SAME callback for the SAME event are ignored (re-registering
+        previously fired it once per duplicate)."""
+        subs = self.subscribers.setdefault(event, [])
+        if cb not in subs:
+            subs.append(cb)
+
+    def off(self, event: str, cb: Callable[..., Any]) -> None:
+        """Unregister a callback. No-op if it was never registered.
+
+        Long-lived agents (the target audience) need to release observer
+        references; without off() subscribers only ever accumulate.
+        """
+        subs = self.subscribers.get(event, [])
+        try:
+            subs.remove(cb)
+        except ValueError:
+            pass
+        if not subs and event in self.subscribers:
+            del self.subscribers[event]
 
     async def emit(self, event: str, *args: Any, **kwargs: Any) -> None:
         """Fire an event. Sync callbacks run in order; async callbacks run
