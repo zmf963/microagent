@@ -97,7 +97,11 @@ async def mcp_connect(
             # forever, returning "already connected" against a corpse.
             # Only reconnect when we can positively see the task is done;
             # a manager without a _task attribute (or _task still running)
-            # is treated as live (idempotent skip).
+            # is treated as live (idempotent skip). _task=None cannot
+            # occur for stored managers in real paths: connect() sets
+            # _task before a manager can be stored, and failed connects
+            # are never stored — the None case is purely a fake-manager
+            # test artifact (idempotent-skip semantics).
             task = getattr(existing, "_task", None)
             if task is None or not task.done():
                 return ToolResult.ok(
