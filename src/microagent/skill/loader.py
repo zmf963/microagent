@@ -276,18 +276,26 @@ class ClaudeSkillLoader:
         # do we re-read and re-parse.
         self._cached: tuple[Skill, ...] = ()
         self._fingerprint: tuple | None = None
-        self._instances.append(self)
+        import weakref
 
-    # Live instances, so /learn (or skill_manage create/delete) can
-    # invalidate caches process-wide. The mtime fingerprint would pick the
-    # change up on the next load() anyway, but only if the mtime/size
-    # tuple actually changed — a rewrite within the same mtime granularity
-    # can be missed; explicit invalidation removes the race.
-    _instances: list[ClaudeSkillLoader] = []
+        self._instances.append(weakref.ref(self))
+
+    # Live instances (weakrefs), so /learn (or skill_manage create/delete)
+    # can invalidate caches process-wide. Weak: a long-lived process
+    # creating many agents must not leak loader references (each holds
+    # cached parsed skills). The mtime fingerprint would pick the change
+    # up on the next load() anyway, but only if the mtime/size tuple
+    # actually changed — a rewrite within the same mtime granularity can
+    # be missed; explicit invalidation removes the race.
+    _instances: list = []
 
     @classmethod
     def invalidate_all(cls) -> None:
-        for loader in cls._instances:
+        for ref in list(cls._instances):
+            loader = ref()
+            if loader is None:
+                cls._instances.remove(ref)
+                continue
             loader._fingerprint = None
             loader._cached = ()
 
