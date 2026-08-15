@@ -173,11 +173,21 @@ class SQLiteMemoryProvider:
         10-message windows, fresh uuid each time), growing the table without
         bound. Dedupe keys on a normalized-content hash — exact-match dedupe
         (WHERE content = ?) missed case/whitespace variants.
+
+        Concurrent-constructor safe: two processes initializing on a fresh
+        DB both see the column missing and race the ALTER — the loser gets
+        OperationalError 'duplicate column name' and its construction
+        crashed. Catch it and treat as already-migrated.
         """
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(memories)")}
         if "content_hash" in cols:
             return
-        self._conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
+        try:
+            self._conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                return  # another process won the race — column exists now
+            raise
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash)"
         )
