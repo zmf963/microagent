@@ -87,6 +87,11 @@ class SessionRunner:
         self.skill_loader = skill_loader
         self.memory = memory
         self.skip_memory = False  # cron turns set this (Hermes: skip_memory=True)
+        # Idle watchdog on the LLM stream (deepseek-harness parity:
+        # streamIdleTimeoutMs). A hung gateway produces no events and no
+        # exception — without this the turn blocks forever. 300s default;
+        # 0 disables the watchdog.
+        self.llm_stream_idle_timeout: float = 300.0
         self.compression_threshold = compression_threshold
         self.permission_engine = permission_engine
 
@@ -452,6 +457,43 @@ class SessionRunner:
         await self.store.append(session_id, msg)
         self._store_tail[session_id] = (msg.role, msg.content)
 
+    async def _audit_invariants(self, sid: str, messages: list[Message]) -> None:
+        """Verify the message sequence before it reaches the model.
+
+        deepseek-harness invariant parity: everything the model can see
+        must be reconstructible from the persisted log. The two concrete
+        checks here are the API invariants that have broken repeatedly in
+        review rounds (R13 budget-orphan, R10 duplicate user tail,
+        R7 hard-cancel orphan): no orphaned tool_calls and no consecutive
+        same-role user messages in the persisted history. A violation
+        means the in-memory turn state drifted from the store — fail
+        loudly instead of sending the model a sequence it never lived.
+
+        The persisted-history check is O(history) per turn; gated on the
+        MICROAGENT_AUDIT_INVARIANTS env var so production turns stay fast
+        and the full-suite tests exercise it.
+        """
+        import os
+
+        if os.environ.get("MICROAGENT_AUDIT_INVARIANTS") not in ("1", "true", "on"):
+            return
+        history = await self.store.load_history(sid)
+        answered = {m.tool_call_id for m in history if m.role == "tool"}
+        for m in history:
+            for tc in m.tool_calls or ():
+                if tc.id not in answered:
+                    raise RuntimeError(
+                        f"store invariant violated: orphaned tool_call {tc.id!r} "
+                        f"in session {sid!r} — assistant tool_calls without a "
+                        "matching tool result"
+                    )
+        for prev, cur in zip(history, history[1:]):
+            if prev.role == "user" and cur.role == "user":
+                raise RuntimeError(
+                    f"store invariant violated: consecutive user messages in "
+                    f"session {sid!r} ({prev.content[:40]!r} / {cur.content[:40]!r})"
+                )
+
     async def _run_turn_inner(
         self,
         messages: list[Message],
@@ -463,6 +505,8 @@ class SessionRunner:
         writes and events in this turn use it, immune to mid-turn swaps of
         ``self.session_id`` (the cron scheduler does that around its arun).
         """
+        if self.store is not None:
+            await self._audit_invariants(sid, messages)
 
         if self.store is not None and messages:
             last = messages[-1]
@@ -488,7 +532,7 @@ class SessionRunner:
 
         while not self.budget.exhausted:
             if self._interrupt_requested:
-                yield TurnFailed("interrupted by user")
+                yield TurnFailed("interrupted by user", code="interrupted")
                 return
 
             # A stream-error retry re-enters the loop for the SAME logical
@@ -500,7 +544,7 @@ class SessionRunner:
                 try:
                     await self.budget.consume(iterations=1)
                 except BudgetExceeded as e:
-                    yield TurnFailed(str(e))
+                    yield TurnFailed(str(e), code="budget")
                     return
             self._stream_retry_free = False
 
@@ -545,7 +589,7 @@ class SessionRunner:
                         else:
                             self._compaction_state.record_success()
                     except BudgetExceeded as e:
-                        yield TurnFailed(f"budget exhausted during compaction: {e}")
+                        yield TurnFailed(f"budget exhausted during compaction: {e}", code="budget")
                         return
 
             system = self.system_prompt
@@ -732,13 +776,18 @@ class SessionRunner:
             # a retry after partial output would duplicate it on screen.
             _stream_got_output = False
             try:
-                async for event in self.llm.stream(
-                    system=system,
-                    messages=tuple(send_messages),
-                    tools=oai_tools,
+                from ..llm.watchdog import IdleTimeoutError, watch_idle
+
+                async for event in watch_idle(
+                    self.llm.stream(
+                        system=system,
+                        messages=tuple(send_messages),
+                        tools=oai_tools,
+                    ),
+                    timeout_seconds=self.llm_stream_idle_timeout,
                 ):
                     if self._interrupt_requested:
-                        yield TurnFailed("interrupted by user")
+                        yield TurnFailed("interrupted by user", code="interrupted")
                         return
 
                     if isinstance(event, TextDelta):
@@ -780,7 +829,7 @@ class SessionRunner:
                                         try:
                                             await self.budget.consume_usage(usage)
                                         except BudgetExceeded as e:
-                                            yield TurnFailed(str(e))
+                                            yield TurnFailed(str(e), code="budget")
                                             return
                                     # Force compaction to reduce context.
                                     # Use the auxiliary model like the
@@ -806,16 +855,16 @@ class SessionRunner:
                                         )
                                         messages[:] = list(messages_list)
                                     except BudgetExceeded as e:
-                                        yield TurnFailed(f"budget exhausted during overflow recovery: {e}")
+                                        yield TurnFailed(f"budget exhausted during overflow recovery: {e}", code="budget")
                                         return
                                     except Exception:
-                                        yield TurnFailed("overflow recovery: compaction failed")
+                                        yield TurnFailed("overflow recovery: compaction failed", code="compaction")
                                         return
                                     _overflow_retrying = True
                                     break  # break out of async for → while loop retries
                                 else:
                                     # Already retried — fail
-                                    yield TurnFailed("LLM overflow recovery failed after retry")
+                                    yield TurnFailed("LLM overflow recovery failed after retry", code="overflow")
                                     return
 
                             # Content was streamed (truncation) — fail.
@@ -835,9 +884,9 @@ class SessionRunner:
                                     try:
                                         await self.budget.consume_usage(usage)
                                     except BudgetExceeded as e:
-                                        yield TurnFailed(str(e))
+                                        yield TurnFailed(str(e), code="budget")
                                         return
-                                yield TurnFailed("LLM response truncated (max tokens)")
+                                yield TurnFailed("LLM response truncated (max tokens)", code="overflow")
                                 return
                             # Content was streamed but handled above. If neither
                             # content nor tool_calls exist this is also an
@@ -845,17 +894,27 @@ class SessionRunner:
 
             except Exception as e:
                 # LLM stream failed (network drop, gateway 5xx, auth
-                # rejection after credential rotation, ...). Without this
-                # guard the raw exception escapes run_turn and crashes
-                # Agent.arun callers. Retry ONCE only if no user-visible
-                # output was produced yet (retrying after partial content
-                # would duplicate text on screen). CancelledError is not
-                # caught here — it must keep propagating for interrupt.
-                if not self._stream_retried and not _stream_got_output:
+                # rejection after credential rotation, idle watchdog ...).
+                # Without this guard the raw exception escapes run_turn
+                # and crashes Agent.arun callers. Retry ONCE only when the
+                # failure is transient AND no user-visible output was
+                # produced yet (retrying after partial content would
+                # duplicate text on screen; retrying an auth/bad-request
+                # failure burns budget for nothing). CancelledError is
+                # not caught here — it must keep propagating for interrupt.
+                from ..llm.errors import classify_exception
+
+                failure = classify_exception(e)
+                if (
+                    not self._stream_retried
+                    and not _stream_got_output
+                    and failure.is_retryable
+                ):
                     self._stream_retried = True
                     self._stream_retry_free = True  # don't charge the retry pass
                     continue  # retry the turn (re-enters the outer loop)
-                yield TurnFailed(f"LLM error: {e!r}")
+                code = "llm_timeout" if failure.code == "timeout" else "llm_error"
+                yield TurnFailed(f"LLM error: {e!r}", code=code)
                 return
 
             if _overflow_retrying:
@@ -904,7 +963,7 @@ class SessionRunner:
                             text=assistant_msg.content,
                             usage=assistant_msg.usage,
                         )
-                    yield TurnFailed(str(e))
+                    yield TurnFailed(str(e), code="budget")
                     return
 
             if not tool_calls:
@@ -1001,14 +1060,36 @@ class SessionRunner:
                 yield TurnComplete("(session ended by exit tool)")
                 return
 
-        yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations")
+        yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations", code="budget")
 
     async def _run_tool_calls(
         self, calls: list[ToolCall]
     ) -> tuple[list[ToolResult], list[ToolProgressDelta]]:
-        """Execute tool calls concurrently, collecting progress events."""
+        """Execute tool calls concurrently, collecting progress events.
+
+        Bounded concurrency (deepseek-harness parity: maxParallelToolCalls):
+        an LLM can emit dozens of tool calls in one turn — unbounded
+        TaskGroup fan-out previously spawned one process/task per call,
+        letting a single turn fork 30+ concurrent bash processes. A
+        semaphore caps concurrent executions at MAX_PARALLEL_TOOL_CALLS.
+        Tools flagged exclusive (shared per-session state: browser page,
+        LSP servers) additionally serialize against each other — a
+        browser_snapshot + browser_click pair in one turn raced on the
+        shared page (Execution context was destroyed).
+        """
         results: list[ToolResult | None] = [None] * len(calls)
         progress_events: list[ToolProgressDelta] = []
+
+        # Global concurrency cap. 10 mirrors dsh's default.
+        MAX_PARALLEL_TOOL_CALLS = 10
+        _parallel_slots = asyncio.Semaphore(MAX_PARALLEL_TOOL_CALLS)
+        # Exclusive tools share per-session state — serialize the whole
+        # group so no two run concurrently.
+        _exclusive_lock = asyncio.Lock()
+
+        def _is_exclusive(name: str) -> bool:
+            tool = self.registry.get(name)
+            return bool(getattr(tool, "exclusive", False))
 
         async def _settle(idx: int, call: ToolCall) -> None:
             try:
@@ -1079,14 +1160,15 @@ class SessionRunner:
                 # Streaming execution — ToolRegistry.execute_stream always
                 # exists (core/tool.py) and has its own non-streaming fallback
                 # internally, so no try/except fallback is needed here.
-                async for event in self.registry.execute_stream(call):
-                    if isinstance(event, ToolProgressDelta):
-                        progress_events.append(event)
-                    elif isinstance(event, ToolResult):
-                        result = event
-                        break
-                else:
-                    result = ToolResult.ok("(no output)")
+                # Bounded concurrency: acquire a global slot; exclusive
+                # tools additionally hold the group-wide exclusive lock
+                # for the whole execution.
+                async with _parallel_slots:
+                    if _is_exclusive(call.name):
+                        async with _exclusive_lock:
+                            result = await _execute_stream(call)
+                    else:
+                        result = await _execute_stream(call)
 
                 for hook in self.tool_hooks:
                     result = await hook.after(call, result, None)
@@ -1094,6 +1176,19 @@ class SessionRunner:
                 results[idx] = result
             except Exception as e:
                 results[idx] = ToolResult.error(f"{call.name} failed: {e!r}")
+
+        async def _execute_stream(call: ToolCall) -> ToolResult:
+            """Run one tool call's stream, folding progress deltas."""
+            result: ToolResult | None = None
+            async for event in self.registry.execute_stream(call):
+                if isinstance(event, ToolProgressDelta):
+                    progress_events.append(event)
+                elif isinstance(event, ToolResult):
+                    result = event
+                    break
+            if result is None:
+                return ToolResult.ok("(no output)")
+            return result
 
         async with anyio.create_task_group() as tg:
             async def _interrupt_watcher() -> None:

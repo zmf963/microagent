@@ -173,9 +173,15 @@ class TurnComplete:
 
 @dataclass(frozen=True, slots=True)
 class TurnFailed:
-    """The turn ended without a normal response."""
+    """The turn ended without a normal response.
+
+    ``reason`` is a human-readable message; ``code`` is a stable machine
+    classifier (deepseek-harness TurnEndReason parity) so callers can
+    branch programmatically instead of string-matching free text.
+    """
 
     reason: str
+    code: str = "error"  # interrupted|budget|overflow|llm_timeout|llm_error|compaction|error
 
 
 @dataclass(frozen=True, slots=True)

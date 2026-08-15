@@ -1,0 +1,50 @@
+"""LLM stream idle watchdog — bounded waits on a silent stream.
+
+deepseek-harness parity: streamIdleTimeoutMs (default 5min) aborts a
+stream that produces no event for too long — a hung gateway otherwise
+blocks the turn forever (no exception, no completion). Wraps any async
+iterator of events and raises ``IdleTimeoutError`` when the gap between
+consecutive events exceeds the limit.
+
+Timeout of 0 disables the watchdog.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+class IdleTimeoutError(TimeoutError):
+    """Raised when the LLM stream stalls beyond the idle limit."""
+
+
+async def watch_idle(
+    stream: AsyncIterator[T],
+    timeout_seconds: float,
+) -> AsyncIterator[T]:
+    """Yield events, raising IdleTimeoutError after ``timeout_seconds``
+    of silence. A zero timeout disables the watchdog (pure passthrough).
+    """
+    if timeout_seconds <= 0:
+        async for event in stream:
+            yield event
+        return
+
+    import asyncio
+
+    stream_iter = stream.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(
+                stream_iter.__anext__(), timeout=timeout_seconds
+            )
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError:
+            raise IdleTimeoutError(
+                f"LLM stream idle for {timeout_seconds:g}s — no events received"
+            ) from None
+        yield event
