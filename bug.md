@@ -1051,3 +1051,34 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 ### 20.7 `_migrate_content_hash` 并发 DDL 竞态 ✅ (c3db10f)
 - 双进程同时初始化新 DB:双双见列缺失,ALTER 落败方构造崩溃
   ("duplicate column name")。捕获该 OperationalError 视为已迁移。
+
+---
+
+## 二十二、第十九轮:dsh absorb-now 批次 + v1.1.0 发布 — 2026-08-16
+
+> 将调研报告(设计思路 10 条 + 可吸收清单)的 absorb-now 四项落地并发布。
+> 基线 1547 passed → **1559 passed, 1 skipped**。
+> 4 个 commit:`d13d759`/`6415ceb`/`a668b60`/`3d1e840` + 版本发布。
+> 版本 1.0.0 → **1.1.0**(pyproject + `__version__` + CHANGELOG.md 新建)。
+
+### 21.1 取消双码分类(bodyInvoked parity)✅ (d13d759)
+- interrupt 工具结果带 `metadata.code`:`ABORTED_BEFORE_DISPATCH`(主体未运行,
+  可安全重跑)vs `ABORTED`(主体已运行后取消,重跑可能重复副作用)。
+  `body_invoked` 逐调用跟踪;`ToolResult.error(metadata=)` 新增参数。
+
+### 21.2 未知会话事件拒绝(ignorable parity)✅ (6415ceb)
+- 序列化行带 `kind='message'`;未知非 ignorable kind → `UnsupportedSessionError`
+  (顶层导出,67 符号),`load_history` 响亮失败而非静默误读未来版本会话。
+  旧库行(无 kind 字段)保持可读——向后兼容迁移零成本。
+
+### 21.3 LLM 重试账本(retry-history-from-log parity)✅ (6415ceb)
+- `llm_retry` 表 + `record_llm_retry`/`last_llm_retry`(SQLite/InMemory 双实现,
+  Store Protocol 扩展)。runner 每次一次性流重试落账(Retry-After 优先,否则 1s)
+  ——退避续接与重试审计跨进程重启存活。
+
+### 21.4 LLMFailure provider 提示 ✅ (a668b60)
+- `retry_after_ms` + `request_id` 从异常 headers 提取并贯穿全部分类分支。
+
+### 发布验证
+- wheel 构建 ✅(microagent-1.1.0-py3-none-any.whl)
+- 干净 venv 安装 + import + 新导出验证 ✅
