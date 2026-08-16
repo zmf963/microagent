@@ -35,12 +35,17 @@ class LLMFailure:
 
     ``code`` is one of the RETRYABLE/NON_RETRYABLE vocabularies;
     ``message`` is the original human-readable text; ``status`` is the
-    HTTP status when available.
+    HTTP status when available; ``retry_after_ms`` is the provider's
+    Retry-After hint when present; ``request_id`` is the provider's
+    request correlation id when present (deepseek-harness LlmFailure
+    parity).
     """
 
     code: str
     message: str
     status: int | None = None
+    retry_after_ms: int | None = None
+    request_id: str | None = None
 
     @property
     def is_retryable(self) -> bool:
@@ -67,21 +72,48 @@ def classify_exception(exc: BaseException) -> LLMFailure:
                 continue
             break
 
+    # Extract provider hints when the exception shape carries them
+    # (openai APIStatusError: .headers; httpx: .response.headers).
+    retry_after_ms: int | None = None
+    request_id: str | None = None
+    for headers_attr in ("headers",):
+        headers = getattr(exc, headers_attr, None)
+        if headers is None:
+            resp = getattr(exc, "response", None)
+            headers = getattr(resp, "headers", None)
+        if not headers:
+            continue
+        try:
+            raw_ra = headers.get("retry-after") or headers.get("Retry-After")
+            if raw_ra is not None:
+                retry_after_ms = int(float(raw_ra) * 1000)
+        except (TypeError, ValueError):
+            pass
+        try:
+            request_id = (
+                headers.get("x-request-id")
+                or headers.get("x-deepseek-request-id")
+            )
+        except (TypeError, AttributeError):
+            pass
+        if retry_after_ms is not None or request_id is not None:
+            break
+
     if status is not None:
         if status == 401 or status == 403:
-            return LLMFailure("auth_error", message, status)
+            return LLMFailure("auth_error", message, status, retry_after_ms, request_id)
         if status == 429:
-            return LLMFailure("rate_limit", message, status)
+            return LLMFailure("rate_limit", message, status, retry_after_ms, request_id)
         if status in (400, 404, 422):
-            return LLMFailure("bad_request", message, status)
+            return LLMFailure("bad_request", message, status, retry_after_ms, request_id)
         if status == 413:
-            return LLMFailure("context_exceeded", message, status)
+            return LLMFailure("context_exceeded", message, status, retry_after_ms, request_id)
         if status in (408, 504):
-            return LLMFailure("timeout", message, status)
+            return LLMFailure("timeout", message, status, retry_after_ms, request_id)
         if status == 529:
-            return LLMFailure("overloaded", message, status)
+            return LLMFailure("overloaded", message, status, retry_after_ms, request_id)
         if 500 <= status < 600:
-            return LLMFailure("server_error", message, status)
+            return LLMFailure("server_error", message, status, retry_after_ms, request_id)
 
     name = type(exc).__name__
     lowered = f"{name}: {message}".lower()
@@ -90,24 +122,24 @@ def classify_exception(exc: BaseException) -> LLMFailure:
     # one-shot retry was skipped on a transient failure. Any exception
     # class whose name contains "timeout" is a timeout.
     if "timeout" in name.lower():
-        return LLMFailure("timeout", message, status)
+        return LLMFailure("timeout", message, status, retry_after_ms, request_id)
     if "cancel" in name.lower() or "abort" in name.lower():
-        return LLMFailure("aborted", message, status)
+        return LLMFailure("aborted", message, status, retry_after_ms, request_id)
     if "timeout" in lowered or "timed out" in lowered:
-        return LLMFailure("timeout", message, status)
+        return LLMFailure("timeout", message, status, retry_after_ms, request_id)
     if "rate" in lowered and "limit" in lowered:
-        return LLMFailure("rate_limit", message, status)
+        return LLMFailure("rate_limit", message, status, retry_after_ms, request_id)
     if "overload" in lowered:
-        return LLMFailure("overloaded", message, status)
+        return LLMFailure("overloaded", message, status, retry_after_ms, request_id)
     if "connection" in lowered or "resolve" in lowered or "eof" in lowered \
             or "reset" in lowered:
-        return LLMFailure("network_error", message, status)
+        return LLMFailure("network_error", message, status, retry_after_ms, request_id)
     if "context" in lowered and ("exceed" in lowered or "too long" in lowered
                                  or "maximum" in lowered):
-        return LLMFailure("context_exceeded", message, status)
+        return LLMFailure("context_exceeded", message, status, retry_after_ms, request_id)
     if "empty" in lowered:
-        return LLMFailure("empty_response", message, status)
+        return LLMFailure("empty_response", message, status, retry_after_ms, request_id)
     if "auth" in lowered or "unauthorized" in lowered or "forbidden" in lowered \
             or "api key" in lowered:
-        return LLMFailure("auth_error", message, status)
-    return LLMFailure("unknown", message, status)
+        return LLMFailure("auth_error", message, status, retry_after_ms, request_id)
+    return LLMFailure("unknown", message, status, retry_after_ms, request_id)
