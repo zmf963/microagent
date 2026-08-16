@@ -11,7 +11,7 @@ from .core.permission import (
     Rule,
     ScriptRule,
 )
-from .core.store import InMemoryStore, SQLiteStore, Store
+from .core.store import InMemoryStore, SQLiteStore, Store, UnsupportedSessionError
 from .core.tool import FunctionTool, Tool, ToolRegistry, tool
 from .core.types import (
     Event,
@@ -85,6 +85,7 @@ __all__ = [
     "Store",
     "SQLiteStore",
     "InMemoryStore",
+    "UnsupportedSessionError",
     # Event
     "EventBus",
     # LLM

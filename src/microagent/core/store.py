@@ -23,6 +23,15 @@ from typing import Any, Protocol, runtime_checkable
 
 from .types import Message, ToolCall, Usage
 
+
+class UnsupportedSessionError(Exception):
+    """A session row uses an event kind this library version cannot read.
+
+    Raised by _deserialize_message when a stored row has an unknown
+    ``kind`` not marked ignorable. A future-versioned session must not
+    load as a subtly-wrong history — fail loudly instead.
+    """
+
 # ---------------------------------------------------------------------------
 # Store Protocol
 # ---------------------------------------------------------------------------
@@ -37,6 +46,8 @@ class Store(Protocol):
     async def checkpoint(self, session_id: str) -> None: ...
     async def list_sessions(self) -> list[str]: ...
     async def session_summaries(self) -> list[dict[str, Any]]: ...
+    async def record_llm_retry(self, session_id: str, code: str, delay_ms: int) -> None: ...
+    async def last_llm_retry(self, session_id: str, code: str | None = None) -> tuple[str, int] | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +57,7 @@ class Store(Protocol):
 
 def _serialize_message(msg: Message) -> str:
     """Serialize a Message to JSON for SQLite storage."""
-    d: dict[str, Any] = {"role": msg.role, "content": msg.content}
+    d: dict[str, Any] = {"role": msg.role, "content": msg.content, "kind": "message"}
     if msg.tool_calls:
         d["tool_calls"] = [
             {"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in msg.tool_calls
@@ -65,8 +76,19 @@ def _serialize_message(msg: Message) -> str:
 
 
 def _deserialize_message(data: str) -> Message:
-    """Deserialize a Message from JSON."""
+    """Deserialize a Message from JSON.
+
+    deepseek-harness parity (ignorable-defaulted-required vocabulary):
+    an unknown ``kind`` that is NOT marked ignorable raises
+    UnsupportedSessionError instead of being silently misread — a
+    future-versioned session must never load as a subtly-wrong history.
+    """
     d = json.loads(data)
+    kind = d.get("kind", "message")
+    if kind != "message" and not d.get("ignorable", False):
+        raise UnsupportedSessionError(
+            f"unsupported session event kind {kind!r} (not ignorable)"
+        )
     tool_calls = ()
     if "tool_calls" in d:
         tool_calls = tuple(
@@ -135,6 +157,22 @@ class SQLiteStore:
             )
         """)
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id, seq)")
+        # LLM retry ledger (deepseek-harness parity: retry history
+        # reconstructed from the session log, not memory). Backoff
+        # continuation survives process restarts — the runner reads the
+        # last matching row instead of in-memory counters.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_retry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                ts REAL NOT NULL,
+                code TEXT NOT NULL,
+                delay_ms INTEGER NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_retry ON llm_retry(session_id, id)"
+        )
 
     async def append(self, session_id: str, msg: Message) -> None:
         serialized = _serialize_message(msg)
@@ -162,10 +200,15 @@ class SQLiteStore:
             # Per-row tolerance, mirroring session_summaries: one corrupt
             # JSON blob (disk corruption, interrupted write) must not kill
             # the whole session resume path (CLI / cron / runner).
+            # UnsupportedSessionError is NOT swallowed — an unknown
+            # non-ignorable kind must fail loudly, not load as a
+            # subtly-wrong history (dsh ignorable-defaulted-required).
             out: list[Message] = []
             for r in rows:
                 try:
                     out.append(_deserialize_message(r[0]))
+                except UnsupportedSessionError:
+                    raise
                 except Exception:
                     continue
             return out
@@ -178,6 +221,48 @@ class SQLiteStore:
             await asyncio.to_thread(
                 lambda: self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             )
+
+    async def record_llm_retry(
+        self, session_id: str, code: str, delay_ms: int
+    ) -> None:
+        """Append one LLM retry event to the ledger."""
+        import time
+
+        def _record():
+            self._conn.execute(
+                "INSERT INTO llm_retry (session_id, ts, code, delay_ms) "
+                "VALUES (?, ?, ?, ?)",
+                (session_id, time.time(), code, delay_ms),
+            )
+
+        async with self._lock:
+            await asyncio.to_thread(_record)
+
+    async def last_llm_retry(
+        self, session_id: str, code: str | None = None
+    ) -> tuple[str, int] | None:
+        """Return (code, delay_ms) of the last retry for this session.
+
+        ``code`` filters to matching failure codes when given. None when
+        the session has no recorded retry — backoff starts fresh.
+        """
+        def _last():
+            if code is None:
+                row = self._conn.execute(
+                    "SELECT code, delay_ms FROM llm_retry "
+                    "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT code, delay_ms FROM llm_retry "
+                    "WHERE session_id = ? AND code = ? ORDER BY id DESC LIMIT 1",
+                    (session_id, code),
+                ).fetchone()
+            return row
+
+        async with self._lock:
+            return await asyncio.to_thread(_last)
 
     async def list_sessions(self) -> list[str]:
         def _list():
@@ -243,6 +328,20 @@ class InMemoryStore:
         self._data: dict[str, list[Message]] = {}
         self._seq: int = 0  # global append counter
         self._last_seq: dict[str, int] = {}  # session_id → last append seq
+        self._retries: list[tuple[str, str, int]] = []  # (session_id, code, delay_ms)
+
+    async def record_llm_retry(
+        self, session_id: str, code: str, delay_ms: int
+    ) -> None:
+        self._retries.append((session_id, code, delay_ms))
+
+    async def last_llm_retry(
+        self, session_id: str, code: str | None = None
+    ) -> tuple[str, int] | None:
+        for sid, c, delay in reversed(self._retries):
+            if sid == session_id and (code is None or c == code):
+                return (c, delay)
+        return None
 
     async def append(self, session_id: str, msg: Message) -> None:
         self._data.setdefault(session_id, []).append(msg)
