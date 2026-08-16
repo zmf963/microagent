@@ -912,6 +912,20 @@ class SessionRunner:
                 ):
                     self._stream_retried = True
                     self._stream_retry_free = True  # don't charge the retry pass
+                    # Retry ledger (dsh parity): the retry event lands in
+                    # the store so backoff continuation survives restarts
+                    # and consumers can audit retry spend. Provider
+                    # Retry-After hint wins; otherwise the default delay.
+                    if self.store is not None and hasattr(
+                        self.store, "record_llm_retry"
+                    ):
+                        delay_ms = failure.retry_after_ms or 1_000
+                        try:
+                            await self.store.record_llm_retry(
+                                sid, failure.code, delay_ms
+                            )
+                        except Exception:
+                            pass
                     continue  # retry the turn (re-enters the outer loop)
                 code = "llm_timeout" if failure.code == "timeout" else "llm_error"
                 yield TurnFailed(f"LLM error: {e!r}", code=code)
@@ -1085,6 +1099,12 @@ class SessionRunner:
         """
         results: list[ToolResult | None] = [None] * len(calls)
         progress_events: list[ToolProgressDelta] = []
+        # deepseek-harness parity (bodyInvoked classification): a
+        # cancelled tool is either ABORTED_BEFORE_DISPATCH (body never
+        # ran — safe to re-run) or ABORTED (body ran, then was
+        # cancelled — re-running may duplicate side effects). The
+        # metadata code lets callers/replay distinguish the two.
+        body_invoked: list[bool] = [False] * len(calls)
 
         # Global concurrency cap. 10 mirrors dsh's default.
         MAX_PARALLEL_TOOL_CALLS = 10
@@ -1172,8 +1192,10 @@ class SessionRunner:
                 async with _parallel_slots:
                     if _is_exclusive(call.name):
                         async with _exclusive_lock:
+                            body_invoked[idx] = True
                             result = await _execute_stream(call)
                     else:
+                        body_invoked[idx] = True
                         result = await _execute_stream(call)
 
                 for hook in self.tool_hooks:
@@ -1220,10 +1242,17 @@ class SessionRunner:
         # before yielding TurnFailed(interrupted); on resume the model
         # must see "interrupted: tool execution cancelled", not a bare
         # "not executed (cancelled)" that reads like an ordinary error.
+        # dsh bodyInvoked parity: the metadata code tells replay/retry
+        # whether the body ever ran.
         if self._interrupt_requested:
             final = [
-                r if r is not None else ToolResult.error("interrupted: tool execution cancelled")
-                for r in results
+                r if r is not None else ToolResult.error(
+                    "interrupted: tool execution cancelled",
+                    metadata={
+                        "code": "ABORTED" if body_invoked[i] else "ABORTED_BEFORE_DISPATCH",
+                    },
+                )
+                for i, r in enumerate(results)
             ]
         else:
             final = [

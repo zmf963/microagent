@@ -107,8 +107,8 @@ class ToolResult:
         return cls(content=content)
 
     @classmethod
-    def error(cls, msg: str) -> ToolResult:
-        return cls(content=msg, is_error=True)
+    def error(cls, msg: str, metadata: dict[str, Any] | None = None) -> ToolResult:
+        return cls(content=msg, is_error=True, metadata=metadata)
 
     @classmethod
     def denied(cls, reason: str) -> ToolResult:
