@@ -48,6 +48,7 @@ class Store(Protocol):
     async def session_summaries(self) -> list[dict[str, Any]]: ...
     async def record_llm_retry(self, session_id: str, code: str, delay_ms: int) -> None: ...
     async def last_llm_retry(self, session_id: str, code: str | None = None) -> tuple[str, int] | None: ...
+    async def flush(self, session_id: str) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +223,19 @@ class SQLiteStore:
                 lambda: self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             )
 
+    async def flush(self, session_id: str) -> None:
+        """Durability barrier: make this session's writes visible to other
+        connections/processes before reporting turn completion.
+
+        dsh session/flush parity. PASSIVE keeps the WAL in place (fast,
+        non-blocking) while ensuring readers on other connections see
+        the committed rows.
+        """
+        async with self._lock:
+            await asyncio.to_thread(
+                lambda: self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            )
+
     async def record_llm_retry(
         self, session_id: str, code: str, delay_ms: int
     ) -> None:
@@ -352,6 +366,9 @@ class InMemoryStore:
         return list(self._data.get(session_id, []))
 
     async def checkpoint(self, session_id: str) -> None:
+        pass
+
+    async def flush(self, session_id: str) -> None:
         pass
 
     async def list_sessions(self) -> list[str]:
