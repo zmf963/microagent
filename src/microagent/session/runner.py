@@ -520,7 +520,7 @@ class SessionRunner:
                 await self._persist_user_tail(last, sid)
 
         self._overflow_retried = False
-        self._stream_retried = False  # one-shot stream-error retry per turn
+        self._stream_retries = 0  # stream-error retries consumed this turn (policy-capped)
         self._stream_retry_free = False  # next loop pass is the retry — don't charge an iteration
         self._interrupt_requested = False
         # NOTE: _steer_pending is intentionally NOT cleared here. A steer
@@ -922,11 +922,10 @@ class SessionRunner:
 
                     retry_policy = RetryPolicy()
                 if (
-                    not self._stream_retried
-                    and not _stream_got_output
-                    and retry_policy.allows_retry(failure.code, 0)
+                    not _stream_got_output
+                    and retry_policy.allows_retry(failure.code, self._stream_retries)
                 ):
-                    self._stream_retried = True
+                    self._stream_retries += 1
                     self._stream_retry_free = True  # don't charge the retry pass
                     # Retry ledger (dsh parity): the retry event lands in
                     # the store so backoff continuation survives restarts
@@ -1103,6 +1102,15 @@ class SessionRunner:
                 tc.name == "exit" and r.content.strip() == "[SESSION_EXIT]"
                 for tc, r in zip(tool_calls, results)
             ):
+                # Flush barrier before completion — this path yields
+                # TurnComplete in the SAME iteration (unlike text turns
+                # which complete on a later pass), so the barrier must
+                # fire here too or the durability promise breaks.
+                if self.store is not None and hasattr(self.store, "flush"):
+                    try:
+                        await self.store.flush(sid)
+                    except Exception:
+                        pass
                 yield TurnComplete("(session ended by exit tool)")
                 return
 
@@ -1232,6 +1240,18 @@ class SessionRunner:
 
                 results[idx] = result
             except Exception as e:
+                # The body raised — but if it raised BEFORE any side
+                # effect (connect failure, argument validation), the
+                # body_invoked flag must NOT stay True: an interrupt in
+                # the same window would misclassify this tool as
+                # 'ABORTED' (body ran — re-run may duplicate side
+                # effects) when it never dispatched. dsh's bodyInvoked
+                # classification tracks whether the tool's execute
+                # function was ENTERED AND completed normally; a raised
+                # exception means the classification is unknown — the
+                # conservative safe-to-rerun code is
+                # ABORTED_BEFORE_DISPATCH.
+                body_invoked[idx] = False
                 results[idx] = ToolResult.error(f"{call.name} failed: {e!r}")
 
         async def _execute_stream(call: ToolCall) -> ToolResult:
