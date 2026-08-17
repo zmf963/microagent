@@ -181,14 +181,18 @@ class CompositeSkillLoader:
 
     async def match(self, user_input: str) -> tuple[LoadedSkill, ...]:
         all_matches: list[LoadedSkill] = []
-        seen: set[str] = set()
+        best: dict[str, LoadedSkill] = {}
         for backend in self._backends:
             for m in await backend.match(user_input):
                 key = f"{m.skill.namespace}:{m.skill.name}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                all_matches.append(m)
+                # Keep the HIGHEST-scoring match per key, not the first:
+                # first-wins meant a 0.45 backend entry shadowed a 0.95
+                # entry from a later backend — consumers saw a low-quality
+                # match with possibly stale description/body.
+                current = best.get(key)
+                if current is None or m.match_score > current.match_score:
+                    best[key] = m
+        all_matches = list(best.values())
         all_matches.sort(key=lambda m: m.match_score, reverse=True)
         return tuple(all_matches[:5])
 

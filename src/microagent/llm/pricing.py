@@ -235,12 +235,19 @@ def refresh(timeout: float = 20.0) -> int:
         mid = m.get("id")
         if not mid:
             continue
-        p = m.get("pricing", {}) or {}
-        try:
-            inp = float(p.get("prompt", 0)) * 1_000_000
-            out = float(p.get("completion", 0)) * 1_000_000
-        except (TypeError, ValueError):
-            continue
+        p = m.get("pricing", {})
+        if p is None:
+            # models.dev represents FREE models with pricing: null — the
+            # old code skipped them, so a refresh flipped free tiers to
+            # the conservative $0.50/1M fallback and could falsely trip
+            # BudgetExceeded. Preserve free models at (0.0, 0.0).
+            inp, out = 0.0, 0.0
+        else:
+            try:
+                inp = float(p.get("prompt", 0)) * 1_000_000
+                out = float(p.get("completion", 0)) * 1_000_000
+            except (TypeError, ValueError):
+                continue
         ctx = m.get("context_length")
         new_cache[mid] = {
             "name": m.get("name", mid),
