@@ -31,7 +31,15 @@ _current_backend: contextvars.ContextVar = contextvars.ContextVar(
 
 def set_backend(backend: object | None) -> None:
     """Bind a TerminalBackend (or None = hardened local path) for the
-    current context. The runner binds its per-session backend in _settle."""
+    current context. The runner binds its per-session backend in _settle.
+
+    NOTE for library users: the runner rebinds on EVERY tool execution —
+    a direct set_backend() call is overwritten by the runner's own
+    terminal_backend (typically None) on the next bash call in a turn.
+    To route a runner's bash permanently, construct it with
+    ``SessionRunner(terminal_backend=...)``; use set_backend only for
+    direct (runner-less) tool invocation.
+    """
     _current_backend.set(backend)
 
 
@@ -138,9 +146,17 @@ async def _run_via_backend(backend, command: str, timeout: int) -> ToolResult:
     except Exception as e:
         return ToolResult.error(f"bash backend failed: {e!r}")
 
-    output = result.stdout or ""
-    if result.stderr and not output.endswith(result.stderr):
-        output = f"{output}\n{result.stderr}".strip() or output
+    # stderr merge: append stderr as a marked section unless it is empty
+    # or a byte-identical duplicate of stdout (a backend that already
+    # merged streams). The old endswith() heuristic dropped a DISTINCT
+    # stderr whenever stdout happened to end with the same text, and
+    # merged stream-equal stderr as if distinct.
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    if stderr and stderr != stdout and not stdout.endswith("\n" + stderr):
+        output = f"{stdout}\n[stderr]\n{stderr}".strip()
+    else:
+        output = stdout
 
     if result.timed_out:
         return ToolResult.error(

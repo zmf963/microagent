@@ -48,13 +48,22 @@ class RetryPolicy:
 
     @classmethod
     def from_str(cls, spec: str) -> RetryPolicy:
-        """Parse 'normal', 'always:5', 'never' etc."""
+        """Parse 'normal', 'always:5', 'never' etc.
+
+        Invalid specs raise ValueError — silently coercing 'alwayz' to
+        'normal' changed production retry behavior with no signal. The
+        constructor raises for bad modes; from_str must match.
+        """
         spec = spec.strip()
         if spec.startswith("always"):
             parts = spec.split(":", 1)
             n = int(parts[1]) if len(parts) > 1 and parts[1].strip().isdigit() else 3
+            if len(parts) > 1 and not parts[1].strip().isdigit():
+                raise ValueError(f"invalid retry spec {spec!r}: always:N needs an integer N")
             return cls(mode="always", max_retries=n)
-        return cls(mode=spec if spec in ("normal", "never") else "normal")
+        if spec in ("normal", "never"):
+            return cls(mode=spec)
+        raise ValueError(f"invalid retry mode {spec!r} — use normal|always[:N]|never")
 
     def allows_retry(self, failure_code: str, attempts_so_far: int) -> bool:
         """Whether one more retry is permitted for this failure.

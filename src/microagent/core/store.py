@@ -239,7 +239,12 @@ class SQLiteStore:
     async def record_llm_retry(
         self, session_id: str, code: str, delay_ms: int
     ) -> None:
-        """Append one LLM retry event to the ledger."""
+        """Append one LLM retry event to the ledger.
+
+        The ledger is pruned to the most recent 100 rows per session —
+        a flaky gateway writing dozens of rows per session must not grow
+        sessions.db without bound.
+        """
         import time
 
         def _record():
@@ -247,6 +252,12 @@ class SQLiteStore:
                 "INSERT INTO llm_retry (session_id, ts, code, delay_ms) "
                 "VALUES (?, ?, ?, ?)",
                 (session_id, time.time(), code, delay_ms),
+            )
+            self._conn.execute(
+                "DELETE FROM llm_retry WHERE session_id = ? AND id NOT IN ("
+                "SELECT id FROM llm_retry WHERE session_id = ? "
+                "ORDER BY id DESC LIMIT 100)",
+                (session_id, session_id),
             )
 
         async with self._lock:
