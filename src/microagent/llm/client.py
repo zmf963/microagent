@@ -61,6 +61,9 @@ class LLMConfig:
         reasoning_effort: For o-series models — 'low', 'medium', 'high'
         service_tier: OpenAI service tier — 'auto', 'default', 'flex'
         auxiliary_model: Optional cheaper/faster model for compression
+        retry_policy: Per-provider retry policy string or RetryPolicy
+            ('normal' default | 'always[:N]' | 'never') — the policy
+            travels WITH the route (dsh parity), not as a global.
     """
 
     base_url: str
@@ -69,6 +72,16 @@ class LLMConfig:
     reasoning_effort: str | None = None
     service_tier: str | None = None
     auxiliary_model: str | None = None
+    retry_policy: object = "normal"  # str spec or RetryPolicy (lazy import)
+
+    def resolved_retry_policy(self):
+        """Return the RetryPolicy object for this config (lazy import to
+        avoid a circular llm/errors → llm/retry chain at module load)."""
+        from .retry import RetryPolicy
+
+        if isinstance(self.retry_policy, RetryPolicy):
+            return self.retry_policy
+        return RetryPolicy.from_str(str(self.retry_policy))
 
 
 # ---------------------------------------------------------------------------
