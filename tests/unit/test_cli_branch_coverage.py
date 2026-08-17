@@ -982,7 +982,7 @@ class TestCmdModelClosesOldLlm:
                 closed.append(True)
 
         config = SimpleNamespace(llm=LLMConfig("http://x/v1", "k", "old-model"))
-        runner = SimpleNamespace(memory=None, mode="build", llm=CloseableLLM())
+        runner = SimpleNamespace(memory=None, mode="build", llm=CloseableLLM(), _extractor=None)
         st = make_state(monkeypatch, runner=runner, config=config)
         await cli._cmd_model(st, "new-model")
         assert closed == [True]
@@ -995,6 +995,9 @@ class TestCmdModelClosesOldLlm:
 
         config = SimpleNamespace(llm=LLMConfig("http://x/v1", "k", "old-model"))
         st = make_state(monkeypatch, config=config)
+        # the default state agent has a real runner without _extractor —
+        # _cmd_model must tolerate that (extractor rebuild only when present)
+        st.agent.runner._extractor = None
         await cli._cmd_model(st, "new-model")
         assert "Model switched" in _out(st)
         assert st.agent.runner.llm.config.model == "new-model"

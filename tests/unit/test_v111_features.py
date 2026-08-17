@@ -130,7 +130,11 @@ class TestRetryPolicy:
         assert RetryPolicy.from_str("always:5").max_retries == 5
         assert RetryPolicy.from_str("always").max_retries == 3
         assert RetryPolicy.from_str("never").mode == "never"
-        assert RetryPolicy.from_str("garbage").mode == "normal"
+        # invalid specs now raise instead of silently coercing to 'normal'
+        with pytest.raises(ValueError):
+            RetryPolicy.from_str("garbage")
+        with pytest.raises(ValueError):
+            RetryPolicy.from_str("always:abc")
 
     def test_config_resolves_policy(self):
         cfg = LLMConfig("fake", "k", "m", retry_policy="never")
