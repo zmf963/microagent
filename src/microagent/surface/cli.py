@@ -28,6 +28,7 @@ from rich.theme import Theme
 
 from ..agent import Agent
 from ..config import Config
+from ..core.store import UnsupportedSessionError
 from ..core.types import (
     Message,
     TextDelta,
@@ -272,7 +273,9 @@ async def _main():
         store.close()
         return
 
-    console.print(f"[info]MicroAgent v1.0.0[/]  (model={config.llm.model})")
+    from .. import __version__
+
+    console.print(f"[info]MicroAgent v{__version__}[/]  (model={config.llm.model})")
     console.print(f"Session: {session_id}")
     console.print("Commands: /new /list /resume /compact /model /history /skill /clear /cost /plan /build /thinking | Tab completes /commands | Esc×2 to interrupt | Ctrl-D to exit\n")
 
@@ -311,7 +314,19 @@ async def _main():
             handler_entry = _COMMANDS.get(cmd)
             if handler_entry:
                 handler, _desc = handler_entry
-                await handler(repl_state, arg)
+                try:
+                    await handler(repl_state, arg)
+                except UnsupportedSessionError:
+                    # A future-versioned session row must not kill the
+                    # whole REPL — surface it as an error panel.
+                    console.print(
+                        "[error]✗[/] This session was written by a newer "
+                        "library version and cannot be read by this build."
+                    )
+                except Exception as e:
+                    console.print(
+                        f"[error]✗[/] Command /{cmd} failed: {e!r}"
+                    )
             else:
                 console.print(f"[error]✗[/] Unknown command: /{cmd}. Type /help for available commands.")
 
@@ -793,11 +808,32 @@ async def _cmd_model(state: ReplState, arg: str) -> None:
         reasoning_effort=config.llm.reasoning_effort,
         service_tier=config.llm.service_tier,
         auxiliary_model=config.llm.auxiliary_model,
+        # Preserve the per-provider retry policy across the switch —
+        # dropping it silently reverted 'never'/'always:N' to 'normal'.
+        retry_policy=config.llm.retry_policy,
     )
     old_llm = state.agent.runner.llm
     if hasattr(old_llm, "close"):
         await old_llm.close()
     state.agent.runner.llm = OpenAIChatClient(new_llm_config)
+    # The memory extractor captured the OLD credentials at runner
+    # construction — it kept calling the previous endpoint/model after
+    # the switch (silently failing or billing the wrong provider).
+    # Rebuild it against the new config (fire-and-forget extraction only).
+    extractor = state.agent.runner._extractor
+    if extractor is not None:
+        from ..memory.extractor import MemoryExtractor
+
+        try:
+            await extractor.close()
+        except Exception:
+            pass
+        state.agent.runner._extractor = MemoryExtractor(
+            provider=state.agent.runner.memory,
+            base_url=new_llm_config.base_url,
+            api_key=new_llm_config.api_key,
+            model=new_llm_config.auxiliary_model or new_llm_config.model,
+        )
     console.print(f"[success]✓[/] Model switched to: {arg}")
 
 
