@@ -1082,3 +1082,33 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 ### 发布验证
 - wheel 构建 ✅(microagent-1.1.0-py3-none-any.whl)
 - 干净 venv 安装 + import + 新导出验证 ✅
+
+---
+
+## 二十三、第二十轮:v1.1.1 — absorb-later 低风险三项 — 2026-08-16
+
+> 将 absorb-later 清单中的 C(flush 屏障)/D(重试策略)/B(TerminalBackend 接缝)
+> 落地。基线 1559 passed → **1579 passed, 1 skipped**。
+> 5 个 commit:`2d38fec`/`b607728`/`3e75b05`/`0c4ed4e`/`d398b61`。
+> 版本 1.1.0 → **1.1.1**。
+
+### 22.1 flush 屏障(session/flush parity)✅ (2d38fec)
+- `Store.flush(session_id)`(SQLite: WAL PASSIVE;InMemory: no-op);
+  runner 在 TurnComplete 前 flush——完成后立即崩溃不丢最后一轮。
+  可选 Protocol 方法(自定义 store 跳过),失败静默。
+
+### 22.2 每-provider RetryPolicy ✅ (b607728, 0c4ed4e)
+- `RetryPolicy(mode=normal|always|never, max_retries)` 随 LLMConfig 路由;
+  'never' provider 不再烧一次性重试。顶层导出(68 符号)。
+
+### 22.3 bash TerminalBackend 接缝(能力族迁移)✅ (3e75b05, 0c4ed4e)
+- `bash_current_backend` ContextVar;绑定后 bash 走 TerminalBackend
+  (docker/SSH),TerminalResult 翻译为 bash 契约。LocalTerminal 的
+  communicate() 无界缓冲,故默认仍走硬化本地路径(有意为之)。
+- `SessionRunner(terminal_backend=)`/`Agent.from_config(terminal_backend=)`
+  per-task 绑定——换后端迁移整个能力族。
+
+### 候选留存(下轮)
+- **surfaceOp replace-fold 事件溯源**(absorb-later 唯一大项,v1.2.0 立项)
+- process 工具同款 backend 接缝(bash 已打样,process 待跟)
+- 集成测试矩阵常态化

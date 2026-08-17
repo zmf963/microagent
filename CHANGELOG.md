@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.1 (2026-08-16)
+
+absorb-later 低风险三项落地:flush 屏障、每-provider 重试策略、
+bash TerminalBackend 接缝。
+
+### Added
+- **flush 屏障**(dsh `session/flush` parity):`Store.flush(session_id)`
+  (SQLite: WAL PASSIVE checkpoint;InMemory: no-op);runner 在
+  TurnComplete 前 flush——完成后立即崩溃也不丢最后一轮。自定义
+  store 无 flush() 时跳过,flush 失败静默降级。
+- **RetryPolicy**(dsh retry-policy parity):`RetryPolicy(mode=normal|
+  always|never, max_retries)` 随 LLMConfig 路由携带——全局可重试词表
+  无法表达"此网关 500 恢复快,激进重试"vs"此 provider 的 500 是 bug,
+  不重试"。`LLMConfig.retry_policy` 接受字符串规格或对象。顶层导出
+  (68 符号)。
+- **bash TerminalBackend 接缝**:`bash_current_backend` ContextVar;绑定
+  后 bash 经 TerminalBackend 执行(docker 隔离/SSH 远程),TerminalResult
+  翻译为 bash 契约(exit-code 后缀、超时部分输出、后端异常→工具错误)。
+  `SessionRunner(terminal_backend=)` / `Agent.from_config(terminal_backend=)`
+  per-task 绑定——换后端即迁移整个能力族,不改工具本身。
+
+### Changed
+- runner 流重试改由 `resolved_retry_policy()` 决策(替代裸
+  `is_retryable`);'never' 的 provider 不再烧一次性重试。
+
 ## 1.1.0 (2026-08-16)
 
 deepseek-harness 吸收批次 — absorb-now 四项 + 发布整理。
