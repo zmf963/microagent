@@ -1,8 +1,20 @@
-"""bash builtin tool — execute shell commands via async subprocess."""
+"""bash builtin tool — execute shell commands via async subprocess.
+
+Capability-family seam: a ``TerminalBackend`` (Local/Docker/SSH) can be
+bound per-session via the ``bash_current_backend`` ContextVar. When bound,
+bash delegates to it — swapping the backend migrates the whole capability
+family (docker isolation, remote SSH execution) without touching the
+tool. When unbound (default), the hardened local implementation runs:
+incremental bounded reads, process-group kill, timeout with partial
+output. The local implementation is deliberately NOT routed through
+``LocalTerminal`` — that backend's communicate() buffers unbounded
+output; the direct path keeps the 100KB cap.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 import signal
 from typing import Annotated
@@ -11,6 +23,16 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+
+_current_backend: contextvars.ContextVar = contextvars.ContextVar(
+    "bash_current_backend", default=None
+)
+
+
+def set_backend(backend: object | None) -> None:
+    """Bind a TerminalBackend (or None = hardened local path) for the
+    current context. The runner binds its per-session backend in _settle."""
+    _current_backend.set(backend)
 
 
 def _kill_proc_group(proc: asyncio.subprocess.Process) -> None:
@@ -33,6 +55,10 @@ async def bash(
     command: Annotated[str, Field(description="The shell command to execute")],
     timeout: Annotated[int, Field(description="Timeout in seconds", ge=1, le=600)] = 120,
 ) -> ToolResult:
+    backend = _current_backend.get()
+    if backend is not None:
+        return await _run_via_backend(backend, command, timeout)
+
     MAX_OUTPUT = 100_000  # prevent OOM from runaway output
 
     proc = await asyncio.create_subprocess_shell(
@@ -95,3 +121,31 @@ async def bash(
         except Exception:
             pass
         raise
+
+
+async def _run_via_backend(backend, command: str, timeout: int) -> ToolResult:
+    """Route a bash call through a bound TerminalBackend.
+
+    The backend runs in an isolated/remote environment (docker container,
+    SSH host). Its result is translated into the bash tool's contract:
+    non-zero exit or timeout → error ToolResult with the same suffix
+    conventions as the local path.
+    """
+    try:
+        result = await backend.run(command, timeout=timeout)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        return ToolResult.error(f"bash backend failed: {e!r}")
+
+    output = result.stdout or ""
+    if result.stderr and not output.endswith(result.stderr):
+        output = f"{output}\n{result.stderr}".strip() or output
+
+    if result.timed_out:
+        return ToolResult.error(
+            f"command timed out after {timeout}s\npartial output:\n{output}"
+        )
+    if result.exit_code != 0:
+        return ToolResult.error(f"{output}\n[exit code: {result.exit_code}]")
+    return ToolResult.ok(output if output else "(no output)")

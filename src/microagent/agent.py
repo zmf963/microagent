@@ -48,6 +48,7 @@ class Agent:
         permission_engine: PermissionEngine | None = None,
         memory: Any | None | bool = None,
         memory_write_approval: bool = False,
+        terminal_backend: object | None = None,
     ) -> Agent:
         """Build an Agent.
 
@@ -123,6 +124,7 @@ class Agent:
             skill_loader=skill_loader,
             permission_engine=permission_engine,
             memory=memory_provider,
+            terminal_backend=terminal_backend,
         )
         agent = cls(runner=runner, registry=registry)
 
