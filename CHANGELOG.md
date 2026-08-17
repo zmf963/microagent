@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.2 (2026-08-16)
+
+第二十一轮审查修复批——v1.1.x 新代码 + 交叉组合 + CLI/配置/打包面。
+
+### Fixed
+- **body_invoked 分类损坏**:工具主体抛异常时标志残留 True,中断窗口内
+  错误结果被误标 `ABORTED`(重放会拒绝重跑从未派发的工具)。错误路径复位。
+- **子代理沙箱/权限逃逸**:子代理未继承 `terminal_backend`/`permission_engine`,
+  且每轮重绑 backend=None——Docker/SSH 隔离的父代理,子代理 bash 在**主机**
+  执行;权限引擎同样被丢弃。两者现在继承。
+- **/model 提取器凭据陈旧**:切换模型后 MemoryExtractor 仍调用旧端点/
+  旧 key/旧 model。重建提取器;`retry_policy` 保留。
+- **REPL 无异常守卫**:未来版本会话行(/resume 触发
+  `UnsupportedSessionError`)杀死整个 REPL。分发处守卫 → 错误面板。
+- **exit-tool 路径跳过 flush 屏障**;`always:N` 重试被一次性重试门
+  静默降级为 1 次(计数替代布尔)。
+- `RetryPolicy.from_str` 非法规格静默转 normal → 现 raise;
+  `llm_retry` 账本无界 → 每会话修剪 100 行。
+- bash 后端 stderr `endswith` 误去重(丢弃独立 stderr)→ 标记段合并。
+- CompositeSkillLoader first-wins 遮蔽高分匹配 → 保留最高分。
+- `pricing.refresh` 丢弃免费模型(pricing:null)→ 保留 (0.0, 0.0),
+  不再翻成 $0.50 fallback 误触 BudgetExceeded。
+- config 平铺布局静默忽略 → 响亮告警;`auxiliary_model`/
+  `reasoning_effort`/`service_tier`/`retry_policy` 支持 env/文件。
+- 打包元数据:过期描述、PyPI 非法 `.local` URLs、硬编码 v1.0.0 横幅。
+
 ## 1.1.1 (2026-08-16)
 
 absorb-later 低风险三项落地:flush 屏障、每-provider 重试策略、

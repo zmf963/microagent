@@ -1112,3 +1112,58 @@ Agent.close 接线 cleanup_expired；删 runner 同步死代码 `_process_tool_o
 - **surfaceOp replace-fold 事件溯源**(absorb-later 唯一大项,v1.2.0 立项)
 - process 工具同款 backend 接缝(bash 已打样,process 待跟)
 - 集成测试矩阵常态化
+
+---
+
+## 二十四、第二十一轮:三路审查 + 修复(v1.1.2)— 2026-08-16
+
+> 方法:三路并行(v1.1.x 新代码 / 交叉组合 / CLI-配置-打包面),
+> 全部发现经探针/源码验证(证伪 8 项)。基线 1579 passed → **1590 passed, 1 skipped**。
+> 7 个 fix commit:`f3f3d8a`/`f940a46`/`2f94e3a`/`c23d54a`/`d9772c6`/`b103774`/`800e911`。
+
+### 🔴 严重(全部已修复)
+
+**23.1 body_invoked 分类损坏** ✅ (f3f3d8a)
+- 工具主体抛异常(副作用前)时 `body_invoked` 残留 True——中断窗口内
+  错误结果被错误标记 ABORTED("主体已运行,重跑有副作用风险"),重放
+  消费者会拒绝重跑从未派发的工具。except 路径置 False。
+
+**23.2 子代理沙箱/权限逃逸** ✅ (f940a46)
+- `SubagentManager.spawn` 未继承 `terminal_backend`/`permission_engine`,
+  且子代理 `_settle` 每次无条件重绑 backend=None——Docker/SSH 隔离的
+  父代理,子代理(general 规格允许 bash)在**主机**上执行命令;权限引擎
+  同理被丢弃。两者现在继承。
+
+**23.3 /model 提取器凭据陈旧** ✅ (2f94e3a)
+- 切换模型后 MemoryExtractor 仍持旧 base_url/api_key/model 调用旧端点
+  (静默失败或记错账单)。重建提取器;顺带保留 retry_policy。
+
+**23.4 REPL 无异常守卫** ✅ (2f94e3a)
+- 斜杠命令裸 await:未来版本会话行(/resume 触发 UnsupportedSessionError)
+  直接杀死整个 REPL。分发处 try/except → 错误面板。
+
+### 🟡 应修复(全部已修复)
+
+**23.5 exit-tool TurnComplete 跳过 flush** ✅ (f3f3d8a) — 同迭代完成,
+补 flush。
+**23.6 'always:N' 被一次性重试门静默降级** ✅ (f3f3d8a) —
+`_stream_retries` 计数替代布尔门。
+**23.7 from_str 静默强制 normal** ✅ (c23d54a) — 非法规格现在 raise。
+**23.8 llm_retry 账本无界** ✅ (c23d54a) — 每会话修剪至 100 行。
+**23.9 后端 stderr endswith 误去重** ✅ (c23d54a) — 标记段合并。
+**23.10 CompositeSkillLoader first-wins 遮蔽高分** ✅ (d9772c6)。
+**23.11 pricing.refresh 丢弃免费模型** ✅ (d9772c6) — pricing:null →
+(0.0, 0.0),不再翻成 $0.50 fallback 误触 BudgetExceeded。
+**23.12 config 平铺布局静默忽略 + 新字段不可配置** ✅ (b103774) —
+flat 布局响亮告警;auxiliary_model/reasoning_effort/service_tier/
+retry_policy 支持 env/文件。
+**23.13 打包元数据** ✅ (b103774) — 过期描述、PyPI 非法 .local URLs、
+硬编码 v1.0.0 横幅。
+
+### 剔除的误报(已逐项验证)
+- 死锁(_turn_lock↔store lock):无环,ledger 写入有 try/except
+- flush×cron/子代理:子代理无 store 不 persist,父 flush 覆盖其 tool_result
+- plan-mode×backend:plan 守卫在 _settle 中先于执行,后端绑定不绕过
+- 'never' 穿透 SDK 层退避:属 create 层独立机制(池轮换同理),runner 层语义正确
+- /list 预览崩溃:session_summaries 有 except 兜底
+- search_sessions kind 泄漏:display-only,低危留档
