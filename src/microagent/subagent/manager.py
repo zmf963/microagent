@@ -130,6 +130,14 @@ class SubagentManager:
             pre_llm_hooks=parent_runner.pre_llm_hooks,
             tool_hooks=parent_runner.tool_hooks,
             context_sources=parent_runner.context_sources,
+            # Capability-family + access-control inheritance (v1.1.2):
+            # dropping these meant a parent with a Docker/SSH
+            # terminal_backend silently ran subagent bash on the HOST
+            # (the child's _settle rebinds the backend to its own None),
+            # and a parent with a PermissionEngine had subagents execute
+            # write tools with zero permission evaluation.
+            terminal_backend=parent_runner.terminal_backend,
+            permission_engine=parent_runner.permission_engine,
         )
 
         # Register child for steer propagation
