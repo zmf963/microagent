@@ -67,9 +67,36 @@ class Config:
             or os.environ.get("MICROAGENT_SKILLS_PATH")
             or file_data.get("skills_path")
         )
+        # auxiliary/reasoning/service_tier/retry_policy were previously
+        # NOT configurable at all — only a hand-built LLMConfig could set
+        # them. Resolve env > file for each.
+        auxiliary_model = (
+            os.environ.get("MICROAGENT_AUXILIARY_MODEL")
+            or file_data.get("auxiliary_model")
+        )
+        reasoning_effort = (
+            os.environ.get("MICROAGENT_REASONING_EFFORT")
+            or file_data.get("reasoning_effort")
+        )
+        service_tier = (
+            os.environ.get("MICROAGENT_SERVICE_TIER")
+            or file_data.get("service_tier")
+        )
+        retry_policy = (
+            os.environ.get("MICROAGENT_RETRY_POLICY")
+            or file_data.get("retry_policy")
+        )
 
         return cls(
-            llm=LLMConfig(base_url=base_url, api_key=api_key, model=model),
+            llm=LLMConfig(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                auxiliary_model=auxiliary_model,
+                reasoning_effort=reasoning_effort,
+                service_tier=service_tier,
+                retry_policy=retry_policy if retry_policy else "normal",
+            ),
             system_prompt=system_prompt,
             skills_path=skills_path,
         )
@@ -79,7 +106,7 @@ class Config:
         return Path.home() / ".microagent" / "config.yaml"
 
     @staticmethod
-    def _read_config_file() -> dict[str, str]:
+    def _read_config_file() -> dict[str, str | None]:
         path = Config._config_path()
         if not path.exists():
             return {}
@@ -110,10 +137,26 @@ class Config:
         if not isinstance(model_section, dict):
             model_section = {}
 
+        # Flat-layout trap: a user writing base_url/api_key/model at the
+        # top level (the natural flat form) previously got the OpenAI
+        # default endpoint + empty key + gpt-4o with ZERO warning — a
+        # typo'd section name silently rerouted traffic. Warn loudly.
+        if any(k in data for k in ("base_url", "api_key", "model")):
+            _logger.warning(
+                "Config file %s uses a flat layout (top-level base_url/api_key/"
+                "model) — these keys must live under a 'model:' section. "
+                "Flat values are IGNORED; check your config.",
+                path,
+            )
+
         return {
             "base_url": model_section.get("base_url"),
             "api_key": model_section.get("api_key"),
             "model": model_section.get("model"),
+            "auxiliary_model": model_section.get("auxiliary_model"),
+            "reasoning_effort": model_section.get("reasoning_effort"),
+            "service_tier": model_section.get("service_tier"),
+            "retry_policy": model_section.get("retry_policy"),
             "system_prompt": data.get("system_prompt"),
             "skills_path": data.get("skills_path"),
         }
