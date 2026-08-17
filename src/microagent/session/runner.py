@@ -73,6 +73,7 @@ class SessionRunner:
         memory: object = None,
         compression_threshold: int = 0,
         permission_engine: "PermissionEngine | None" = None,
+        terminal_backend: object | None = None,
     ):
         self.llm = llm
         self.registry = registry
@@ -87,6 +88,11 @@ class SessionRunner:
         self.skill_loader = skill_loader
         self.memory = memory
         self.skip_memory = False  # cron turns set this (Hermes: skip_memory=True)
+        # TerminalBackend seam (capability-family parity): when bound,
+        # the bash tool routes through it (docker isolation / SSH remote
+        # execution). Bound per-task in _settle like the other
+        # per-session state. None = hardened local implementation.
+        self.terminal_backend = terminal_backend
         # Idle watchdog on the LLM stream (deepseek-harness parity:
         # streamIdleTimeoutMs). A hung gateway produces no events and no
         # exception — without this the turn blocks forever. 300s default;
@@ -905,10 +911,20 @@ class SessionRunner:
                 from ..llm.errors import classify_exception
 
                 failure = classify_exception(e)
+                # Per-provider retry policy (dsh parity): the policy
+                # travels with the LLMConfig route, not as a global.
+                # 'normal' allows the one-shot retry, 'always' up to N,
+                # 'never' fails even transient errors.
+                try:
+                    retry_policy = self.llm.config.resolved_retry_policy()
+                except Exception:
+                    from ..llm.retry import RetryPolicy
+
+                    retry_policy = RetryPolicy()
                 if (
                     not self._stream_retried
                     and not _stream_got_output
-                    and failure.is_retryable
+                    and retry_policy.allows_retry(failure.code, 0)
                 ):
                     self._stream_retried = True
                     self._stream_retry_free = True  # don't charge the retry pass
@@ -995,6 +1011,16 @@ class SessionRunner:
                             {"role": m.role, "content": m.content} for m in messages[-10:]
                         )
                         await self._extractor.extract_async(history)
+                    except Exception:
+                        pass
+                # Flush barrier (dsh session/flush parity): make the turn
+                # durable BEFORE telling the caller it completed — a crash
+                # right after TurnComplete must not lose the last turn in
+                # WAL-less backends. Optional Protocol method; custom
+                # stores without flush() are skipped.
+                if self.store is not None and hasattr(self.store, "flush"):
+                    try:
+                        await self.store.flush(sid)
                     except Exception:
                         pass
                 yield TurnComplete(assistant_msg.content)
@@ -1143,6 +1169,9 @@ class SessionRunner:
                 _task_module._current_runner.set(self)
                 _mcp_module._current_managers.set(self._mcp_managers)
                 _mcp_module._current_lock.set(self._mcp_connect_lock)
+                from ..tools.builtins import bash as _bash_module
+
+                _bash_module.set_backend(self.terminal_backend)
                 from ..tools.builtins import session_search as _ss
                 _ss._current_store.set(self.store)
                 _sl_mod._set_loader(self.skill_loader)
