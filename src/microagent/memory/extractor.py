@@ -149,13 +149,24 @@ class MemoryExtractor:
             category = line[idx + 1 : -1].strip().lower()
 
             if category in ("fact", "preference", "task"):
+                from ..security.secrets import scrub_secrets
+
+                # Memories persist (500-row LRU) and are re-injected into
+                # future prompts on recall — an API key quoted in chat must
+                # not become a quasi-permanent resident of memory.db.
+                safe_content = scrub_secrets(content)
+                if not safe_content.strip() or safe_content.strip() == _REDACTED_MARK:
+                    continue
                 memories.append(
                     Memory(
                         id=f"extract-{uuid.uuid4().hex[:12]}",
-                        content=content,
+                        content=safe_content,
                         category=category,
                         created_at=time.time(),
                     )
                 )
 
         return tuple(memories)
+
+
+_REDACTED_MARK = "[REDACTED]"
