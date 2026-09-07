@@ -143,3 +143,58 @@ class TestSSHExitCodes:
         assert client.kwargs["port"] == 2222
         assert client.kwargs["password"] == "p"
         assert client.closed
+
+
+class TestExecEndToEndTimeout:
+    """Round-22 🟡: recv_exit_status blocks on the server's exit-status
+    event and is not bounded by exec_command's channel-read timeout — a
+    never-exiting remote command must still hit the run() timeout."""
+
+    async def test_never_exiting_command_times_out(self, monkeypatch):
+        import asyncio
+        import sys
+        from unittest.mock import MagicMock
+
+        ssh_mod = sys.modules["microagent.terminal.ssh"]
+        term = ssh_mod.SSHTerminal("h")
+
+        class _Chan:
+            """Mirrors paramiko channel semantics: recv_exit_status blocks
+            until the channel closes (real: until the server sends a
+            status or the transport dies)."""
+
+            def __init__(self):
+                import threading
+
+                self._closed = threading.Event()
+
+            def recv_exit_status(self):
+                self._closed.wait()
+                return -1
+
+            def close(self):
+                self._closed.set()
+
+        class _Pipe:
+            def __init__(self, chan):
+                self.channel = chan
+
+            def read(self):
+                self.channel._closed.wait()
+                return b""
+
+        chan = _Chan()
+        fake_client = MagicMock()
+        fake_client.connect = lambda **kw: None
+        fake_client.exec_command = lambda cmd, timeout=None: (
+            MagicMock(),
+            _Pipe(chan),
+            _Pipe(chan),
+        )
+        monkeypatch.setitem(sys.modules, "paramiko", MagicMock(SSHClient=lambda: fake_client))
+
+        result = await asyncio.wait_for(
+            term.run("sleep infinity", timeout=0.5), timeout=5.0
+        )
+        assert result.exit_code == -1
+        assert "timed out after 0.5s" in result.stderr

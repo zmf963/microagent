@@ -114,9 +114,38 @@ class SSHTerminal:
             stdin, stdout, stderr = await asyncio.to_thread(
                 client.exec_command, full_cmd, timeout=timeout
             )
-            exit_code = await asyncio.to_thread(stdout.channel.recv_exit_status)
-            out = await asyncio.to_thread(stdout.read)
-            err = await asyncio.to_thread(stderr.read)
+
+            # End-to-end timeout: exec_command's timeout bounds channel
+            # READS, but recv_exit_status() blocks on the server's exit
+            # status event and is NOT bounded by it — a remote command
+            # that never exits (`sleep infinity`) would hang run() here
+            # forever, violating the TerminalBackend timeout contract.
+            async def _collect() -> tuple[int, bytes, bytes]:
+                exit_code = await asyncio.to_thread(stdout.channel.recv_exit_status)
+                out = await asyncio.to_thread(stdout.read)
+                err = await asyncio.to_thread(stderr.read)
+                return exit_code, out, err
+
+            try:
+                if timeout is not None:
+                    exit_code, out, err = await asyncio.wait_for(
+                        _collect(), timeout=timeout
+                    )
+                else:
+                    exit_code, out, err = await _collect()
+            except asyncio.TimeoutError:
+                # Closing the channel also unblocks the worker threads
+                # stuck in recv_exit_status/read (paramiko reads return
+                # once the channel closes).
+                try:
+                    stdout.channel.close()
+                except Exception:
+                    pass
+                return TerminalResult.ok(
+                    "",
+                    f"SSH command timed out after {timeout}s: {command[:200]}",
+                    exit_code=-1,
+                )
 
             return TerminalResult.ok(
                 stdout=out.decode("utf-8", errors="replace"),
