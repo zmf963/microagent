@@ -428,6 +428,49 @@ async def _run_streaming(
         # restore them before input() (in cbreak mode readline truncates
         # answers to one keystroke).
         _question_mod._ORIGINAL_TERMIOS = old
+
+        # Dedicated reader thread (NOT asyncio.to_thread): polling stdin
+        # via to_thread in a loop starves the shared default executor —
+        # every timed-out read leaves a worker thread blocked inside an
+        # uninterruptible read syscall, and once pool-size workers pile
+        # up every other to_thread caller (store writes, memory, file
+        # tools, question prompts) deadlocks for the rest of the turn.
+        # A single daemon thread that select()s with a short timeout only
+        # reads when a key is actually ready and stops within 0.1s of the
+        # turn ending, so it also can't steal the REPL prompt's keystrokes
+        # between turns.
+        import os
+        import select
+        import threading
+        import time
+
+        loop = asyncio.get_running_loop()
+        char_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        stop = threading.Event()
+
+        def _stdin_reader() -> None:
+            while not stop.is_set():
+                if _question_mod._QUESTION_ACTIVE.is_set():
+                    # The question tool owns stdin while active (it
+                    # restored cooked mode for input() line editing);
+                    # reading here would steal its keystrokes.
+                    time.sleep(0.05)
+                    continue
+                try:
+                    ready, _, _ = select.select([fd], [], [], 0.1)
+                except (OSError, ValueError):
+                    continue
+                if not ready:
+                    continue
+                try:
+                    ch = os.read(fd, 1)
+                except OSError:
+                    break
+                if ch:
+                    loop.call_soon_threadsafe(char_queue.put_nowait, ch)
+
+        reader = threading.Thread(target=_stdin_reader, daemon=True)
+        reader.start()
         try:
             # Use setcbreak, NOT setraw: setraw disables OPOST (output
             # post-processing), which kills ONLCR (\n → \r\n). In raw mode
@@ -437,24 +480,33 @@ async def _run_streaming(
             # still disabling ECHO/ICANON for single-key Esc detection.
             tty.setcbreak(fd)
             while not _interrupt.is_set():
-                # The question tool needs exclusive stdin: in cbreak mode
-                # this watcher steals single keystrokes from its input().
-                # While a question is pending, stop reading entirely (the
-                # question tool restores cooked mode itself via the
-                # published _ORIGINAL_TERMIOS). Resume watching once it
-                # settles.
+                # The question tool needs exclusive stdin: while a question
+                # is pending it has restored cooked mode for input() line
+                # editing, and single-char reads here would steal its
+                # keystrokes. Pause reading entirely; when it settles,
+                # re-enter cbreak — the question tool left the terminal in
+                # cooked mode, where single-char reads block until a full
+                # line + Enter, so Esc would never register again.
                 if _question_mod._QUESTION_ACTIVE.is_set():
-                    while _question_mod._QUESTION_ACTIVE.is_set() and not _interrupt.is_set():
+                    while (
+                        _question_mod._QUESTION_ACTIVE.is_set()
+                        and not _interrupt.is_set()
+                    ):
                         await asyncio.sleep(0.1)
                     _esc_count = 0
+                    if not _interrupt.is_set():
+                        try:
+                            tty.setcbreak(fd)
+                        except (OSError, termios.error):
+                            pass
                     continue
                 try:
                     ch = await asyncio.wait_for(
-                        asyncio.to_thread(sys.stdin.read, 1), timeout=0.2
+                        char_queue.get(), timeout=0.2
                     )
                 except asyncio.TimeoutError:
                     continue  # poll the question flag again
-                if ch == "\x1b":
+                if ch == b"\x1b":
                     _esc_count += 1
                     if _esc_count >= 2:
                         _interrupt.set()
@@ -466,6 +518,7 @@ async def _run_streaming(
         except (OSError, termios.error):
             pass
         finally:
+            stop.set()
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     _esc_task = asyncio.create_task(_watch_esc())
