@@ -90,6 +90,9 @@ class TestCollectMaterial:
         monkeypatch.setattr("asyncio.to_thread", _ok)
 
         class _Resp:
+            status_code = 200
+            headers: dict = {}
+
             def raise_for_status(self):
                 pass
             text = "fetched body"
@@ -287,3 +290,74 @@ class TestForkedClientClosed:
         assert not result.startswith("[error]"), result
         assert "fork" in closed, "forked auxiliary client was never closed"
         assert "main" not in closed, "must NOT close the shared main client"
+
+
+class TestLearnUrlRedirects:
+    """Round-22 🟡: follow_redirects=False + raise_for_status() raised on
+    3xx (httpx raises for ALL non-2xx), so http→https redirects — the
+    common case — failed every /learn url. Redirects are now followed
+    manually with a per-hop SSRF re-check."""
+
+    async def test_redirect_followed_and_hop_ssrf_enforced(self, monkeypatch):
+        import httpx
+        from microagent.skill.learner import _collect_material
+        from microagent.tools.builtins import web_fetch
+
+        checked_hosts = []
+
+        def _fake_resolve(host):
+            checked_hosts.append(host)
+            if host == "169.254.169.254":
+                return "blocked: link-local address"
+            return None
+
+        monkeypatch.setattr(web_fetch, "_resolve_and_check", _fake_resolve)
+        # learner imports the symbol at call time via module attr lookup —
+        # it does `from ..tools.builtins.web_fetch import _resolve_and_check`
+        # inside the function, so patching the module attribute works.
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "example.com":
+                return httpx.Response(301, headers={"location": "https://secure.example.org/doc"})
+            if request.url.host == "secure.example.org":
+                return httpx.Response(200, text="learned content")
+            if request.url.host == "evil.example":
+                return httpx.Response(302, headers={"location": "http://169.254.169.254/meta"})
+            raise AssertionError(f"unexpected host {request.url.host}")
+
+        transport = httpx.MockTransport(handler)
+        orig_client = httpx.AsyncClient
+
+        def _patched_client(**kwargs):
+            kwargs["transport"] = transport
+            return orig_client(**kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _patched_client)
+
+        out = await _collect_material("http://example.com/doc", "url")
+        assert "learned content" in out
+        assert "example.com" in checked_hosts and "secure.example.org" in checked_hosts
+
+        with pytest.raises(ValueError, match="SSRF"):
+            await _collect_material("http://evil.example/x", "url")
+
+    async def test_redirect_loop_bounded(self, monkeypatch):
+        import httpx
+        from microagent.skill.learner import _collect_material
+        from microagent.tools.builtins import web_fetch
+
+        monkeypatch.setattr(web_fetch, "_resolve_and_check", lambda h: None)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"location": str(request.url)})
+
+        transport = httpx.MockTransport(handler)
+        orig_client = httpx.AsyncClient
+
+        def _patched_client(**kwargs):
+            kwargs["transport"] = transport
+            return orig_client(**kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", _patched_client)
+        with pytest.raises(ValueError, match="too many redirects"):
+            await _collect_material("http://loopy.example/loop", "url")

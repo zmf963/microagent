@@ -153,8 +153,6 @@ async def _collect_material(source: str, kind: str) -> str:
         return "\n".join(lines)
 
     if kind == "url":
-        from ..tools.builtins.web_fetch import _resolve_and_check
-
         from urllib.parse import urlparse
 
         parsed = urlparse(source)
@@ -162,15 +160,37 @@ async def _collect_material(source: str, kind: str) -> str:
             raise ValueError(f"unsupported URL scheme: {parsed.scheme!r}")
         import asyncio
 
-        error = await asyncio.to_thread(_resolve_and_check, parsed.hostname or "")
-        if error is not None:
-            raise ValueError(f"URL blocked by SSRF protection: {error}")
         import httpx
 
+        from ..tools.builtins.web_fetch import _resolve_and_check
+
+        # Manual redirect following with a per-hop SSRF re-check. httpx's
+        # raise_for_status() raises on 3xx when follow_redirects=False, so
+        # the common http→https redirect made EVERY /learn url fail; and
+        # blindly enabling follow_redirects would let a 302 to an internal
+        # host bypass the ORIGINAL url's SSRF check (web_fetch re-checks
+        # per hop for exactly this reason).
+        MAX_REDIRECTS = 5
+        url = source
         async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
-            resp = await client.get(source)
-            resp.raise_for_status()
-            return resp.text[:50_000]
+            for _hop in range(MAX_REDIRECTS + 1):
+                parsed = urlparse(url)
+                if parsed.scheme not in ("http", "https"):
+                    raise ValueError(
+                        f"redirect to unsupported scheme: {parsed.scheme!r}"
+                    )
+                error = await asyncio.to_thread(
+                    _resolve_and_check, parsed.hostname or ""
+                )
+                if error is not None:
+                    raise ValueError(f"URL blocked by SSRF protection: {error}")
+                resp = await client.get(url)
+                if 300 <= resp.status_code < 400 and "location" in resp.headers:
+                    url = str(httpx.URL(url).join(resp.headers["location"]))
+                    continue
+                resp.raise_for_status()
+                return resp.text[:50_000]
+        raise ValueError(f"too many redirects (> {MAX_REDIRECTS})")
 
     raise ValueError(f"unknown kind: {kind!r} (use chat|dir|url)")
 
