@@ -64,10 +64,12 @@ async def learn_skill(
         return "[error] no LLM configured for skill learning"
 
     # Prefer the auxiliary model for the distillation call (cheaper).
+    forked = False
     try:
         distill_llm = llm
         if getattr(llm.config, "auxiliary_model", None):
             distill_llm = llm.for_model(llm.config.auxiliary_model)
+            forked = distill_llm is not llm
     except Exception:
         distill_llm = llm
 
@@ -84,6 +86,14 @@ async def learn_skill(
                 response_text += event.text
     except Exception as e:
         return f"[error] LLM call failed: {e!r}"
+    finally:
+        # The for_model() fork lazily creates its own AsyncOpenAI pool —
+        # release it, or every /learn leaks a live connection pool.
+        if forked:
+            try:
+                await distill_llm.close()
+            except Exception:
+                pass
 
     if not response_text.strip():
         return "[error] LLM returned an empty skill"

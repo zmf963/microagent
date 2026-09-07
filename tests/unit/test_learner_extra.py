@@ -240,3 +240,50 @@ class TestLearnSkillErrors:
         material = await learner._collect_material(str(d), "dir")
         assert "good.txt" in material
         assert "bad.txt" not in material
+
+
+class TestForkedClientClosed:
+    """Round-22 🟡: /learn with an auxiliary_model forked a new LLM client
+    (own AsyncOpenAI pool) and never closed it — one leaked pool per
+    learn/compression call."""
+
+    async def test_learn_closes_forked_client(self, monkeypatch, tmp_path):
+        from microagent.skill import learner as learner_mod
+
+        closed = []
+
+        class _Cfg:
+            auxiliary_model = "cheap-model"
+
+        class _Fork:
+            config = _Cfg()
+
+            async def stream(self, *, system, messages, tools=None):
+                from microagent.core.types import TextDelta
+
+                yield TextDelta(
+                    text="---\nname: learned-thing\ndescription: x\n---\nbody",
+                    kind="content",
+                )
+
+            async def close(self):
+                closed.append("fork")
+
+        class _Main(_Fork):
+            def for_model(self, model):
+                return _Fork()
+
+            async def close(self):
+                closed.append("main")
+
+        async def _material(source, kind):
+            return "material"
+
+        monkeypatch.setattr(learner_mod, "_collect_material", _material)
+        monkeypatch.setattr(learner_mod, "LEARN_PROMPT", "{material}")
+        result = await learner_mod.learn_skill(
+            "chat", llm=_Main(), skills_dir=tmp_path
+        )
+        assert not result.startswith("[error]"), result
+        assert "fork" in closed, "forked auxiliary client was never closed"
+        assert "main" not in closed, "must NOT close the shared main client"

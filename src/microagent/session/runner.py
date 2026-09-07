@@ -607,16 +607,28 @@ class SessionRunner:
                     try:
                         # Use auxiliary model for compression if configured
                         compress_llm = self.llm
+                        forked = False
                         if self.llm.config.auxiliary_model:
                             compress_llm = self.llm.for_model(self.llm.config.auxiliary_model)
-                        messages_list = await compact_conversation(
-                            tuple(messages),
-                            compress_llm,
-                            context_window=_threshold + 8000,
-                            state=self._compaction_state,
-                            budget=self.budget,
-                            idle_timeout=self.llm_stream_idle_timeout,
-                        )
+                            forked = compress_llm is not self.llm
+                        try:
+                            messages_list = await compact_conversation(
+                                tuple(messages),
+                                compress_llm,
+                                context_window=_threshold + 8000,
+                                state=self._compaction_state,
+                                budget=self.budget,
+                                idle_timeout=self.llm_stream_idle_timeout,
+                            )
+                        finally:
+                            # The for_model() fork owns its own AsyncOpenAI
+                            # pool — release it, or every compaction leaks
+                            # a live connection pool (round-22 fix).
+                            if forked:
+                                try:
+                                    await compress_llm.close()
+                                except Exception:
+                                    pass
                         messages[:] = list(messages_list)
                         # Track compression effectiveness (anti-jitter).
                         # Effectiveness accounting ONLY — the runner must
@@ -881,19 +893,28 @@ class SessionRunner:
 
                                     try:
                                         compress_llm = self.llm
+                                        forked = False
                                         if self.llm.config.auxiliary_model:
                                             compress_llm = self.llm.for_model(
                                                 self.llm.config.auxiliary_model
                                             )
-                                        messages_list = await compact_conversation(
-                                            tuple(messages),
-                                            compress_llm,
-                                            context_window=_threshold + 8000,
-                                            state=self._compaction_state,
-                                            force=True,
-                                            budget=self.budget,
-                                            idle_timeout=self.llm_stream_idle_timeout,
-                                        )
+                                            forked = compress_llm is not self.llm
+                                        try:
+                                            messages_list = await compact_conversation(
+                                                tuple(messages),
+                                                compress_llm,
+                                                context_window=_threshold + 8000,
+                                                state=self._compaction_state,
+                                                force=True,
+                                                budget=self.budget,
+                                                idle_timeout=self.llm_stream_idle_timeout,
+                                            )
+                                        finally:
+                                            if forked:
+                                                try:
+                                                    await compress_llm.close()
+                                                except Exception:
+                                                    pass
                                         messages[:] = list(messages_list)
                                     except BudgetExceeded as e:
                                         yield TurnFailed(f"budget exhausted during overflow recovery: {e}", code="budget")
