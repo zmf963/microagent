@@ -395,3 +395,61 @@ class TestTriggerSanitization:
         assert matched == ()
         matched2 = await loader.match("please deploy the service")
         assert matched2 and matched2[0].skill.name == "tricky"
+
+
+class TestSemanticExtra:
+    """v1.2.0: subword-vector fuzzy matching lifts paraphrased CJK
+    queries that literal coverage+LCS misses (exact Counter cosine,
+    zero-dependency — probe showed hashed numpy vectors lose short-text
+    signal to collisions)."""
+
+    def test_paraphrase_scores_above_unrelated(self):
+        from microagent.skill.loader import _semantic_ratio
+
+        sem = _semantic_ratio
+        assert sem("帮我复查一下代码", "code-review 执行代码审查流程 逐步检查问题") > 0.06
+        assert sem("今晚吃什么好呢", "deploy 部署服务到生产环境 发布流程") == 0.0
+
+    def test_empty_inputs_none(self):
+        from microagent.skill.loader import _semantic_ratio
+
+        assert _semantic_ratio("", "x") is None
+        assert _semantic_ratio("x", "") is None
+
+    async def test_match_lifts_paraphrase(self, tmp_path):
+        from microagent.skill.loader import ClaudeSkillLoader
+
+        d = tmp_path / "review-skill"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: code-review\ndescription: 执行代码审查流程，逐步检查变更并给出建议\n---\nbody"
+        )
+        d2 = tmp_path / "deploy-skill"
+        d2.mkdir()
+        (d2 / "SKILL.md").write_text(
+            "---\nname: deploy\ndescription: 部署服务到生产环境的发布流程\n---\nbody"
+        )
+        loader = ClaudeSkillLoader(search_paths=(tmp_path,))
+        # "复查代码" shares no contiguous bigram with the description's
+        # 审查/检查 — literal coverage is weak; the subword lift (代码/查)
+        # should still match it, ranked as a modest fuzzy score.
+        matched = await loader.match("帮我复查一下代码")
+        hits = [m.skill.name for m in matched]
+        assert "code-review" in hits
+        # Unrelated chatter matches nothing.
+        assert await loader.match("今晚吃什么好呢") == ()
+
+    async def test_semantic_below_keywords(self, tmp_path):
+        """Semantic hits cap at 0.45 — below keyword (1.0) and strong
+        literal matches, so ranking quality is preserved."""
+        from microagent.skill.loader import ClaudeSkillLoader
+
+        d = tmp_path / "s"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: code-review\ndescription: 执行代码审查流程，逐步检查变更并给出建议\n---\nbody"
+        )
+        loader = ClaudeSkillLoader(search_paths=(tmp_path,))
+        matched = await loader.match("帮我复查一下代码")
+        for m in matched:
+            assert m.match_score <= 0.45

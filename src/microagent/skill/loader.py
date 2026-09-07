@@ -22,6 +22,51 @@ import yaml
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]+")
 
 
+def _semantic_ratio(query: str, target: str) -> float | None:
+    """Subword-vector fuzzy similarity for CJK queries (v1.2.0).
+
+    Exact char unigram+bigram+word-token count vectors + cosine (pure
+    Python — no model, no network, no optional dependency). Catches
+    PARAPHRASED queries that share subwords but no contiguous bigrams
+    ("帮我复查一下代码" vs "执行代码审查流程" share 代码/查 fragments;
+    literal coverage+LCS scores those near zero when the phrasing
+    reshuffles).
+
+    Honest scope — this is subword-overlap fuzzy matching, not model
+    semantics: a paraphrase whose characters barely overlap
+    ("复查改动" vs "检查变更") stays below threshold. Returns None only
+    for empty inputs; callers gate the threshold.
+    """
+    import math
+    from collections import Counter
+
+    def _features(text: str) -> Counter:
+        compact = "".join(text.lower().split())
+        c: Counter = Counter()
+        for ch in compact:
+            # Unigrams only for CJK: Latin single letters are shared
+            # alphabet noise ("xyzzy" vs "unrelated" overlap on e/n/s…)
+            # that drowns the signal; CJK chars carry real subword signal.
+            if _CJK_RE.match(ch):
+                c[ch] += 1
+        for i in range(len(compact) - 1):
+            c[compact[i : i + 2]] += 1
+        for tok in text.lower().split():
+            c["w:" + tok] += 1
+        return c
+
+    a, b = _features(query), _features(target)
+    if not a or not b:
+        return None
+    common = set(a) & set(b)
+    dot = sum(a[k] * b[k] for k in common)
+    na = math.sqrt(sum(v * v for v in a.values()))
+    nb = math.sqrt(sum(v * v for v in b.values()))
+    if na == 0 or nb == 0:
+        return None
+    return dot / (na * nb)
+
+
 def _cjk_aware_ratio(query: str, target: str) -> float:
     """Compute a similarity score between query and target text.
 
@@ -378,8 +423,22 @@ class ClaudeSkillLoader:
                     break
             else:
                 # CJK-aware fuzzy match — bigram overlap for CJK,
-                # SequenceMatcher for Latin text.
+                # SequenceMatcher for Latin text; optionally lifted by
+                # subword-vector fuzzy similarity when literal matching
+                # misses a paraphrase. Semantic hits are capped at 0.45:
+                # they rank below keyword (1.0) and strong literal
+                # matches, and never REPLACE a literal hit.
                 ratio = _cjk_aware_ratio(text, s.description.lower())
+                if ratio <= 0.4:
+                    richer = " ".join(
+                        [s.name, s.description, *s.triggers]
+                    ).lower()
+                    sem = _semantic_ratio(text, richer)
+                    if sem is not None and sem > 0.06:
+                        # Confident paraphrase: enter just above the gate,
+                        # scaled by confidence, capped at 0.45 — below
+                        # keyword (1.0) and strong literal matches.
+                        ratio = max(ratio, min(0.45, 0.4 + sem / 2))
                 if ratio > 0.4:
                     matches.append(LoadedSkill(s, f"fuzzy:{ratio:.2f}", ratio))
         return tuple(matches)
