@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from pathlib import Path
 from typing import Annotated
 
@@ -40,32 +41,44 @@ def _is_agent_created(name: str) -> bool:
         return False
 
 
+_USAGE_LOCK = threading.Lock()
+
+
 def _touch_curator_usage(name: str, skills_dir: Path | None = None) -> None:
-    """Update curator usage tracking for a skill (last_activity timestamp)."""
+    """Update curator usage tracking for a skill (last_activity timestamp).
+
+    Serialized + atomic: concurrent tool-call touches (and a concurrent
+    curator scan) used to race the read-modify-write, losing use counts,
+    and a crash mid-write_text left truncated JSON that _load_usage then
+    treated as a fresh start — wiping all lifecycle state.
+    """
     import time
+
+    from ...skill.curator import Curator
 
     base = skills_dir or _get_skills_dir()
     usage_file = base / ".usage.json"
     now = time.time()
-    data = {}
-    if usage_file.exists():
+    with _USAGE_LOCK:
+        data = {}
+        if usage_file.exists():
+            try:
+                data = json.loads(usage_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        entry = data.get(name, {})
+        entry["last_activity"] = now
+        entry["use_count"] = entry.get("use_count", 0) + 1
+        if "state" not in entry:
+            entry["state"] = "active"
+        # Preserve pinned through touches — the curator skips pinned skills
+        # and a usage touch must not silently unpin them.
+        entry.setdefault("pinned", False)
+        data[name] = entry
         try:
-            data = json.loads(usage_file.read_text())
-        except (json.JSONDecodeError, OSError):
+            Curator._save_usage(usage_file, data)
+        except OSError:
             pass
-    entry = data.get(name, {})
-    entry["last_activity"] = now
-    entry["use_count"] = entry.get("use_count", 0) + 1
-    if "state" not in entry:
-        entry["state"] = "active"
-    # Preserve pinned through touches — the curator skips pinned skills
-    # and a usage touch must not silently unpin them.
-    entry.setdefault("pinned", False)
-    data[name] = entry
-    try:
-        usage_file.write_text(json.dumps(data, indent=2))
-    except OSError:
-        pass
 
 
 @tool("skill_manage", description="Create, patch, list, or delete Skills at runtime.")
