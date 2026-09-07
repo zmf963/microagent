@@ -39,8 +39,10 @@ class TestSkillsList:
     async def test_loader_throws(self):
         _current_loader.set(_ThrowingLoader())
         r = await skills_list.fn()
-        assert not r.is_error
-        assert "(failed to load skills)" in r.content
+        # Round-22: a broken loader is an ERROR, not an ok stub — the model
+        # must be able to tell "no skills" from "skills system broken".
+        assert r.is_error
+        assert "failed to load skills" in r.content
 
     @pytest.mark.asyncio
     async def test_empty_skills(self):

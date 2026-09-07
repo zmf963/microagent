@@ -304,8 +304,16 @@ class ClaudeSkillLoader:
     # be missed; explicit invalidation removes the race.
     _instances: list = []
 
+    # Bumped by invalidate_all(): consumers that snapshot the skill set
+    # (the runner's system-prompt catalog) compare this to detect that the
+    # set changed at runtime — the catalog was previously built once and
+    # never refreshed, so skills created via skill_manage / /learn never
+    # appeared in the prompt until restart.
+    _GENERATION: int = 0
+
     @classmethod
     def invalidate_all(cls) -> None:
+        cls._GENERATION += 1
         for ref in list(cls._instances):
             loader = ref()
             if loader is None:

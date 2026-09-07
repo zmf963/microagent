@@ -105,6 +105,7 @@ class SessionRunner:
         self._cached_tools: list[dict] | None = None
         self._cached_tools_version: int = -1  # registry.version at last rebuild
         self._cached_skill_catalog: str = ""  # stable part of system prompt
+        self._cached_catalog_generation: int | None = None  # loader _GENERATION
         # OrderedDict preserves insertion order + supports move_to_end/popitem
         # for LRU eviction. Replaces the prior hand-rolled set+list pair.
         self._loaded_skills: OrderedDict[str, None] = OrderedDict()
@@ -678,10 +679,19 @@ class SessionRunner:
 
             # Build skill catalog for system prompt (stable, cached).
             # This lets the LLM know what skills are available so it can
-            # request them via skills_list or skill_manage.
+            # request them via skills_list or skill_manage. Rebuilt when
+            # the loader's generation bumps (skill_manage create/patch/
+            # delete, /learn) — previously built once per process, so
+            # runtime-created skills never appeared until restart.
             skill_catalog = ""
             if self.skill_loader is not None:
-                if not self._cached_skill_catalog:
+                loader_gen = getattr(
+                    type(self.skill_loader), "_GENERATION", None
+                )
+                if not self._cached_skill_catalog or (
+                    loader_gen is not None
+                    and loader_gen != self._cached_catalog_generation
+                ):
                     try:
                         all_skills = await self.skill_loader.load()
                         if all_skills:
@@ -692,6 +702,7 @@ class SessionRunner:
                                     f"- **{s.name}** ({s.namespace}): {desc}"
                                 )
                             self._cached_skill_catalog = "\n".join(catalog_lines)
+                            self._cached_catalog_generation = loader_gen
                     except Exception:
                         # Catalog is an optimization — a broken skills dir
                         # must not crash the turn, but it should not be
@@ -728,15 +739,25 @@ class SessionRunner:
                                 while len(self._loaded_skills) > self._max_loaded_skills:
                                     self._loaded_skills.popitem(last=False)
 
-                        # Inject all loaded skill bodies as context
+                        # Inject all loaded skill bodies as context.
+                        # Keyed by namespace:name — bare-name keying let a
+                        # user skill shadow a same-named builtin (or vice
+                        # versa), injecting the WRONG body for the other
+                        # namespace's match.
                         if self._loaded_skills:
-                            all_skills = {s.name: s for s in (await self.skill_loader.load())}
+                            all_skills = {
+                                f"{s.namespace}:{s.name}": s
+                                for s in (await self.skill_loader.load())
+                            }
                             loaded_bodies = []
                             for key in self._loaded_skills:
                                 ns, name = key.split(":", 1)
-                                if name in self.disabled_skills or key in self.disabled_skills:
+                                if (
+                                    name in self.disabled_skills
+                                    or key in self.disabled_skills
+                                ):
                                     continue
-                                s = all_skills.get(name)
+                                s = all_skills.get(key)
                                 if s is not None:
                                     loaded_bodies.append(s.body)
                             if loaded_bodies:

@@ -44,6 +44,21 @@ def _is_agent_created(name: str) -> bool:
 _USAGE_LOCK = threading.Lock()
 
 
+def _invalidate_caches() -> None:
+    """Invalidate skill loader caches + bump the generation counter.
+
+    Without this, skills created/patched/deleted at runtime never showed
+    up in the system-prompt catalog (built once per process) and stale
+    bodies could persist in loader caches until restart.
+    """
+    try:
+        from ...skill.loader import ClaudeSkillLoader
+
+        ClaudeSkillLoader.invalidate_all()
+    except Exception:
+        pass
+
+
 def _touch_curator_usage(name: str, skills_dir: Path | None = None) -> None:
     """Update curator usage tracking for a skill (last_activity timestamp).
 
@@ -119,6 +134,7 @@ async def skill_manage(
         _record_provenance(name, created_by="agent")
         # Touch the curator usage file so the new skill is tracked
         _touch_curator_usage(name)
+        _invalidate_caches()
         return ToolResult.ok(f"Skill '{name}' created at {skill_path}")
 
     elif action == "patch":
@@ -153,6 +169,7 @@ async def skill_manage(
             )
         new_text = text.replace(old_string, new_string)
         skill_path.write_text(new_text)
+        _invalidate_caches()
         return ToolResult.ok(f"Skill '{name}' patched")
 
     elif action == "list":
@@ -182,6 +199,7 @@ async def skill_manage(
                 f"Only agent-created skills can be deleted via skill_manage."
             )
         shutil.rmtree(skill_dir)
+        _invalidate_caches()
         return ToolResult.ok(f"Skill '{name}' deleted")
 
     else:

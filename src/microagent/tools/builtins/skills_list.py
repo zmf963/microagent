@@ -37,8 +37,11 @@ async def skills_list(
 
     try:
         skills = await loader.load()
-    except Exception:
-        return ToolResult.ok("(failed to load skills)")
+    except Exception as e:
+        # Error, not "(failed to load skills)" as an OK result: the model
+        # can't distinguish a broken skills dir from "no skills", and
+        # skips skill-based workflows without knowing why.
+        return ToolResult.error(f"failed to load skills: {e!r}")
 
     if not skills:
         return ToolResult.ok("(no skills available)")
