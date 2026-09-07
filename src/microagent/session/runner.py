@@ -212,7 +212,14 @@ class SessionRunner:
         # browser. Process-level cleanup belongs to Agent.close().
 
         if self._extractor is not None:
-            await self._extractor.close()
+            # Individually guarded like every other step below: an
+            # extractor transport error must not skip LSP shutdown,
+            # process kills, and MCP disconnects (the orphan-process
+            # leaks close() exists to prevent).
+            try:
+                await self._extractor.close()
+            except Exception:
+                logger.debug("extractor close failed", exc_info=True)
 
         # Shut down LSP servers
         for client in self._lsp_state.clients.values():
@@ -994,9 +1001,20 @@ class SessionRunner:
                 # 'never' fails even transient errors.
                 try:
                     retry_policy = self.llm.config.resolved_retry_policy()
-                except Exception:
+                except Exception as policy_err:
+                    # Defensive only — Config.from_file validates the spec
+                    # at startup. A hand-built LLMConfig with a bad spec
+                    # still lands here: degrade, but leave a trace.
+                    # NOTE: do not reuse the name `e` — the outer stream
+                    # error is still needed for TurnFailed below, and an
+                    # except-as binding is deleted when its handler exits.
                     from ..llm.retry import RetryPolicy
 
+                    logger.warning(
+                        "invalid retry_policy %r, falling back to normal: %r",
+                        getattr(self.llm.config, "retry_policy", None),
+                        policy_err,
+                    )
                     retry_policy = RetryPolicy()
                 if (
                     not _stream_got_output

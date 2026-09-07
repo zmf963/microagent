@@ -83,3 +83,38 @@ model:
 
         cfg = Config.from_file(cli_model=None)
         assert cfg.llm.model == "file-model"
+
+
+class TestRetryPolicyValidation:
+    """Round-22 🟡: an invalid retry_policy spec was silently swallowed by
+    the runner on first stream failure (typo → production retry semantics
+    changed with zero trace). Config.from_file now validates at startup."""
+
+    def test_invalid_spec_raises_at_config_time(self, monkeypatch, tmp_path):
+        import pytest
+        from microagent.config import Config
+
+        monkeypatch.setattr(Config, "_config_path", lambda: tmp_path / "c.yaml")
+        (tmp_path / "c.yaml").write_text(
+            "model:\n"
+            "  base_url: http://x/v1\n"
+            "  api_key: k\n"
+            "  model: m\n"
+            "  retry_policy: alwayz\n"
+        )
+        with pytest.raises(ValueError):
+            Config.from_file()
+
+    def test_valid_specs_pass(self, monkeypatch, tmp_path):
+        from microagent.config import Config
+
+        monkeypatch.setattr(Config, "_config_path", lambda: tmp_path / "c.yaml")
+        (tmp_path / "c.yaml").write_text(
+            "model:\n"
+            "  base_url: http://x/v1\n"
+            "  api_key: k\n"
+            "  model: m\n"
+            "  retry_policy: always:3\n"
+        )
+        cfg = Config.from_file()
+        assert cfg.llm.retry_policy == "always:3"

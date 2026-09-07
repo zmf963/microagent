@@ -86,6 +86,14 @@ class Config:
             os.environ.get("MICROAGENT_RETRY_POLICY")
             or file_data.get("retry_policy")
         )
+        if retry_policy:
+            # Fail fast at startup: an invalid spec ("alwayz") previously
+            # sailed through here and was silently swallowed back to
+            # 'normal' by the runner on the first stream failure — a typo
+            # changed production retry semantics with zero trace.
+            from .llm.retry import RetryPolicy
+
+            RetryPolicy.from_str(str(retry_policy))  # raises ValueError
 
         return cls(
             llm=LLMConfig(
