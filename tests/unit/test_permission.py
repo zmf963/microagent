@@ -111,3 +111,49 @@ class TestPermissionEngine:
         ]
         for name in builtins:
             assert engine.resolve(name) is Decision.ALLOW, f"{name} not allowed"
+
+
+class TestArgsMatchWhitespace:
+    """Round-22 🔴 companion: fnmatch constraints must not be defeatable
+    by surrounding whitespace — the shell runs " rm -rf /" exactly like
+    "rm -rf /", so a leading-space command must still hit the "rm *"
+    ASK rule instead of falling through to the bare bash ALLOW rule."""
+
+    async def test_leading_whitespace_command_still_matches(self):
+        engine = PermissionEngine(
+            rules=(
+                Rule("bash", {"command": "rm *"}, Decision.ASK, "rm needs confirm"),
+                Rule("bash", {}, Decision.ALLOW),
+            )
+        )
+        decision = await engine.evaluate(
+            ToolCall(id="c1", name="bash", arguments={"command": " rm -rf /"})
+        )
+        # ASK without callback fails CLOSED (deny) — proving the rm rule
+        # matched rather than falling through to ALLOW.
+        assert decision.decision is Decision.DENY
+        assert "ask_callback" in decision.reason.lower()
+
+    async def test_trailing_whitespace_still_matches(self):
+        engine = PermissionEngine(
+            rules=(
+                Rule("bash", {"command": "chmod *"}, Decision.DENY, "no chmod"),
+                Rule("bash", {}, Decision.ALLOW),
+            )
+        )
+        decision = await engine.evaluate(
+            ToolCall(id="c1", name="bash", arguments={"command": "chmod 777 x\t"})
+        )
+        assert decision.decision is Decision.DENY
+
+    async def test_nonmatching_command_still_allows(self):
+        engine = PermissionEngine(
+            rules=(
+                Rule("bash", {"command": "rm *"}, Decision.DENY, "no rm"),
+                Rule("bash", {}, Decision.ALLOW),
+            )
+        )
+        decision = await engine.evaluate(
+            ToolCall(id="c1", name="bash", arguments={"command": "ls -la"})
+        )
+        assert decision.decision is Decision.ALLOW

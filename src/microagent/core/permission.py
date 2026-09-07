@@ -143,11 +143,16 @@ class PermissionEngine:
         """Each key in constraint is fnmatch-matched against args' same-key value.
 
         Non-string values are converted to str before matching, so numeric
-        and list-type arguments can be constrained too."""
+        and list-type arguments can be constrained too. String values and
+        patterns are stripped of surrounding whitespace first — the shell
+        treats " rm -rf /" identically to "rm -rf /", so a leading-space
+        command must not fall through a "rm *" ASK rule to a bare ALLOW
+        rule."""
         for k, pat in constraint.items():
             val = args.get(k, "")
             val_str = str(val) if not isinstance(val, str) else val
-            if not fnmatch(val_str, str(pat)):
+            pat_str = str(pat)
+            if not fnmatch(val_str.strip(), pat_str.strip()):
                 return False
         return True
 

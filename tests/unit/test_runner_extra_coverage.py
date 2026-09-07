@@ -65,6 +65,37 @@ class TestPlanBashViolationUnit:
     def test_unclosed_quote_falls_back_to_split(self):
         assert SessionRunner._plan_bash_violation("rm 'unclosed") is not None
 
+    @pytest.mark.parametrize("cmd", [
+        # Round-22 🔴: newlines are shell command separators — shlex
+        # treats them as plain whitespace, so without \n in the split
+        # regex the harmless first verb hid a destructive second line.
+        "cat foo.txt\nrm -rf /",
+        "ls\nsudo rm -rf /tmp/x",
+        "git status\r\ngit push",
+        # Control tokens before the destructive verb must be skipped.
+        "sudo rm -rf /tmp/x",
+        "do rm -rf /tmp/x",
+        "then chmod 777 /etc/passwd",
+        "env rm -rf /tmp/x",
+        "env VAR=1 rm -rf /tmp/x",
+        "VAR=1 rm -rf /tmp/x",
+        "xargs rm -rf /tmp/x",
+        "nohup mv a b",
+    ])
+    def test_blocked_newline_and_control_tokens(self, cmd):
+        assert SessionRunner._plan_bash_violation(cmd) is not None
+
+    @pytest.mark.parametrize("cmd", [
+        # Quoted newlines are data, not separators.
+        "echo 'a\nb'",
+        "grep -rn foo src/",
+        "cat README.md\nhead -20 pyproject.toml",
+        "git log --oneline\ngit diff HEAD",
+        "echo rm_is_not_the_verb",
+    ])
+    def test_allowed_multiline_and_wrapped(self, cmd):
+        assert SessionRunner._plan_bash_violation(cmd) is None
+
 
 class TestPersistUserTailFallback:
     async def test_store_load_history_failure(self):

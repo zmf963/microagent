@@ -322,6 +322,16 @@ class SessionRunner:
         "install", "uninstall", "remove", "add", "upgrade", "update",
     })
 
+    # Shell control/wrapper tokens skipped when locating the effective
+    # verb of a segment: "sudo rm …", "do rm …", "xargs rm …" must all be
+    # judged by the rm, not the wrapper. VAR=value assignments are skipped
+    # separately in the scan loop.
+    _PLAN_BASH_LEADING_TOKENS = frozenset({
+        "sudo", "do", "then", "else", "elif", "!", "{", "}", "in",
+        "env", "nohup", "time", "xargs", "watch", "strace", "command",
+        "builtin", "exec",
+    })
+
     _PLAN_SYSTEM_PROMPT = (
         "You are in **plan mode** — your job is to analyze and understand, "
         "NOT to make changes.\n\n"
@@ -346,17 +356,23 @@ class SessionRunner:
         """Return a denial reason if a plan-mode bash command looks
         write/destructive, else None (allowed).
 
-        Heuristic: each pipeline/list segment is shlex-split; the first
-        token is checked against the destructive verb set, git/package
-        write subcommands, and `sed -i`. Output redirection (>, >>)
-        outside quotes is also denied. Quoted '>' (e.g. echo 'a>b') is
-        treated as data. Known limitations: `echo a>b` unquoted and
-        arbitrary interpreters (`python -c ...`) are not caught.
+        Heuristic: each line/pipeline/list segment is shlex-split; the
+        first token is checked against the destructive verb set, git/package
+        write subcommands, and `sed -i`. Leading shell control tokens
+        (do/then/else/sudo/env/xargs/VAR=… assignments) are skipped so the
+        effective verb is checked. Output redirection (>, >>) outside
+        quotes is also denied. Quoted '>' (e.g. echo 'a>b') is treated as
+        data. Known limitations: `echo a>b` unquoted and arbitrary
+        interpreters (`python -c ...`) are not caught.
         """
         import re
         import shlex
 
-        for segment in re.split(r";|\|\||&&|\|", command):
+        # Newlines MUST be a separator: shlex treats "\n" as plain
+        # whitespace, so "cat foo.txt\nrm -rf /" would otherwise shlex to
+        # one segment whose verb is the harmless "cat" while the shell
+        # still executes the rm on its own line.
+        for segment in re.split(r";|\|\||&&|\||\n|\r", command):
             segment = segment.strip()
             if not segment:
                 continue
@@ -368,16 +384,29 @@ class SessionRunner:
                 continue
             if any(t in (">", ">>") or t.startswith(">") for t in tokens):
                 return "output redirection is not allowed in plan mode"
-            verb = tokens[0].rsplit("/", 1)[-1]
+            # Strip leading control tokens to find the effective verb:
+            # "do rm …", "sudo rm …", "env VAR=1 rm …" all must land on rm.
+            vi = 0
+            while vi < len(tokens) - 1:
+                tok = tokens[vi]
+                if (
+                    tok in cls._PLAN_BASH_LEADING_TOKENS
+                    or (tok.endswith("=") and "=" not in tok[:-1])
+                    or ("=" in tok and tok.index("=") > 0 and tok.split("=", 1)[0].replace("_", "").isalnum() and tok[0] not in "\"'")
+                ):
+                    vi += 1
+                    continue
+                break
+            verb = tokens[vi].rsplit("/", 1)[-1]
             if verb in cls._PLAN_BASH_DESTRUCTIVE:
                 return f"'{verb}' modifies the system — not allowed in plan mode"
-            if verb == "git" and len(tokens) > 1 and tokens[1] in cls._PLAN_BASH_GIT_WRITE:
-                return f"'git {tokens[1]}' modifies the repository — not allowed in plan mode"
-            if verb == "sed" and any(t.startswith("-i") for t in tokens[1:]):
+            if verb == "git" and len(tokens) > vi + 1 and tokens[vi + 1] in cls._PLAN_BASH_GIT_WRITE:
+                return f"'git {tokens[vi + 1]}' modifies the repository — not allowed in plan mode"
+            if verb == "sed" and any(t.startswith("-i") for t in tokens[vi + 1:]):
                 return "'sed -i' edits files in place — not allowed in plan mode"
             if verb in ("pip", "pip3", "uv", "npm", "pnpm", "yarn", "brew", "apt", "apt-get") \
-                    and len(tokens) > 1 and tokens[1] in cls._PLAN_BASH_PKG_WRITE:
-                return f"'{verb} {tokens[1]}' modifies the environment — not allowed in plan mode"
+                    and len(tokens) > vi + 1 and tokens[vi + 1] in cls._PLAN_BASH_PKG_WRITE:
+                return f"'{verb} {tokens[vi + 1]}' modifies the environment — not allowed in plan mode"
         return None
 
     async def _process_tool_output_async(self, tool_call_id: str, result, sid: str) -> Any:
