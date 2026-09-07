@@ -88,14 +88,9 @@ class TestArgumentValidation:
     async def test_skill_manage_partial_args_still_work(self):
         """skill_manage's old_string/new_string are per-action optional;
         a create call must not be rejected for omitting them."""
-        from microagent.core import tool as tool_mod
+        from microagent.tools.builtins import skill_manage as skill_manage_mod
 
-        skill_tool = None
-        for t in tool_mod._registry.values():
-            if t.name == "skill_manage":
-                skill_tool = t
-                break
-        assert skill_tool is not None
+        skill_tool = skill_manage_mod.skill_manage
         registry = ToolRegistry([skill_tool])
         result = await registry.execute(
             ToolCall(

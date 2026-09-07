@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, get_type_hints, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 
@@ -208,7 +208,15 @@ def _sig_fields(fn: Callable[..., Any]) -> dict[str, tuple[Any, Any]]:
             if field_info is None:
                 fields[param_name] = (base_type, ...)
             elif has_default and field_info.default is PydanticUndefined:
-                fields[param_name] = (base_type, param.default)
+                # Signature default must win over the (unset) FieldInfo
+                # default — but the constraints in field_info.metadata
+                # (Ge/Le/MinLen/…) must be preserved: rebuilding a bare
+                # Field(default=...) would silently drop them.
+                merged = Field(default=param.default)
+                merged.metadata = list(field_info.metadata)
+                merged.description = field_info.description
+                merged.title = field_info.title
+                fields[param_name] = (base_type, merged)
             else:
                 fields[param_name] = (base_type, field_info)
         else:
