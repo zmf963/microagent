@@ -126,6 +126,11 @@ class SubagentManager:
             registry=child_registry,
             budget=child_budget,
             system_prompt=spec.system_prompt,
+            # Distinct session id: the child inherits the parent's
+            # event_bus, and its turn_complete emissions used to carry
+            # sid="default" — mislabeling (and double-counting) every
+            # subagent completion for embedders subscribing per session.
+            session_id=f"subagent:{spec.name}",
             event_bus=parent_runner.event_bus,
             pre_llm_hooks=parent_runner.pre_llm_hooks,
             tool_hooks=parent_runner.tool_hooks,
