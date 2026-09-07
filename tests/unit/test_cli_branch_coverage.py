@@ -436,8 +436,8 @@ class TestCmdModels:
         out = _out(st)
         assert "gpt-4o" in out
         assert "128,000" in out
-        assert "¥18.0000/1M" in out  # 2.5 * 7.2 default rate
-        assert "¥72.0000/1M" in out  # 10.0 * 7.2
+        assert "¥18.00/1M" in out  # 2.5 * 7.2 default rate, 2dp
+        assert "¥72.00/1M" in out  # 10.0 * 7.2, 2dp
 
     @pytest.mark.asyncio
     async def test_lookup_path_defaults_to_current_model(self, monkeypatch):

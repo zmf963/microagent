@@ -387,6 +387,11 @@ class TestGetState:
         assert _get_state() is state
 
 
+class _LiveTask:
+    def done(self) -> bool:
+        return False
+
+
 class _GetClientFake:
     created = []
 
@@ -395,6 +400,7 @@ class _GetClientFake:
         self.root_uri = root_uri
         self.started = False
         self._proc = _FakeProc()
+        self._reader_task = _LiveTask()
         _GetClientFake.created.append(self)
 
     async def start(self):
@@ -425,6 +431,7 @@ class TestGetClient:
 
         class _Dead:
             _proc = None
+            _reader_task = _LiveTask()
 
         state.clients["python"] = _Dead()
         client = await lsp_mod._get_client(str(f))
@@ -440,10 +447,31 @@ class TestGetClient:
 
         class _Dead:
             _proc = _ExitedProc()
+            _reader_task = _LiveTask()
 
         state.clients["python"] = _Dead()
         client = await lsp_mod._get_client(str(f))
         assert client is _GetClientFake.created[0]
+
+    async def test_evicts_client_with_dead_reader(self, tmp_path, monkeypatch):
+        """Round-22 🔵: a desynced-but-running server (read loop broke on
+        a malformed frame without killing the process) must be evicted —
+        every call otherwise ate the full 30s timeout until session end."""
+        f = self._patch(monkeypatch, tmp_path)
+        state = lsp_mod._get_state()
+
+        class _DoneTask:
+            def done(self) -> bool:
+                return True
+
+        class _Zombie:
+            _proc = _FakeProc()
+            _reader_task = _DoneTask()
+
+        state.clients["python"] = _Zombie()
+        client = await lsp_mod._get_client(str(f))
+        assert client is _GetClientFake.created[0]
+        assert state.clients["python"] is client
 
     async def test_reuses_alive_client(self, tmp_path, monkeypatch):
         f = self._patch(monkeypatch, tmp_path)

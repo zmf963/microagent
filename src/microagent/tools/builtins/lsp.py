@@ -504,7 +504,13 @@ async def _get_client(filepath: str) -> LSPClient | None:
     # request for that language times out for 30s until the agent restarts.
     cached = state.clients.get(lang)
     if cached is not None and (
-        cached._proc is None or cached._proc.returncode is not None
+        cached._proc is None
+        or cached._proc.returncode is not None
+        # A desynced-but-running server leaves returncode None, yet its
+        # read loop already broke on a malformed frame — every call for
+        # that language then eats the full 30s timeout until session end.
+        or cached._reader_task is None
+        or cached._reader_task.done()
     ):
         del state.clients[lang]
     if lang not in state.clients:

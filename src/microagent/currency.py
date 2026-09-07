@@ -66,4 +66,4 @@ def format_cost(usd: float) -> str:
 
 def format_price_per_1m(usd_per_1m: float) -> str:
     """Format a per-1M-token price in CNY, e.g. ``¥18.00/1M``."""
-    return f"¥{usd_to_cny(usd_per_1m):.4f}/1M"
+    return f"¥{usd_to_cny(usd_per_1m):.2f}/1M"

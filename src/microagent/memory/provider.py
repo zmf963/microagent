@@ -150,6 +150,8 @@ class SQLiteMemoryProvider:
     # the oldest entries (context-category first — they are the least
     # durable, derived from raw conversation windows).
     MAX_MEMORIES = 500
+    # Cap for the write_approval pending table (nothing pruned it before).
+    _MAX_PENDING = 200
 
     @staticmethod
     def _normalize_content(content: str) -> str:
@@ -410,7 +412,9 @@ class SQLiteMemoryProvider:
         """Insert into the pending table (write_approval mode).
 
         The pending table is plain SQLite (no FTS) — entries only enter
-        the FTS index when approved via _insert.
+        the FTS index when approved via _insert. Capped at MAX_PENDING
+        (oldest first): nothing pruned it, so an unattended agent filled
+        the table unboundedly.
         """
         content_hash = self._content_hash(m.content)
         if self._conn.execute(
@@ -429,6 +433,17 @@ class SQLiteMemoryProvider:
                 content_hash,
             ),
         )
+        overflow = self._conn.execute(
+            "SELECT COUNT(*) FROM pending_memories"
+        ).fetchone()[0] - self._MAX_PENDING
+        if overflow > 0:
+            self._conn.execute(
+                "DELETE FROM pending_memories WHERE id IN ("
+                "  SELECT id FROM pending_memories"
+                "  ORDER BY created_at ASC LIMIT ?"
+                ")",
+                (overflow,),
+            )
         self._conn.commit()
 
     async def delete(self, memory_id: str) -> None:

@@ -91,33 +91,40 @@ async def question(
     try:
         import asyncio
 
+        # Everything from here on runs under guards that clear
+        # _QUESTION_ACTIVE — a print() to a closed stdout (BrokenPipe)
+        # used to escape between set() and the guarded region, leaving
+        # the flag set forever, which permanently paused the CLI's Esc
+        # watcher.
         _QUESTION_ACTIVE.set()
-        # Restore cooked mode so input() gets proper line editing. The CLI's
-        # ESC watcher puts the tty in cbreak mode (ICANON off) for single-
-        # key Esc detection — in that mode readline returns after the first
-        # keystroke, truncating answers to one character. The watcher pauses
-        # while _QUESTION_ACTIVE is set, so restoring here is safe.
-        _restore_cooked()
-        print(f"\n❓ {text}")
-        # input() is blocking — run off the event loop thread with timeout.
-        # Note: if the tool call is cancelled (interrupt/budget), the await
-        # raises promptly but the input() thread itself cannot be killed —
-        # it lingers until the user presses Enter. Documented limitation
-        # (Python cannot kill threads). Mitigated: the watcher pauses while
-        # _QUESTION_ACTIVE is set so it does not steal keystrokes, and the
-        # lingering thread exits harmlessly on the next Enter (input()
-        # returns '' in cbreak mode, which the tool ignores).
-        answer_future = asyncio.to_thread(input, "> ")
         try:
-            if timeout > 0:
-                answer = (await asyncio.wait_for(answer_future, timeout=timeout)).strip()
-            else:
-                answer = (await answer_future).strip()
-        except asyncio.TimeoutError:
-            return ToolResult.error(
-                f"Question timed out after {timeout}s with no response.\n"
-                f"(If the input line is still waiting, press Enter to clear it.)"
-            )
+            # Restore cooked mode so input() gets proper line editing. The
+            # CLI's ESC watcher puts the tty in cbreak mode (ICANON off) for
+            # single-key Esc detection — in that mode readline returns after
+            # the first keystroke, truncating answers to one character. The
+            # watcher pauses while _QUESTION_ACTIVE is set, so restoring
+            # here is safe.
+            _restore_cooked()
+            print(f"\n❓ {text}")
+            # input() is blocking — run off the event loop thread with timeout.
+            # Note: if the tool call is cancelled (interrupt/budget), the await
+            # raises promptly but the input() thread itself cannot be killed —
+            # it lingers until the user presses Enter. Documented limitation
+            # (Python cannot kill threads). Mitigated: the watcher pauses
+            # while _QUESTION_ACTIVE is set so it does not steal keystrokes,
+            # and the lingering thread exits harmlessly on the next Enter
+            # (input() returns '' in cbreak mode, which the tool ignores).
+            answer_future = asyncio.to_thread(input, "> ")
+            try:
+                if timeout > 0:
+                    answer = (await asyncio.wait_for(answer_future, timeout=timeout)).strip()
+                else:
+                    answer = (await answer_future).strip()
+            except asyncio.TimeoutError:
+                return ToolResult.error(
+                    f"Question timed out after {timeout}s with no response.\n"
+                    f"(If the input line is still waiting, press Enter to clear it.)"
+                )
         finally:
             _QUESTION_ACTIVE.clear()
         if not answer:

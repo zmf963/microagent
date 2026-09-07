@@ -136,7 +136,14 @@ class Agent:
         return agent
 
     def run(self, text: str | list[Message]) -> str:
-        """Sync entry point: accept a string (auto-wraps as user msg) or Message list."""
+        """Sync ONE-SHOT entry point: accept a string (auto-wraps as user
+        msg) or Message list.
+
+        Closes the agent when done — a second run() hits a closed SQLite
+        connection and a turn lock bound to the previous event loop
+        (RuntimeError). For multi-turn use, keep the agent alive and call
+        arun() per turn (see the CLI's REPL) instead.
+        """
         if isinstance(text, str):
             text = [Message.user(text)]
 

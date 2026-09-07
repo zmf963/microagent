@@ -512,6 +512,11 @@ class SessionRunner:
         user-message dedupe in _persist_user_tail relies on it."""
         await self.store.append(session_id, msg)
         self._store_tail[session_id] = (msg.role, msg.content)
+        # Bounded: a long-lived process cycling cron session ids grows
+        # this dict without otherwise — entries are tiny but unbounded.
+        if len(self._store_tail) > 1024:
+            for old_sid in list(self._store_tail)[: len(self._store_tail) - 1024]:
+                self._store_tail.pop(old_sid, None)
 
     async def _audit_invariants(self, sid: str, messages: list[Message]) -> None:
         """Verify the message sequence before it reaches the model.

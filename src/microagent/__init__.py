@@ -29,7 +29,8 @@ from .core.types import (
 )
 from .cron.scheduler import CronJob, CronScheduler
 from .llm.client import LLMClient, LLMConfig, OpenAIChatClient, StreamDone, StreamEvent
-from .llm.errors import LLMFailure, NON_RETRYABLE_CODES, RETRYABLE_CODES
+from .llm.errors import LLMFailure, NON_RETRYABLE_CODES, RETRYABLE_CODES, classify_exception
+from .llm.pool import CredentialPool
 from .llm.retry import RetryPolicy
 from .llm.watchdog import IdleTimeoutError
 from .mcp.catalog import (
@@ -96,6 +97,8 @@ __all__ = [
     "StreamDone",
     "StreamEvent",
     "LLMFailure",
+    "classify_exception",
+    "CredentialPool",
     "RETRYABLE_CODES",
     "NON_RETRYABLE_CODES",
     "RetryPolicy",

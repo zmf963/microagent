@@ -58,8 +58,8 @@ class TestFormatting:
 
     def test_format_price_per_1m(self, monkeypatch):
         monkeypatch.setenv("MICROAGENT_CURRENCY_RATE", "7.2")
-        # $2.50/1M → ¥18.0000/1M
-        assert currency.format_price_per_1m(2.50) == "¥18.0000/1M"
+        # $2.50/1M → ¥18.00/1M (2dp, matching the docstring example)
+        assert currency.format_price_per_1m(2.50) == "¥18.00/1M"
 
     def test_format_cost_respects_env_override(self, monkeypatch):
         monkeypatch.setenv("MICROAGENT_CURRENCY_RATE", "7.0")

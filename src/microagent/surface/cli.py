@@ -1053,8 +1053,13 @@ async def _cmd_skill(state: ReplState, arg: str) -> None:
         # and the runner kept injecting the skill body every turn (the
         # command was cosmetic). Also drop the skill from already-loaded
         # bodies so the NEXT turn immediately stops injecting it.
+        # _loaded_skills is keyed namespace:name, so a bare-name pop was a
+        # silent no-op — pop every key whose name part matches.
         state.agent.runner.disabled_skills.add(skill_name)
-        state.agent.runner._loaded_skills.pop(skill_name, None)
+        for key in list(state.agent.runner._loaded_skills):
+            _, key_name = key.split(":", 1)
+            if key_name == skill_name or key == skill_name:
+                state.agent.runner._loaded_skills.pop(key, None)
         console.print(f"[success]✓[/] Skill '{skill_name}' disabled (will be filtered from matches)")
 
     elif subcmd == "load":
