@@ -190,17 +190,36 @@ class Agent:
             asyncio.run(self.runner.steer(text))
 
     async def close(self) -> None:
-        """Clean up all resources (cron, runner, LLM client, store)."""
+        """Clean up all resources (cron, runner, LLM client, store).
+
+        Every step is individually guarded: an early failure (e.g. a cron
+        shutdown error) must not skip the browser/LLM/store/memory cleanup
+        after it — that would leak exactly the resources close() exists
+        to release.
+        """
+        import logging
+
+        _log = logging.getLogger(__name__)
+
         if self.cron is not None:
-            await self.cron.stop()
-        await self.runner.close()
+            try:
+                await self.cron.stop()
+            except Exception:
+                _log.debug("cron stop failed during close", exc_info=True)
+        try:
+            await self.runner.close()
+        except Exception:
+            _log.debug("runner close failed during close", exc_info=True)
         # Shut down the shared Chromium instance — it is a process-level
         # singleton, so it is closed here (Agent lifecycle) rather than in
         # runner.close(), which also runs for subagent child runners and
         # would kill this session's pages out from under it.
         from .tools.builtins.browser import close_global_browser
 
-        await close_global_browser()
+        try:
+            await close_global_browser()
+        except Exception:
+            _log.debug("browser close failed during close", exc_info=True)
         # Prune expired tool-output files — cleanup_expired() had no caller,
         # so ~/.microagent/tool_outputs grew without bound despite the
         # documented 7-day retention.
@@ -212,14 +231,20 @@ class Agent:
             pass
         # Close the LLM client if it supports close()
         if hasattr(self.runner.llm, "close"):
-            await self.runner.llm.close()
+            try:
+                await self.runner.llm.close()
+            except Exception:
+                _log.debug("llm close failed during close", exc_info=True)
         # Close the store so SQLite connections / WAL files are released.
         # Library users who construct Agent directly (not via the CLI) would
         # otherwise leak a connection per agent. The CLI calls store.close()
         # itself too — sqlite3.Connection.close() is a documented no-op on a
         # second call, so the double-close is harmless.
         if self.runner.store is not None and hasattr(self.runner.store, "close"):
-            self.runner.store.close()
+            try:
+                self.runner.store.close()
+            except Exception:
+                _log.debug("store close failed during close", exc_info=True)
         # Close the memory provider connection (Hermes parity: default-on
         # memory opens a SQLite connection per agent — release it).
         if self.runner.memory is not None and hasattr(self.runner.memory, "close"):
