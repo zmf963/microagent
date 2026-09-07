@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.2.0 (2026-09-08)
+
+Round-23:全部留档待办落地(surfaceOp replace-fold + ProgressDelta 流式 + process
+三后端接缝 + CJK 子词语义 + 集成矩阵)。5 个 feat commit。
+
+### Added
+- **surfaceOp replace-fold 事件溯源**(dsh parity):压缩落盘为折叠 op
+  (遮蔽区间→替换块,raw log 完整保留),load_surface() 派生 LLM 可见面;
+  resume 不再重载全量历史重压缩(省一次 LLM 调用),增量摘要链跨进程存活
+  (previous_summary 从最后折叠重水化)。
+- **ToolProgressDelta 真流式**:工具执行中即时 yield(队列+竞争 drain),
+  不再批后统一放行;取消/关闭正确回收 detached 任务。
+- **process 三后端接缝**:ProcessBackend 协议 + Local(原实现)/Docker(run -d +
+  logs -f)/SSH(PTY channel)三实现;绑远程终端的父级不再在主机 spawn(沙箱逃逸
+  修复);无族自定义后端明确拒绝;OutputRing 三后端一致。
+- **CJK 子词向量模糊匹配**:改写查询("帮我复查一下代码" vs "执行代码审查流程")
+  命中率修复;精确 Counter 余弦、零依赖(计划中的 numpy extra 因哈希碰撞探针
+  证伪改为纯 Python,更好且无需额外依赖);语义命中封顶 0.45 永远排在关键词之下。
+- **集成矩阵常态化**:端点解析 env > config.yaml > skip;make integration。
+
+### 已知限制
+- Docker 后端 write 报能力边界(CLI 无法写 detached 容器 stdin);SSH 全支持。
+- 近零字符重叠的中文改写仍不命中(需真 embedding,信条内不做)。
+
+# Changelog
+
 ## 1.1.3 (2026-09-07)
 
 Round-22 全库三路审查 + 全量修复(4🔴 + 19🟡 + 🔵 批,27 个 fix commit)。

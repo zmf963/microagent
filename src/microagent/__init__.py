@@ -53,7 +53,7 @@ from .skill.loader import ClaudeSkillLoader, CompositeSkillLoader, LoadedSkill, 
 from .subagent.manager import DEFAULT_SUBAGENTS, SubagentManager, SubagentSpec
 from .terminal.backend import DockerTerminal, LocalTerminal, TerminalBackend, TerminalResult
 
-__version__ = "1.1.3"
+__version__ = "1.2.0"
 
 __all__ = [
     # Agent

@@ -1251,3 +1251,61 @@ retry_policy 支持 env/文件。
 - **ToolProgressDelta 批后统一 yield**(runner._run_tool_calls 全部 settle 后才放行)——真流式需要把执行管道改成事件队列,架构级改动,留 v1.2.0 与 surfaceOp replace-fold 一起做
 - glob/file_tree 事件循环上的同步遍历:需要 to_thread 化遍历器,收益中等,留档
 - pricing 缓存文件在包目录(只读安装无法持久化刷新):留档
+
+---
+
+## 二十六、第二十三轮:v1.2.0 全部待办落地(4 阶段 + 发布)— 2026-09-08
+
+> 范围:replace-fold 事件溯源(原 absorb-later 唯一大项)、ToolProgressDelta 真流式、
+> process 三后端接缝、CJK 语义匹配(原"有意不做"项,探针后升级实现)、集成矩阵常态化。
+> 5 个 feat commit。基线 1665 passed → **1689 passed(unit+smoke+e2e)**;
+> 集成矩阵 live 验证 **10/10**(9router glm-5.3-flash,3m33s)。
+> 13,563 → **15,550 LOC**(v1.1.2 基线)。
+
+### 25.1 ToolProgressDelta 真流式 ✅ (91a9643)
+
+progress 事件批后统一 yield → 改 asyncio.Queue + `asyncio.wait(FIRST_COMPLETED)` 竞争
+drain,工具执行中即时上屏(60s bash 流不再黑屏一分钟)。外层取消/生成器关闭正确
+回收 detached run task,孤儿守卫保留。`_run_tool_calls` 无队列调用保持批收集(直调测试兼容)。
+
+### 25.2 surfaceOp replace-fold 事件溯源 ✅ (87ae56a)
+
+压缩只改内存的旧账清偿:resume 重载全量历史 + 重压缩(多烧一次 LLM 调用)+
+增量摘要链跨进程断裂。新 surface_ops 表(遮蔽区间 [start_seq..end_seq] → 替换块
+[repl_start..repl_end],kind summary|fallback);append() 返回 seq;load_surface()
+按序应用折叠(每折双重校验,坏折跳过告警);resume//resume/cron resume:last 走派生
+surface + 从最后 summary 折叠重水化 previous_summary(前言/标签统一剥离)。
+L1/L2 每轮确定性重算维持内存态(文档注明);侧车失配时按位重同步(内容+角色匹配)。
+**嵌套折叠插入位修正**:插入点取被遮蔽区间起始下标(折叠后幸存消息的 seq 可在区间两侧)。
+
+### 25.3 process 三后端接缝 ✅ (885668a)
+
+修掉"绑 Docker/SSH 后端的父级,process 工具仍在主机 spawn"(round-21 子代理逃逸同类)。
+ProcessBackend/ManagedProcess 协议 + OutputRing(截断/环顶/丢弃披露三后端一致):
+- Local:原实现整体后移(消息串逐字等价,旧测试不动)
+- Docker:docker run -d + logs -f 流式进 ring;inspect 状态;rm -f 终结;
+  write 明确能力边界(CLI 无法对 detached 容器写 stdin)
+- SSH:paramiko PTY channel + reader 线程;send 全支持;close 清理 channel+client
+- 无 processes 族的自定义后端 → 明确拒绝,绝不静默回退主机
+runner 在 _settle 与 bash 同点绑定(子代理随 terminal_backend 自动继承),close() 清理远端族。
+
+### 25.4 CJK 语义匹配 ✅ (4c8cf56) —— 计划外升级
+
+原计划 numpy[semantic] extra(哈希 512 维向量)。探针实证哈希碰撞把短文本正例打到
+~0.03(不可用)→ 改**纯 Python 精确 Counter 余弦**(CJK 单字+双字+词 token,零碰撞零依赖):
+改写探针 0.15/0.11/0.07 vs 无关 0.000。置信(>0.06)刚过门按置信度缩放、封顶 0.45
+(永远排在关键词/强字面之下)。拉丁单字符剔除(共享字母表噪声)。已知限制(文档注明):
+几乎零字符重叠的改写(复查改动↔检查变更)仍需真 embedding。
+
+### 25.5 集成矩阵常态化 ✅ (fc274fb)
+
+端点解析 env > ~/.microagent/config.yaml > skip;`make integration` 零管道跑矩阵。
+live 验证 10/10(glm-5.3-flash;oc-d4f 上游当时不可用,env 换模型即跑——正是矩阵
+常态化的用法)。
+
+### 遗留(更新)
+
+- ToolProgressDelta 流式已落地;v1.1.2 留档的"与 replace-fold 一起做"完成
+- CJK 真语义(模型 embedding)仍为零依赖信条下的有意不做;子词向量层已覆盖共享字改写
+- glob/file_tree 循环内同步遍历:留档(收益中等)
+- pricing 缓存文件在包目录:留档
