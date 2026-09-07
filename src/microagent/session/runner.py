@@ -140,6 +140,12 @@ class SessionRunner:
         # ids — a single global tail would compare against the WRONG
         # session's messages after a cron tick.
         self._store_tail: dict[str, tuple[str, str]] = {}
+        # Per-session seq sidecar, positionally aligned with the caller's
+        # messages list (dsh surfaceOp replace parity): lets compaction
+        # record which log range a fold shadows. Entries are None-less
+        # only while the store returns seqs; missing/misaligned sidecar
+        # degrades to today's memory-only compaction.
+        self._msg_seqs: dict[str, list[int]] = {}
         self._tail_checked: set[str] = set()
 
         # Per-session state (isolation between concurrent agents)
@@ -269,7 +275,119 @@ class SessionRunner:
         self._mcp_managers.clear()
 
     async def resume(self, session_id: str, store: Store) -> tuple[Message, ...]:
+        """Resume a session from the store.
+
+        Derives the LLM-visible SURFACE (raw log + recorded compaction
+        folds applied) instead of the raw history: resuming a compacted
+        session previously reloaded the full uncompacted log and burned
+        another L3 call to re-compress, with the incremental-summary
+        chain (previous_summary) broken. Also rehydrates the compaction
+        state's previous_summary from the last recorded fold so the next
+        compaction continues the incremental chain across processes.
+        """
+        if hasattr(store, "load_surface_with_seqs"):
+            msgs, seqs = await store.load_surface_with_seqs(session_id)
+            self._msg_seqs[session_id] = list(seqs)
+            if hasattr(store, "last_fold_summary"):
+                try:
+                    summary = await store.last_fold_summary(session_id)
+                    if summary is not None:
+                        from .compress import _bare_summary_text
+
+                        self._compaction_state.previous_summary = (
+                            _bare_summary_text(summary.content)
+                        )
+                except Exception:
+                    logger.debug("fold summary rehydration failed", exc_info=True)
+            return tuple(msgs)
         return tuple(await store.load_history(session_id))
+
+    async def _resync_seqs(
+        self, sid: str, messages: list[Message]
+    ) -> list[int] | None:
+        """Rebuild the seq sidecar by positional match against the derived
+        surface. Returns None when the in-memory list doesn't correspond
+        to the stored surface (foreign messages — fold stays memory-only)."""
+        try:
+            surface, seqs = await self.store.load_surface_with_seqs(sid)
+        except Exception:
+            return None
+        if len(surface) != len(messages):
+            return None
+        for a, b in zip(surface, messages):
+            if a.role != b.role or a.content != b.content:
+                return None
+        return list(seqs)
+
+    async def _record_surface_fold(
+        self,
+        sid: str,
+        original: list[Message],
+        new: list[Message],
+        kind: str,
+    ) -> None:
+        """Persist one compaction as a replace fold (dsh surfaceOp parity).
+
+        The raw log keeps every original message; the fold records that
+        surface range [seqs[0] .. seqs[first_surviving-1]] is replaced by
+        the newly persisted block (placeholder/attachments + summary).
+        Skipped gracefully (memory-only compaction, today's behavior)
+        when there is no store, no seq sidecar, or the sidecar is out of
+        alignment — L1/L2 compactions (which keep all originals) hit the
+        first_surviving == 0 early return by construction.
+        """
+        if self.store is None or not hasattr(self.store, "record_fold"):
+            return
+        seqs = self._msg_seqs.get(sid)
+        if seqs is None or len(seqs) != len(original) or not original:
+            # Sidecar missing/misaligned (e.g. the caller built the
+            # message list outside run_turn). Attempt a positional resync
+            # against the derived surface before giving up.
+            seqs = await self._resync_seqs(sid, original)
+            if seqs is None:
+                self._msg_seqs.pop(sid, None)
+                return
+            self._msg_seqs[sid] = list(seqs)
+        orig_ids = {id(m) for m in original}
+        new_ids = {id(m) for m in new}
+        first_surviving = next(
+            (i for i, m in enumerate(original) if id(m) in new_ids),
+            len(original),
+        )
+        if first_surviving == 0:
+            return  # nothing shadowed (L1/L2 or no-op compaction)
+        end_idx = first_surviving - 1
+        start_seq, end_seq = seqs[0], seqs[end_idx]
+        # Persist every inserted message (placeholder / attachments /
+        # summary) as the replacement block at the log tail.
+        inserted = [m for m in new if id(m) not in orig_ids]
+        if not inserted:
+            return
+        repl_seqs: list[int] = []
+        last_inserted = None
+        for m in inserted:
+            seq = await self.store.append(sid, m)
+            if seq is None:
+                # Store doesn't report seqs mid-block — can't record a
+                # coherent fold; leave surface as memory-only for now.
+                return
+            repl_seqs.append(seq)
+            last_inserted = m
+        try:
+            await self.store.record_fold(
+                sid, kind, start_seq, end_seq, repl_seqs[0], repl_seqs[-1]
+            )
+        except Exception:
+            logger.warning("surface fold recording failed", exc_info=True)
+            return
+        # Rebuild the sidecar for the post-fold list so subsequent folds
+        # can reference this fold's summary seq (nested folds).
+        seq_by_id = {id(original[i]): seqs[i] for i in range(len(original))}
+        for m, s in zip(inserted, repl_seqs):
+            seq_by_id[id(m)] = s
+        self._msg_seqs[sid] = [seq_by_id[id(m)] for m in new]
+        if last_inserted is not None:
+            self._store_tail[sid] = (last_inserted.role, last_inserted.content)
 
     async def steer(self, text: str) -> None:
         """Inject a steer text into the running turn.
@@ -509,14 +627,20 @@ class SessionRunner:
 
     async def _append(self, session_id: str, msg: Message) -> None:
         """Store append that keeps the known store tail current — the
-        user-message dedupe in _persist_user_tail relies on it."""
-        await self.store.append(session_id, msg)
+        user-message dedupe in _persist_user_tail relies on it — and the
+        per-message seq sidecar current — surface fold recording relies
+        on it (dsh surfaceOp replace: in-memory messages must stay
+        mappable to log seqs across nested folds)."""
+        seq = await self.store.append(session_id, msg)
         self._store_tail[session_id] = (msg.role, msg.content)
+        if seq is not None:
+            self._msg_seqs.setdefault(session_id, []).append(seq)
         # Bounded: a long-lived process cycling cron session ids grows
         # this dict without otherwise — entries are tiny but unbounded.
         if len(self._store_tail) > 1024:
             for old_sid in list(self._store_tail)[: len(self._store_tail) - 1024]:
                 self._store_tail.pop(old_sid, None)
+                self._msg_seqs.pop(old_sid, None)
 
     async def _audit_invariants(self, sid: str, messages: list[Message]) -> None:
         """Verify the message sequence before it reaches the model.
@@ -630,6 +754,8 @@ class SessionRunner:
             else:
                 before_tokens = count_tokens(tuple(messages))
                 if before_tokens > _threshold:
+                    original_snapshot = list(messages)
+                    failures_before = self._compaction_state.consecutive_failures
                     try:
                         # Use auxiliary model for compression if configured
                         compress_llm = self.llm
@@ -655,6 +781,21 @@ class SessionRunner:
                                     await compress_llm.close()
                                 except Exception:
                                     pass
+                        # Record the compaction as a surface fold (dsh
+                        # surfaceOp replace parity): the raw log keeps
+                        # everything; resume derives the compacted surface
+                        # instead of reloading + re-compressing. 'fallback'
+                        # when the breaker counted a failure this call,
+                        # 'summary' for a real L3.
+                        fold_kind = (
+                            "fallback"
+                            if self._compaction_state.consecutive_failures
+                            > failures_before
+                            else "summary"
+                        )
+                        await self._record_surface_fold(
+                            sid, original_snapshot, list(messages_list), fold_kind
+                        )
                         messages[:] = list(messages_list)
                         # Track compression effectiveness (anti-jitter).
                         # Effectiveness accounting ONLY — the runner must
@@ -945,6 +1086,10 @@ class SessionRunner:
                                     # for a rescue operation.
                                     from .compress import compact_conversation
 
+                                    original_snapshot = list(messages)
+                                    failures_before = (
+                                        self._compaction_state.consecutive_failures
+                                    )
                                     try:
                                         compress_llm = self.llm
                                         forked = False
@@ -969,6 +1114,18 @@ class SessionRunner:
                                                     await compress_llm.close()
                                                 except Exception:
                                                     pass
+                                        fold_kind = (
+                                            "fallback"
+                                            if self._compaction_state.consecutive_failures
+                                            > failures_before
+                                            else "summary"
+                                        )
+                                        await self._record_surface_fold(
+                                            sid,
+                                            original_snapshot,
+                                            list(messages_list),
+                                            fold_kind,
+                                        )
                                         messages[:] = list(messages_list)
                                     except BudgetExceeded as e:
                                         yield TurnFailed(f"budget exhausted during overflow recovery: {e}", code="budget")

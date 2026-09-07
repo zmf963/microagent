@@ -17,11 +17,65 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from .types import Message, ToolCall, Usage
+
+logger = logging.getLogger(__name__)
+
+
+def _apply_folds(
+    rows: list[tuple[int, Message]],
+    folds: list[tuple],
+    session_id: str,
+) -> list[tuple[int, Message]]:
+    """Apply replace folds to (seq, message) rows, in order.
+
+    Each fold (kind, start, end, repl_start, repl_end): remove the
+    shadowed seq range [start..end], then move the replacement block
+    [repl_start..repl_end] (which sits at the log tail where it was
+    appended) into the vacated position. Validation (dsh SurfaceManager
+    double-check parity): all referenced seqs must exist in the current
+    surface and the block must lie strictly after the shadowed range;
+    an invalid fold is skipped with a warning instead of corrupting the
+    derived surface.
+    """
+    for kind, start, end, rstart, rend in folds:
+        index = {s: i for i, (s, _) in enumerate(rows)}
+        if (
+            start not in index
+            or end not in index
+            or rstart not in index
+            or rend not in index
+        ):
+            logger.warning(
+                "surface fold %r in session %s references missing seqs "
+                "(%d..%d → %d..%d) — skipping",
+                kind, session_id, start, end, rstart, rend,
+            )
+            continue
+        if not (start <= end < rstart <= rend):
+            logger.warning(
+                "surface fold %r in session %s has invalid ranges "
+                "(%d..%d → %d..%d) — skipping",
+                kind, session_id, start, end, rstart, rend,
+            )
+            continue
+        # Insertion point = where the shadowed range STARTED, captured
+        # before removal (not "first seq > end": after earlier folds the
+        # surviving messages around the gap can have seqs on both sides).
+        insert_at = index[start]
+        block = [r for r in rows if rstart <= r[0] <= rend]
+        remaining = [
+            r for r in rows if not (start <= r[0] <= end or rstart <= r[0] <= rend)
+        ]
+        insert_at = min(insert_at, len(remaining))
+        remaining[insert_at:insert_at] = block
+        rows = remaining
+    return rows
 
 
 class UnsupportedSessionError(Exception):
@@ -39,9 +93,15 @@ class UnsupportedSessionError(Exception):
 
 @runtime_checkable
 class Store(Protocol):
-    """Persistent session store — append messages, load history, list sessions."""
+    """Persistent session store — append messages, load history, list sessions.
 
-    async def append(self, session_id: str, msg: Message) -> None: ...
+    ``append`` returns the assigned per-session seq when the store
+    supports it (SQLiteStore/InMemoryStore do); custom stores may return
+    None — surface fold recording (compaction event sourcing) is simply
+    skipped for those.
+    """
+
+    async def append(self, session_id: str, msg: Message) -> int | None: ...
     async def load_history(self, session_id: str) -> list[Message]: ...
     async def checkpoint(self, session_id: str) -> None: ...
     async def list_sessions(self) -> list[str]: ...
@@ -174,8 +234,31 @@ class SQLiteStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_llm_retry ON llm_retry(session_id, id)"
         )
+        # Surface fold ops (dsh surfaceOp replace parity): compaction is
+        # recorded as a replace {start_seq..end_seq} → replacement block
+        # {repl_start..repl_end} instead of mutating history in memory
+        # only. The RAW log stays complete; the LLM-visible surface is
+        # derived by applying folds in order (load_surface). Resume no
+        # longer reloads the uncompacted history and re-compresses
+        # (extra LLM call + broken incremental-summary chain).
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS surface_ops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                start_seq INTEGER NOT NULL,
+                end_seq INTEGER NOT NULL,
+                repl_start INTEGER NOT NULL,
+                repl_end INTEGER NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_surface_ops ON surface_ops(session_id, id)"
+        )
 
-    async def append(self, session_id: str, msg: Message) -> None:
+    async def append(self, session_id: str, msg: Message) -> int | None:
+        """Append one message; returns the assigned per-session seq."""
         serialized = _serialize_message(msg)
 
         def _append():
@@ -188,9 +271,10 @@ class SQLiteStore:
                 "INSERT INTO messages (session_id, seq, data) VALUES (?, ?, ?)",
                 (session_id, seq, serialized),
             )
+            return seq
 
         async with self._lock:
-            await asyncio.to_thread(_append)
+            return await asyncio.to_thread(_append)
 
     async def load_history(self, session_id: str) -> list[Message]:
         def _load():
@@ -216,6 +300,113 @@ class SQLiteStore:
 
         async with self._lock:
             return await asyncio.to_thread(_load)
+
+    # ------------------------------------------------------------------
+    # Surface fold ops (dsh surfaceOp replace parity)
+    # ------------------------------------------------------------------
+
+    def _load_rows_sync(self, session_id: str) -> list[tuple[int, Message]]:
+        rows = self._conn.execute(
+            "SELECT seq, data FROM messages WHERE session_id = ? ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+        out: list[tuple[int, Message]] = []
+        for seq, blob in rows:
+            try:
+                out.append((seq, _deserialize_message(blob)))
+            except UnsupportedSessionError:
+                raise
+            except Exception:
+                continue
+        return out
+
+    def _folds_sync(self, session_id: str) -> list[tuple]:
+        rows = self._conn.execute(
+            "SELECT kind, start_seq, end_seq, repl_start, repl_end "
+            "FROM surface_ops WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        return [tuple(r) for r in rows]
+
+    async def record_fold(
+        self,
+        session_id: str,
+        kind: str,
+        start_seq: int,
+        end_seq: int,
+        repl_start: int,
+        repl_end: int,
+    ) -> None:
+        """Record one compaction fold: the surface range
+        [start_seq, end_seq] is replaced by the already-appended block
+        [repl_start, repl_end]. kind: 'summary' (L3) | 'fallback'."""
+        import time as _time
+
+        def _rec():
+            self._conn.execute(
+                "INSERT INTO surface_ops "
+                "(session_id, kind, start_seq, end_seq, repl_start, repl_end, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, kind, start_seq, end_seq, repl_start, repl_end, _time.time()),
+            )
+            self._conn.commit()
+
+        async with self._lock:
+            await asyncio.to_thread(_rec)
+
+    async def load_surface_with_seqs(
+        self, session_id: str
+    ) -> tuple[list[Message], list[int]]:
+        """Derive the LLM-visible surface: raw log + folds applied in order.
+
+        Returns (messages, seqs) aligned positionally — the seq sidecar
+        lets the runner keep in-memory state mappable to the log across
+        multiple nested folds. Each fold is double-checked on apply
+        (dsh parity): the shadowed range and the replacement block must
+        both exist; a fold failing validation is skipped with a warning
+        rather than corrupting the surface.
+        """
+
+        def _derive():
+            rows = self._load_rows_sync(session_id)
+            folds = self._folds_sync(session_id)
+            applied = _apply_folds(rows, folds, session_id)
+            return ([m for _, m in applied], [s for s, _ in applied])
+
+        async with self._lock:
+            return await asyncio.to_thread(_derive)
+
+    async def load_surface(self, session_id: str) -> list[Message]:
+        msgs, _ = await self.load_surface_with_seqs(session_id)
+        return msgs
+
+    async def last_fold_summary(self, session_id: str) -> Message | None:
+        """The summary message of the most recent 'summary' fold — used to
+        rehydrate CompactionState.previous_summary across restarts, keeping
+        the incremental-summary chain alive across processes."""
+
+        def _last():
+            row = self._conn.execute(
+                "SELECT repl_end FROM surface_ops "
+                "WHERE session_id = ? AND kind = 'summary' "
+                "ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            msg_row = self._conn.execute(
+                "SELECT data FROM messages WHERE session_id = ? AND seq = ?",
+                (session_id, row[0]),
+            ).fetchone()
+            if msg_row is None:
+                return None
+            try:
+                return _deserialize_message(msg_row[0])
+            except Exception:
+                return None
+
+        async with self._lock:
+            return await asyncio.to_thread(_last)
 
     async def checkpoint(self, session_id: str) -> None:
         async with self._lock:
@@ -346,11 +537,14 @@ class InMemoryStore:
     """Simple dict-based store for unit tests.
 
     Maintains a global append counter to match SQLiteStore's
-    ``ORDER BY MAX(id) DESC`` recency ordering.
+    ``ORDER BY MAX(id) DESC`` recency ordering. Rows are (seq, Message)
+    pairs and folds mirror SQLiteStore's surface_ops so tests exercise
+    the same derive logic.
     """
 
     def __init__(self):
-        self._data: dict[str, list[Message]] = {}
+        self._rows: dict[str, list[tuple[int, Message]]] = {}
+        self._folds: dict[str, list[tuple]] = {}  # (kind, s, e, rs, re)
         self._seq: int = 0  # global append counter
         self._last_seq: dict[str, int] = {}  # session_id → last append seq
         self._retries: list[tuple[str, str, int]] = []  # (session_id, code, delay_ms)
@@ -368,13 +562,48 @@ class InMemoryStore:
                 return (c, delay)
         return None
 
-    async def append(self, session_id: str, msg: Message) -> None:
-        self._data.setdefault(session_id, []).append(msg)
+    async def append(self, session_id: str, msg: Message) -> int | None:
+        self._rows.setdefault(session_id, []).append((self._seq + 1, msg))
         self._seq += 1
         self._last_seq[session_id] = self._seq
+        return self._seq
+
+    async def record_fold(
+        self,
+        session_id: str,
+        kind: str,
+        start_seq: int,
+        end_seq: int,
+        repl_start: int,
+        repl_end: int,
+    ) -> None:
+        self._folds.setdefault(session_id, []).append(
+            (kind, start_seq, end_seq, repl_start, repl_end)
+        )
+
+    async def load_surface_with_seqs(
+        self, session_id: str
+    ) -> tuple[list[Message], list[int]]:
+        rows = list(self._rows.get(session_id, []))
+        folds = self._folds.get(session_id, [])
+        applied = _apply_folds(rows, folds, session_id)
+        return ([m for _, m in applied], [s for s, _ in applied])
+
+    async def load_surface(self, session_id: str) -> list[Message]:
+        msgs, _ = await self.load_surface_with_seqs(session_id)
+        return msgs
+
+    async def last_fold_summary(self, session_id: str) -> Message | None:
+        for kind, _s, _e, _rs, rend in reversed(self._folds.get(session_id, [])):
+            if kind != "summary":
+                continue
+            for s, m in reversed(self._rows.get(session_id, [])):
+                if s == rend:
+                    return m
+        return None
 
     async def load_history(self, session_id: str) -> list[Message]:
-        return list(self._data.get(session_id, []))
+        return [m for _, m in self._rows.get(session_id, [])]
 
     async def checkpoint(self, session_id: str) -> None:
         pass
@@ -390,9 +619,9 @@ class InMemoryStore:
         sorted_sids = sorted(self._last_seq, key=lambda s: self._last_seq[s], reverse=True)
         summaries = []
         for sid in sorted_sids:
-            msgs = self._data.get(sid, [])
+            rows = self._rows.get(sid, [])
             preview = ""
-            if msgs:
-                preview = msgs[-1].content[:50].replace("\n", " ")
-            summaries.append({"session_id": sid, "count": len(msgs), "preview": preview})
+            if rows:
+                preview = rows[-1][1].content[:50].replace("\n", " ")
+            summaries.append({"session_id": sid, "count": len(rows), "preview": preview})
         return summaries

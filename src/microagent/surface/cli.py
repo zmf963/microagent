@@ -786,7 +786,13 @@ async def _cmd_list(state: ReplState, arg: str) -> None:
 async def _cmd_resume(state: ReplState, arg: str) -> None:
     target = arg or await _pick_last_session(state.store)
     if target:
-        history = await state.store.load_history(target)
+        # Derive the compacted SURFACE (raw log + recorded folds) — a
+        # compacted session otherwise reloads full history and burns an
+        # extra L3 call re-compressing on the next turn.
+        if hasattr(state.store, "load_surface"):
+            history = await state.store.load_surface(target)
+        else:
+            history = await state.store.load_history(target)
         if history:
             await state.agent.close()
             state.messages = list(history)
@@ -823,6 +829,8 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
     state_obj = getattr(agent.runner, "_compaction_state", CompactionState())
     from ..llm.client import get_context_window
     model_ctx = get_context_window(agent.runner.llm.config.model)
+    original_snapshot = list(messages)
+    failures_before = state_obj.consecutive_failures
     compressed = await compact_conversation(
         tuple(messages),
         agent.runner.llm,
@@ -830,6 +838,19 @@ async def _cmd_compact(state: ReplState, arg: str) -> None:
         state=state_obj,
         force=True,
     )
+    # Record the fold before the agent is rebuilt (the runner owns the
+    # seq sidecar that maps in-memory messages to log seqs).
+    fold_kind = (
+        "fallback"
+        if state_obj.consecutive_failures > failures_before
+        else "summary"
+    )
+    try:
+        await agent.runner._record_surface_fold(
+            state.session_id, original_snapshot, list(compressed), fold_kind
+        )
+    except Exception:
+        pass  # manual /compact: memory-only fold is acceptable fallback
     messages[:] = list(compressed)
     await agent.close()
     config = state.config

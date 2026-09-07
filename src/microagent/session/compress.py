@@ -696,13 +696,25 @@ async def _summarize_and_attach(
         return _fallback(fallback_input)
 
 
+def _bare_summary_text(content: str) -> str:
+    """Normalize a summary message's content for the incremental chain:
+    strip the continuation preamble and unwrap <summary> tags."""
+    text = content
+    if text.startswith(SUMMARY_PREAMBLE):
+        text = text[len(SUMMARY_PREAMBLE):]
+    m = re.match(r"\s*<summary>(.*)</summary>\s*", text, flags=re.DOTALL)
+    if m:
+        text = m.group(1)
+    return text.strip()
+
+
 def _extract_summary_text(compressed: tuple[Message, ...]) -> str:
     """Extract the summary text from compressed messages for iterative storage.
 
     Relies on _llm_summarize always returning a single-user-message tuple.
     """
     if compressed and compressed[0].role == "user":
-        return compressed[0].content
+        return _bare_summary_text(compressed[0].content)
     return ""
 
 
@@ -753,13 +765,18 @@ async def _llm_summarize(
     summary_only = re.sub(r"<analysis>.*?</analysis>", "", summary_text, flags=re.DOTALL).strip()
 
     # Build compressed result: summary message
-    preamble = (
-        "本会话是从之前一次因上下文耗尽而中断的对话延续过来的。"
-        "以下摘要概述了之前的对话内容。请直接继续工作，不要重新询问已解决的问题。\n\n"
-    )
-    summary_msg = Message.user(preamble + summary_only)
+    summary_msg = Message.user(SUMMARY_PREAMBLE + summary_only)
 
     return (summary_msg,), usage
+
+
+# Prepend constant for the L3 summary message. Exported so the runner can
+# strip it when rehydrating previous_summary from a persisted fold — the
+# incremental-summary chain wants the bare summary, not the preamble.
+SUMMARY_PREAMBLE = (
+    "本会话是从之前一次因上下文耗尽而中断的对话延续过来的。"
+    "以下摘要概述了之前的对话内容。请直接继续工作，不要重新询问已解决的问题。\n\n"
+)
 
 
 def _fallback(messages: tuple[Message, ...]) -> tuple[Message, ...]:

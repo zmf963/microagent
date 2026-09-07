@@ -377,7 +377,14 @@ class CronScheduler:
         from ..core.types import Message
 
         try:
-            history = await self.store.load_history(self._session_id_for(job))
+            store = self.store
+            # Derive the compacted SURFACE, not the raw log — a compacted
+            # cron session otherwise reloads its full uncompacted history
+            # every tick and re-compresses (extra LLM call per tick).
+            if hasattr(store, "load_surface"):
+                history = await store.load_surface(self._session_id_for(job))
+            else:
+                history = await store.load_history(self._session_id_for(job))
             if not history:
                 return [Message.user(job.prompt)]
 
