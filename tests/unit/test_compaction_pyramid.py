@@ -407,9 +407,14 @@ class TestCompressorIdleWatchdog:
     silently stalled gateway froze run_turn forever (the main loop wraps
     its own stream in watch_idle for exactly this)."""
 
-    async def test_stalled_compressor_stream_raises_idle_timeout(self):
+    async def test_stalled_compressor_stream_returns_promptly(self):
+        """The watchdog's IdleTimeoutError is caught by
+        _summarize_and_attach's except (recording a breaker failure) and
+        degrades to the lossy fallback — the contract being tested is a
+        BOUNDED wait: without the watchdog this hung for the full 30s
+        sleep (or forever against a real dead gateway)."""
         import asyncio
-        import pytest
+        import time
         from microagent.session.compress import CompactionState, compact_conversation
         from microagent.core.types import Message
 
@@ -417,20 +422,23 @@ class TestCompressorIdleWatchdog:
             config = None
 
             async def stream(self, *, system, messages, tools=None):
-                yield  # first event: a silence-only iterator
+                yield  # then silence forever
                 await asyncio.sleep(30)
 
         state = CompactionState()
         msgs = (Message.user("x" * 100),)
-        with pytest.raises(Exception) as ei:
-            await asyncio.wait_for(
-                compact_conversation(
-                    msgs, _StalledLLM(), context_window=100, state=state,
-                    idle_timeout=0.5,
-                ),
-                timeout=5.0,
-            )
-        assert "idle" in str(ei.value).lower()
+        t0 = time.monotonic()
+        out = await asyncio.wait_for(
+            compact_conversation(
+                msgs, _StalledLLM(), context_window=100, state=state,
+                idle_timeout=0.5,
+            ),
+            timeout=5.0,
+        )
+        elapsed = time.monotonic() - t0
+        assert elapsed < 4.0, f"compressor hung {elapsed:.1f}s — no idle bound"
+        # Degraded to the breaker fallback, and the failure was counted.
+        assert state.consecutive_failures >= 1
 
     async def test_healthy_compressor_unaffected(self):
         from microagent.session.compress import CompactionState, compact_conversation
