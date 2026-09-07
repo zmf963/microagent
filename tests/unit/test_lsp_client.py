@@ -597,3 +597,58 @@ class _FakeGetClient:
 
     async def __call__(self, filepath):
         return self.client
+
+
+class TestPositionWireConversion:
+    """Round-22 🟡: schema says line/column are 1-indexed; the LSP wire is
+    0-indexed. line was converted but character passed through — every
+    definition/references/hover call resolved against the wrong column."""
+
+    async def test_wire_position_zero_indexed(self, monkeypatch):
+        captured = {}
+
+        class _Cap:
+            async def _eo(self, fp):
+                return "file:///x"
+
+            async def _req(self, method, params):
+                captured[method] = params["position"]
+                return []
+
+        client = LSPClient(("fake",), "file:///tmp")
+        cap = _Cap()
+        monkeypatch.setattr(client, "ensure_open", cap._eo)
+        monkeypatch.setattr(client, "_request", cap._req)
+
+        await client.definition("x.py", line=5, character=3)
+        await client.references("x.py", line=5, character=3)
+        await client.hover("x.py", line=5, character=3)
+
+        for method in (
+            "textDocument/definition",
+            "textDocument/references",
+            "textDocument/hover",
+        ):
+            pos = captured[method]
+            assert pos == {"line": 4, "character": 2}, (
+                f"{method} sent {pos} for (line=5, character=3) — "
+                "1-indexed input must convert to 0-indexed wire on BOTH axes"
+            )
+
+    async def test_wire_position_character_clamped(self, monkeypatch):
+        captured = {}
+
+        class _Cap:
+            async def _eo(self, fp):
+                return "file:///x"
+
+            async def _req(self, method, params):
+                captured[method] = params["position"]
+                return []
+
+        client = LSPClient(("fake",), "file:///tmp")
+        cap = _Cap()
+        monkeypatch.setattr(client, "ensure_open", cap._eo)
+        monkeypatch.setattr(client, "_request", cap._req)
+        await client.definition("x.py", line=1, character=0)
+        assert captured["textDocument/definition"]["character"] == 0

@@ -235,7 +235,7 @@ class LSPClient:
         uri = await self.ensure_open(filepath)
         result = await self._request("textDocument/definition", {
             "textDocument": {"uri": uri},
-            "position": {"line": line - 1, "character": max(0, character)},
+            "position": {"line": line - 1, "character": max(0, character - 1)},
         })
         return self._format_locations(result)
 
@@ -244,7 +244,7 @@ class LSPClient:
         uri = await self.ensure_open(filepath)
         result = await self._request("textDocument/references", {
             "textDocument": {"uri": uri},
-            "position": {"line": line - 1, "character": max(0, character)},
+            "position": {"line": line - 1, "character": max(0, character - 1)},
             "context": {"includeDeclaration": True},
         })
         return self._format_locations(result)
@@ -254,7 +254,7 @@ class LSPClient:
         uri = await self.ensure_open(filepath)
         result = await self._request("textDocument/hover", {
             "textDocument": {"uri": uri},
-            "position": {"line": line - 1, "character": max(0, character)},
+            "position": {"line": line - 1, "character": max(0, character - 1)},
         })
         if result is None:
             return "(no hover info)"
