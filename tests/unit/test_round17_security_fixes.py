@@ -418,3 +418,43 @@ class TestMemoryEnvOptIn:
         monkeypatch.setenv("MICROAGENT_MEMORY", "1")
         agent = Agent.from_config(LLMConfig("fake", "k", "m"), store=None)
         assert agent.runner.memory is not None
+
+
+class TestScrubberAttributeSplitLeak:
+    """Round-22 🟡: a streaming token boundary splitting an attribute-form
+    open tag ("<context " | "x=1>SECRET</context>done") leaked the entire
+    span — the partial-open holdback only knew prefixes of the literal
+    "<context>", and "<context " matches none of them."""
+
+    def test_attribute_open_split_across_feeds(self):
+        from microagent.security.scrubber import StreamingContextScrubber
+
+        s = StreamingContextScrubber()
+        out = s.feed("hello <context ")
+        assert out == "hello ", repr(out)
+        out2 = s.feed("x=1>SECRET</context>done")
+        assert out2 == "done", repr(out2)
+
+    def test_attribute_open_split_mid_attribute(self):
+        from microagent.security.scrubber import StreamingContextScrubber
+
+        s = StreamingContextScrubber()
+        assert s.feed("a <CONTEXT da") == "a "
+        assert s.feed('ta="1">inner</CONTEXT>after') == "after"
+
+    def test_literal_prefix_still_held(self):
+        from microagent.security.scrubber import StreamingContextScrubber
+
+        s = StreamingContextScrubber()
+        assert s.feed("plain <con") == "plain "
+        assert s.feed("text>") == ""  # completes as literal open → span
+
+    def test_incomplete_attribute_open_at_flush(self):
+        from microagent.security.scrubber import StreamingContextScrubber
+
+        s = StreamingContextScrubber()
+        assert s.feed("before <context x=") == "before "
+        # The held tail never grew a '>' — the span never opened, so it is
+        # ordinary (if ugly) text, not a leak. flush() emits it, matching
+        # the literal-prefix ("<con") end-of-stream behavior.
+        assert s.flush() == "<context x="

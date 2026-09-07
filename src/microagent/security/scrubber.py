@@ -28,6 +28,12 @@ _CLOSE_TAG = "</context>"
 # HTML forbids them; being lax here would let '</context foo>' pass)
 _OPEN_RE = re.compile(r"<context\b[^>]*>", re.IGNORECASE)
 _CLOSE_RE = re.compile(r"</context\s*>", re.IGNORECASE)
+# A buffer suffix that could still grow into an attribute-form open tag
+# ("<context x=1" — no '>' yet). Without this, a streaming token boundary
+# splitting "<context " from "x=1>…" emitted the opener and the whole span
+# leaked (the old partial check only knew prefixes of the literal
+# "<context>", and "<context " matches none of them).
+_PARTIAL_OPEN_RE = re.compile(r"<context\b[^>]*$", re.IGNORECASE)
 
 
 class StreamingContextScrubber:
@@ -93,6 +99,13 @@ class StreamingContextScrubber:
     def _check_partial_open(self) -> int:
         """Check if buffer ends with a partial opening tag. Returns partial length."""
         text = self._buffer
+        # Attribute-form partial: "<context x=1" split before the '>' —
+        # the tag has already outgrown the literal "<context>" prefix, so
+        # only a regex on the tail can catch it.
+        m = _PARTIAL_OPEN_RE.search(text)
+        if m is not None:
+            return m.end() - m.start()
+        # Literal-prefix partial: strict prefix of "<context>".
         for length in range(min(len(text), len(_OPEN_TAG) - 1), 0, -1):
             if _OPEN_TAG.lower().startswith(text[-length:].lower()):
                 return length
