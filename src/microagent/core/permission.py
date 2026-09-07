@@ -8,14 +8,15 @@ Design (from design doc §4):
 - Default policy: DENY (if no rule matches).
 - ASK delegates to an ask_callback (CLI/Web injects one).
 
-**Library extension point — NOT wired into SessionRunner by default.**
-The core loop (``SessionRunner.run_turn`` / ``_settle``) does not invoke
-``PermissionEngine.evaluate``; tool calls bypass permission enforcement
-unless a library user explicitly wires it in (e.g., via a ``ToolHook.before``
-that calls ``engine.evaluate(call)`` and returns ``None`` to deny). The
-CLI/REPL runs without permission enforcement. To enforce: construct a
-``PermissionEngine`` with your rules and call ``evaluate()`` from a
-``ToolHook`` passed to ``SessionRunner(tool_hooks=[...])``.
+**Wired into the core loop** via the ``permission_engine=`` parameter of
+``SessionRunner`` / ``Agent.from_config``: ``_settle`` evaluates every
+tool call against the engine (after the plan-mode guard, before
+execution). DENY surfaces as a denied ToolResult; ASK without an
+``ask_callback`` fails CLOSED.
+
+Do NOT additionally wire the engine through a ``ToolHook.before`` —
+``evaluate`` would then run twice per call and an ASK callback would
+prompt twice. The engine parameter is the single integration point.
 """
 
 from __future__ import annotations
