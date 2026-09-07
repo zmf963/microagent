@@ -1167,3 +1167,87 @@ retry_policy 支持 env/文件。
 - 'never' 穿透 SDK 层退避:属 create 层独立机制(池轮换同理),runner 层语义正确
 - /list 预览崩溃:session_summaries 有 except 兜底
 - search_sessions kind 泄漏:display-only,低危留档
+
+---
+
+## 二十五、第二十二轮:全库三路审查 + 全量修复(v1.1.3)— 2026-09-07
+
+> 方法:三路并行子代理(核心循环 / 工具层 / LLM+CLI+周边)穷尽阅读全部 34 个源文件,
+> 全部发现经本人探针复核(live API、运行时探针、源码逐行验证),证伪若干、确认 4🔴+19🟡。
+> 用户指示"全部修复"→ 4🔴 + 19🟡 + 🔵批次全修,27 个 fix commit。
+> 基线 1590 passed → **1665 passed, 11 skipped**;13,563 → 14,419 LOC。
+
+### 🔴 严重(全部已修复)
+
+**24.1 Esc 监视线程饿死默认执行器** ✅ (9395fee)
+- 每 0.2s `asyncio.to_thread(sys.stdin.read,1)`:超时后 worker 永久阻塞在读 syscall,
+  ~2.4s 塞满 14-worker 池 → 所有 to_thread 调用者(store 写入/memory/文件工具/question)
+  排队挂死;退出时 `shutdown_default_executor` 挂起。PTY 回归测试对旧实现 5.9s 干净失败。
+
+**24.2 /models refresh 无条件崩溃** ✅ (2f25011)
+- 线上 models.dev API 已改 provider 键控 schema(`{slug:{models:{key:row}}}`,cost 为
+  per-1M 数值,limit.context 取代 context_length),旧解析器迭代 provider 名字符串 →
+  AttributeError。新解析器双代兼容 + 官方 provider 优先(18 家路由商同名重列
+  deepseek-v4-flash,$0.088–$0.44/1M)+ 未知 shape 按网络失败降级保留缓存。
+  live 验证 5068 模型,官方价正确。
+
+**24.3 结果持久化循环无守卫** ✅ (697d2ff)
+- 循环中 I/O 异常(磁盘满/编码错)逃逸 → store 留孤儿 tool_calls → API 拒绝恢复会话。
+  这是孤儿修复不变量(budget/hard-cancel 路径都有守卫)的最后一个洞。
+  现在失败调用及余下全部降级持久化 error result + `TurnFailed(code=store_error)`。
+
+**24.4 plan 模式 bash 守卫换行绕过** ✅ (0d2d8e0)
+- split 正则不含 `\n`,shlex 把换行当空白 → `cat foo.txt\nrm -rf /` 只检查首词 cat。
+  配套:fnmatch(" rm ...","rm *") 为 False → 前导空格 rm 落到 ALLOW。
+  现已加 `\n|\r` 分割 + 控制关键字剥离(sudo/env/do/then/xargs/VAR=) + 双侧 strip。
+
+### 🟡 应修复(全部已修复)
+
+| # | 问题 | commit |
+|---|------|--------|
+| 24.5 | 重试 delay 记录但从不 sleep,零延迟轰击限流网关(两路独立发现) | daa9355 |
+| 24.6 | LSP character 差一错(line 转换了,character 原样透传) | c8aaa07 |
+| 24.7 | SSH recv_exit_status 不受 channel 超时约束,sleep infinity 永挂 | b4b4890 |
+| 24.8 | pydantic Field 约束纯广告,timeout=10**9 直通(修复中连带修正 Annotated+默认值丢约束的 schema 构建缺陷) | 3c1291e, 34469c9 |
+| 24.9 | scrubber 属性形式开标签跨 chunk 泄漏(探针实锤) | b52943e |
+| 24.10 | git 禁止旗标 `--amend=x`/`-df` 绕过(探针实锤) | 60421fe |
+| 24.11 | `</system-reminder >` 空白闭标签绕过全部注入模式 | de4a41b |
+| 24.12 | 压缩器 LLM 流无空闲看门狗,静默网关挂死整轮 | 5cd40ed |
+| 24.13 | 熔断器永不恢复(record_success 不可达,300s cooldown 是死代码)+ runner 用 fallback 效果 heal 熔断 | 97ee66a |
+| 24.14 | for_model() 客户端泄漏(压缩/overflow/learn 各漏一个 httpx 池) | 4fa634d |
+| 24.15 | skill triggers 空串全匹配 1.0 分/非字符串吞掉整轮注入;runner 静默 except 加日志 | aa24d27 |
+| 24.16 | memory 凭据入库无脱敏(新 security/secrets.py,API key 不再永久驻留 memory.db) | 0b2df37 |
+| 24.17 | /learn url 对 3xx 必挂(raise_for_status 语义);改手动跟随+逐跳 SSRF 重检 | 1fe8b67 |
+| 24.18 | Esc×2 在 question 后永久失效(cooked 模式不再重进 cbreak) | 9395fee |
+| 24.19 | plan 模式可被会话中途注册的 MCP 写工具绕过(改 allowlist 语义) | 9da7bfa |
+| 24.20 | retry_policy 非法规格启动时校验+回退时留痕;内层 except 遮蔽外层 e(Pyright 抓到的真 NameError) | e2458d2 |
+| 24.21 | permission.py 文档串声称"未接线"与实际矛盾(致双重接线) | 8456b58 |
+| 24.22 | close() 首步异常泄漏后续全部清理(runner+agent 逐项守卫) | 1ea5ea4 |
+| 24.23 | 子代理 turn_complete 事件 sid 错标 "default" | 50699be |
+| 24.24 | .usage.json 读改写竞态 + 非原子写(锁 + Curator._save_usage) | a5e24fa |
+
+### 🔵 批次(已修复)
+
+- skill 正文注入裸名键控跨命名空间错注入 + 目录终身不刷新 + skill_manage 不失效缓存 + skills_list 吞错 (5a91b45)
+- todo update 静默重置 status / web_search 先缓冲后切片 / grep 默认下钻 .git+node_modules / git 输出无界 / MCP str() 内容失真 / execute_code 超时丢部分输出 / process log 不见于 schema / read_file 幽灵提示 / console buffer 无上限 (64f2426)
+- classify_exception+CredentialPool 导出 / question print 崩溃留死旗 / LSP 死 reader 驱逐 / pending_memories 无界 / _store_tail 无界 / /skill unload 裸名 pop 无效 / 价格 2dp / Agent.run 单次性文档 (0f710f5)
+
+### needs-probe 三项(探针证伪,非问题)
+
+1. **SIGALRM vs C 级正则回溯**:实测 1.00s alarm 打断本需 53s 的 `(a+)+b` 搜索——grep 超时机制可信。
+2. **pathlib `**` symlink 环**:3.14 不递归进目录 symlink(瞬时返回)——无环风险。
+3. **bash kill 后 wait() 对逃逸进程组**:killpg 后 wait() 0.000s 返回(wait 只等进程退出,不等管道排空)——无需加界。
+
+### 剔除的误报(探针/源码证伪)
+
+- agent.steer 跨 loop:有 `_steer_pending` 兜底,子代理级联失败但父轮仍收到 steer
+- flush 持久性(PASSIVE checkpoint / synchronous=NORMAL):有意的性能取舍
+- Agent.run 二次调用崩:文档问题非 bug(已补文档)
+- FTS(OR)与 CJK LIKE(AND)语义差异:显示层不一致,低危留档
+- `BrowserState._last_screenshot` 类:round-21 前已移除
+
+### 有意不修(留档)
+
+- **ToolProgressDelta 批后统一 yield**(runner._run_tool_calls 全部 settle 后才放行)——真流式需要把执行管道改成事件队列,架构级改动,留 v1.2.0 与 surfaceOp replace-fold 一起做
+- glob/file_tree 事件循环上的同步遍历:需要 to_thread 化遍历器,收益中等,留档
+- pricing 缓存文件在包目录(只读安装无法持久化刷新):留档

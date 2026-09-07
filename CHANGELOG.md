@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.1.3 (2026-09-07)
+
+Round-22 全库三路审查 + 全量修复(4🔴 + 19🟡 + 🔵 批,27 个 fix commit)。
+
+### Fixed
+- **Esc 监视饿死默认执行器**:轮询 stdin 的 to_thread 每次超时都留下永久阻塞的
+  worker,~2.4s 塞满线程池后所有 to_thread 调用者挂死、进程退出挂起。改专用
+  daemon reader 线程(select + os.read);question 结束后重进 cbreak(Esc×2
+  此前永久失效)。
+- **`/models refresh` 无条件崩溃**:线上 API 已改 provider 键控 schema;新解析器
+  双代兼容、官方 provider 优先(路由商同名重列价差可达 5 倍)、未知 shape 保留
+  缓存降级。live 验证 5068 模型。
+- **结果持久化循环无守卫**:中途 I/O 错误留下孤儿 tool_calls(API 拒绝恢复会话)
+  ——孤儿不变量的最后一个洞;失败及余下调用降级 error result + TurnFailed。
+- **plan 模式换行绕过**:`cat foo.txt\nrm -rf /` 只检查首词;`\n` 入分割 + 控制
+  关键字剥离(sudo/env/do/xargs/VAR=)+ 权限 fnmatch 双侧 strip(前导空格 rm
+  曾落到 ALLOW)。plan 模式改 allowlist 语义,会话中途注册的 MCP 写工具不再可调。
+- **重试零延迟**:记录的 backoff delay 从不 sleep;现在实际休眠(封顶 30s)。
+- **LSP character 差一错**;**SSH 端到端超时**(recv_exit_status 永挂);
+  **pydantic 约束运行时强制**(timeout=10**9 直通 + Annotated 默认值丢约束的
+  schema 构建缺陷);**scrubber 属性开标签跨 chunk 泄漏**;**git 旗标
+  =value/短旗标绕过**;**`</system-reminder >` 空白绕过**。
+- **压缩器空闲看门狗**(静默网关曾冻结整轮);**熔断器半开恢复**(曾永久降级,
+  runner 不再 heal);**for_model 客户端池泄漏**。
+- **skill triggers 空串全匹配/非字符串吞掉整轮注入**;**正文注入跨命名空间错配**;
+  **目录运行时刷新**;**memory 凭据脱敏**(新 security/secrets.py);**/learn url
+  重定向跟随 + 逐跳 SSRF**;**retry_policy 启动校验**;**close() 逐项守卫**;
+  **子代理事件 sid**;**.usage.json 原子写**;以及 todo/web_search/grep/git/
+  MCP 内容失真/execute_code 部分输出/LSP 死 reader/pending 上限等 🔵 批。
+
 ## 1.1.2 (2026-08-16)
 
 第二十一轮审查修复批——v1.1.x 新代码 + 交叉组合 + CLI/配置/打包面。
