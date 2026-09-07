@@ -20,8 +20,9 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, get_type_hints, runtime_checkable
 
-from pydantic import create_model
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 from .types import ToolCall, ToolProgressDelta, ToolResult
 
@@ -71,6 +72,7 @@ class FunctionTool:
     parameters: dict[str, Any]
     description: str
     exclusive: bool = False
+    validator: type[BaseModel] | None = None
 
     def _bad_arguments_error(self, call: ToolCall, e: TypeError) -> ToolResult:
         """Build a diagnostic ToolResult for malformed tool-call arguments.
@@ -85,9 +87,40 @@ class FunctionTool:
             f"{self.name}: invalid arguments {sorted(call.arguments)}: {e}{hint}"
         )
 
-    async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult:
+    def _validated_arguments(self, call: ToolCall) -> dict[str, Any] | ToolResult:
+        """Enforce the advertised argument contract before the body runs.
+
+        The JSON-Schema constraints advertised to the LLM (Field ge/le,
+        types, required) must hold at execution time too — otherwise a
+        hallucinating or injected model bypasses every bound with e.g.
+        timeout=10**9. Returns the (coerced) argument dict, or an error
+        ToolResult describing the violations.
+        """
+        if self.validator is None:
+            return dict(call.arguments)
         try:
-            result = await self.fn(**call.arguments)
+            return dict(self.validator.model_validate(call.arguments))
+        except ValidationError as e:
+            raw = call.arguments.get("_raw")
+            hint = (
+                f" (raw arguments: {str(raw)[:200]!r})"
+                if raw is not None
+                else ""
+            )
+            problems = "; ".join(
+                f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+                for err in e.errors()
+            )
+            return ToolResult.error(
+                f"{self.name}: invalid arguments: {problems}{hint}"
+            )
+
+    async def execute(self, call: ToolCall, ctx: TurnContext | None = None) -> ToolResult:
+        args = self._validated_arguments(call)
+        if isinstance(args, ToolResult):
+            return args
+        try:
+            result = await self.fn(**args)
         except TypeError as e:
             return self._bad_arguments_error(call, e)
         if isinstance(result, ToolResult):
@@ -102,8 +135,12 @@ class FunctionTool:
         Falls back to non-streaming execute() if the function doesn't
         return an async generator.
         """
+        args = self._validated_arguments(call)
+        if isinstance(args, ToolResult):
+            yield args
+            return
         try:
-            result_or_iter = self.fn(**call.arguments)
+            result_or_iter = self.fn(**args)
         except TypeError as e:
             yield self._bad_arguments_error(call, e)
             return
@@ -142,6 +179,44 @@ class FunctionTool:
 # ---------------------------------------------------------------------------
 
 
+def _sig_fields(fn: Callable[..., Any]) -> dict[str, tuple[Any, Any]]:
+    """Shared signature→pydantic-fields extraction for schema + validator.
+
+    When a parameter is ``Annotated[T, Field(...)]`` AND has a signature
+    default, the signature default must win — passing the bare FieldInfo
+    as the field default makes pydantic treat the field as REQUIRED even
+    though the function accepts its absence (per-action optional params
+    like skill_manage's old_string/new_string).
+    """
+    sig = inspect.signature(fn)
+    hints = get_type_hints(fn, include_extras=True)
+
+    fields: dict[str, tuple[Any, Any]] = {}
+    for param_name, param in sig.parameters.items():
+        if param_name in ("self", "ctx"):
+            continue
+        annotation = hints.get(param_name, str)
+        has_default = param.default is not inspect.Parameter.empty
+
+        if hasattr(annotation, "__metadata__"):
+            base_type = annotation.__origin__
+            field_info: FieldInfo | None = None
+            for m in annotation.__metadata__:
+                if isinstance(m, FieldInfo):
+                    field_info = m
+                    break
+            if field_info is None:
+                fields[param_name] = (base_type, ...)
+            elif has_default and field_info.default is PydanticUndefined:
+                fields[param_name] = (base_type, param.default)
+            else:
+                fields[param_name] = (base_type, field_info)
+        else:
+            default = param.default if has_default else ...
+            fields[param_name] = (annotation, default)
+    return fields
+
+
 def _infer_schema_from_signature(fn: Callable[..., Any]) -> dict[str, Any]:
     """Build an OpenAI function-calling JSON Schema from ``fn``'s signature.
 
@@ -149,41 +224,53 @@ def _infer_schema_from_signature(fn: Callable[..., Any]) -> dict[str, Any]:
     per-parameter descriptions and constraints.
     """
     sig = inspect.signature(fn)
-    hints = get_type_hints(fn, include_extras=True)
+    fields = _sig_fields(fn)
 
-    fields: dict[str, tuple[Any, Any]] = {}
-    required: list[str] = []
-
-    for param_name, param in sig.parameters.items():
-        if param_name in ("self", "ctx"):
-            continue
-        annotation = hints.get(param_name, str)
-
-        # Extract Annotated metadata if present
-        if hasattr(annotation, "__metadata__"):
-            base_type = annotation.__origin__
-            metadata = annotation.__metadata__
-            field_info: FieldInfo | None = None
-            for m in metadata:
-                if isinstance(m, FieldInfo):
-                    field_info = m
-                    break
-            if field_info is not None:
-                fields[param_name] = (base_type, field_info)
-            else:
-                fields[param_name] = (base_type, ...)
-        else:
-            has_default = param.default is not inspect.Parameter.empty
-            default = param.default if has_default else ...
-            fields[param_name] = (annotation, default)
-
-        if param.default is inspect.Parameter.empty:
-            required.append(param_name)
+    required = [
+        param_name
+        for param_name, param in sig.parameters.items()
+        if param_name not in ("self", "ctx")
+        and param.default is inspect.Parameter.empty
+    ]
 
     model = create_model(f"{fn.__name__}_Params", **fields)
     schema = model.model_json_schema()
     schema["required"] = required
     return schema
+
+
+def _build_validator_model(fn: Callable[..., Any]) -> type[BaseModel] | None:
+    """Build a runtime-argument validator model for ``fn``.
+
+    The schema advertised to the LLM (Field ge/le constraints, defaults,
+    types) was previously display-only — nothing validated the actual
+    ``call.arguments``, so a hallucinating or injected model could send
+    ``timeout=10**9`` or wrong-typed values that crashed deep inside the
+    tool. This model enforces the same contract at execution time:
+    unknown keys are rejected (``extra="forbid"``) and constraint
+    violations raise before the tool body runs.
+
+    Returns None when the signature can't be modeled (e.g. ``*args``),
+    in which case validation is skipped and the legacy TypeError path
+    in execute() still applies.
+    """
+    sig = inspect.signature(fn)
+    for param in sig.parameters.values():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            return None
+
+    fields = _sig_fields(fn)
+    try:
+        return create_model(
+            f"{fn.__name__}_Validator",
+            __config__=ConfigDict(extra="forbid", coerce_numbers_to_str=False),
+            **fields,
+        )
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +315,12 @@ def tool(
         desc = description or (fn.__doc__ or "").strip().split("\n")[0]
         params = _infer_schema_from_signature(fn)
         ft = FunctionTool(
-            name=name, fn=fn, parameters=params, description=desc, exclusive=exclusive
+            name=name,
+            fn=fn,
+            parameters=params,
+            description=desc,
+            exclusive=exclusive,
+            validator=_build_validator_model(fn),
         )
         _registry[name] = ft
         return ft

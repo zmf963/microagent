@@ -11,16 +11,25 @@ yields TurnFailed(code="store_error").
 """
 
 from microagent.core.store import InMemoryStore
-from microagent.core.tool import ToolRegistry, tool
+from microagent.core.tool import ToolRegistry
 from microagent.core.types import Message, ToolResult, TurnFailed
 from microagent.session.runner import SessionRunner
 
-from .fake_llm import FakeLLMClient, ScriptedResponse, text_response, tool_response
+from .fake_llm import FakeLLMClient, text_response, tool_response
 
 
-@tool("echo_ok", description="Return a fixed ok result.")
-async def echo_ok() -> ToolResult:
-    return ToolResult.ok("ok")
+def _make_echo_tool():
+    """Defined inside a factory (NOT at module level): the @tool decorator
+    writes into the module-global _registry at decoration time, and a
+    module-level definition would pollute _default_builtins() for every
+    test collected afterwards."""
+    from microagent.core.tool import tool
+
+    @tool("echo_ok", description="Return a fixed ok result.")
+    async def echo_ok() -> ToolResult:
+        return ToolResult.ok("ok")
+
+    return echo_ok
 
 
 class FlakyStore(InMemoryStore):
@@ -63,7 +72,7 @@ class TestPersistLoopGuard:
         )
         store = FlakyStore(fail_on=1)
         registry = ToolRegistry()
-        registry.register(echo_ok)
+        registry.register(_make_echo_tool())
         runner = SessionRunner(llm=llm, registry=registry, store=store)
 
         events = await _collect(runner, [Message.user("hi")])
@@ -106,7 +115,7 @@ class TestPersistLoopGuard:
         )
         store = FlakyStore(fail_on=2)
         registry = ToolRegistry()
-        registry.register(echo_ok)
+        registry.register(_make_echo_tool())
         runner = SessionRunner(llm=llm, registry=registry, store=store)
 
         events = await _collect(runner, [Message.user("hi")])
