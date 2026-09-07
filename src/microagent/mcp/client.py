@@ -40,7 +40,20 @@ class MCPToolAdapter:
             if session is None:
                 return ToolResult.error(f"MCP tool {self.name}: session not connected")
             result = await session.call_tool(self.name, call.arguments)
-            content = str(result.content) if result.content else "(empty)"
+            # Extract text parts properly: str(result.content) on a list of
+            # TextContent objects yields a Python repr (quotes +
+            # content=TextContent(...)) rather than the text itself. Some
+            # servers/tests return a bare string — pass it through.
+            if result.content:
+                if isinstance(result.content, str):
+                    content = result.content
+                else:
+                    texts = [
+                        getattr(part, "text", "") for part in result.content
+                    ]
+                    content = "\n".join(t for t in texts if t) or "(empty)"
+            else:
+                content = "(empty)"
             return ToolResult.ok(content)
         except Exception as e:
             return ToolResult.error(f"MCP tool {self.name} failed: {e!r}")

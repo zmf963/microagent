@@ -99,8 +99,17 @@ async def git(
         # Hard timeout — communicate() blocks until process exits, which is
         # forever if git is waiting on a GPG passphrase or an editor.
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        # Bounded output: `git log --stat` / `git show` on a big repo can
+        # buffer tens of MB in memory before this point; cap what flows on
+        # into the conversation (bash.py caps at 100 KB — same idea).
+        _MAX_GIT_OUTPUT = 100_000
         output = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
+        if len(output) > _MAX_GIT_OUTPUT:
+            output = (
+                output[:_MAX_GIT_OUTPUT]
+                + f"\n[truncated: {len(output) - _MAX_GIT_OUTPUT} chars]"
+            )
 
         if proc.returncode != 0:
             return ToolResult.error(f"git {subcommand} failed (exit {proc.returncode}): {err}")

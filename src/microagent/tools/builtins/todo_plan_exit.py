@@ -47,9 +47,10 @@ async def todo(
     status: Annotated[
         str,
         Field(
-            description="Status: pending | in_progress | completed",
+            description="Status: pending | in_progress | completed "
+            "(update: omit/leave default to keep the current status)",
         ),
-    ] = "pending",
+    ] = "",
 ) -> ToolResult:
     state = _get_state()
     todos = state.todos
@@ -63,7 +64,7 @@ async def todo(
     elif action == "add":
         if not content:
             return ToolResult.error("content is required for add")
-        todos.append({"content": content, "status": status})
+        todos.append({"content": content, "status": status or "pending"})
         return ToolResult.ok(f"added todo #{len(todos) - 1}: {content}")
 
     elif action == "update":
@@ -71,7 +72,12 @@ async def todo(
             return ToolResult.error(f"todo #{item_id} not found")
         if content:
             todos[item_id]["content"] = content
-        todos[item_id]["status"] = status
+        # Only touch status when the caller passed one — an update that
+        # rewords an in_progress item must not silently reset it to
+        # pending (empty-string sentinel; the schema default documents
+        # "leave default to keep").
+        if status:
+            todos[item_id]["status"] = status
         return ToolResult.ok(f"updated todo #{item_id}")
 
     elif action == "remove":

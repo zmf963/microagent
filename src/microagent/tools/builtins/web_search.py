@@ -28,17 +28,26 @@ async def web_search(
     import httpx
 
     try:
+        # Stream with an incremental byte ceiling — a non-streaming get()
+        # buffers the ENTIRE body first, so a hostile/misconfigured
+        # upstream could push hundreds of MB within the 15s timeout
+        # before the [:2_000_000] slice ever ran (web_fetch's pattern).
+        chunks: list[bytes] = []
+        total = 0
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(
+            async with client.stream(
+                "GET",
                 "https://lite.duckduckgo.com/lite/",
                 params={"q": query},
                 headers={"User-Agent": "MicroAgent/0.1"},
-            )
-            resp.raise_for_status()
-            # Cap the body: a hostile/misconfigured upstream returning a
-            # multi-MB page previously fed re.findall across the whole
-            # string. 2 MB covers any realistic result page.
-            html = resp.text[:2_000_000]
+            ) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= 2_000_000:
+                        break
+        html = b"".join(chunks).decode("utf-8", errors="replace")[:2_000_000]
     except Exception as e:
         return ToolResult.error(f"search failed: {e!r}")
 

@@ -39,7 +39,7 @@ async def read_file(
     if size > _MAX_READ_BYTES:
         return ToolResult.error(
             f"file too large: {size:,} bytes exceeds {_MAX_READ_BYTES:,} byte limit. "
-            f"Use grep or offset/limit on a streamed reader instead."
+            f"Use grep to search it, or ask for specific sections by name."
         )
 
     # Read in a thread so a slow/network filesystem doesn't block the loop.

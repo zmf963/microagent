@@ -154,11 +154,18 @@ window.__microagent_console = [];
         (function (level, fn) {
             console[level] = function () {
                 var args = Array.prototype.slice.call(arguments);
-                window.__microagent_console.push({
+                var buf = window.__microagent_console;
+                buf.push({
                     level: level,
                     text: args.map(safeStringify).join(' '),
                     ts: Date.now()
                 });
+                // Ring cap: a spammy page (setInterval console.log) grows
+                // renderer memory until navigation otherwise — the Python
+                // side only ever reads the last 50 entries anyway.
+                if (buf.length > 1000) {
+                    buf.splice(0, buf.length - 1000);
+                }
                 fn.apply(console, args);
             };
         })(level, orig[level]);

@@ -90,7 +90,12 @@ async def execute_code(
                 await proc.wait()
             except Exception:
                 pass
-            return ToolResult.error(f"execution timed out after {timeout}s")
+            # Include whatever was collected before the deadline (bash.py
+            # parity) — partial output is usually exactly the diagnostic
+            # that explains the hang.
+            partial = b"".join(chunks).decode("utf-8", errors="replace").strip()
+            suffix = f"\n[partial output before timeout]:\n{partial}" if partial else ""
+            return ToolResult.error(f"execution timed out after {timeout}s{suffix}")
 
         await proc.wait()
         output = b"".join(chunks).decode("utf-8", errors="replace").strip()

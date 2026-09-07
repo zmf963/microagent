@@ -17,6 +17,15 @@ from ...core.types import ToolResult
 # decode) exhausts memory even though only matching lines are needed.
 _MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+# VCS/vendor dirs skipped when walking a directory tree (mirrors
+# file_tree's ignore set) — the default **/* glob otherwise stats and
+# fully reads .git objects and node_modules before the binary check.
+_IGNORE_DIRS = frozenset({
+    "__pycache__", ".git", ".venv", "venv", "node_modules",
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", "dist", "build",
+    ".eggs",
+})
+
 # SIGALRM-based regex timeout (Unix only). asyncio runs in the main thread,
 # so signal.alarm is safe to set from a tool. Catastrophic-backtracking
 # patterns (e.g. (a+)+b) on a long line would otherwise hang the loop —
@@ -75,8 +84,7 @@ def _finish(lines: list[str], timed_out: int) -> str:
 @tool(
     "grep", description="Search file contents by regex. Returns matching lines with line numbers."
 )
-async def grep(
-    pattern: Annotated[str, Field(description="Regular expression pattern to search for")],
+async def grep(    pattern: Annotated[str, Field(description="Regular expression pattern to search for")],
     path: Annotated[str, Field(description="Directory or file to search in")] = ".",
     glob: Annotated[str, Field(description="File name glob pattern (e.g. '*.py')")] = "**/*",
     max_results: Annotated[int, Field(description="Maximum matches to return", ge=1, le=500)] = 50,
@@ -100,6 +108,13 @@ async def grep(
 
     for fpath in files:
         if not fpath.is_file():
+            continue
+        # Skip VCS/vendor dirs (default **/* descends into .git, node_modules,
+        # etc. — every default grep call stats AND fully reads loose git
+        # objects / vendor trees before the binary check discards them).
+        if any(
+            part in _IGNORE_DIRS for part in fpath.parts[len(root.parts):]
+        ):
             continue
         # Skip oversized files before reading.
         try:

@@ -77,9 +77,9 @@ def _cleanup_dead() -> None:
         reg.dropped.pop(sid, None)
 
 
-@tool("process", description="Manage background processes: start, poll, kill, list, wait, write.")
+@tool("process", description="Manage background processes: start, poll, kill, list, wait, write, log.")
 async def process(
-    action: Annotated[str, Field(description="One of: start, poll, kill, list, wait, write")],
+    action: Annotated[str, Field(description="One of: start, poll, kill, list, wait, write, log")],
     command: Annotated[
         str | None, Field(description="Shell command to run (for action=start)")
     ] = None,
