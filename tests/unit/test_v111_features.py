@@ -312,3 +312,44 @@ class TestBashBackendSeam:
         async for _ in runner.run_turn([Message.user("run")]):
             pass
         assert backend.calls, "backend never received the bash call"
+
+
+class TestRetryDelayActuallySlept:
+    """Round-22 🟡: the recorded backoff delay must actually be slept —
+    previously delay_ms was written to the retry ledger and then the
+    retry fired immediately, hammering a rate-limiting gateway with
+    zero-delay retries."""
+
+    async def test_retry_waits_for_delay(self):
+        import time
+
+        class _FailOnceLLM:
+            def __init__(self):
+                self._calls = 0
+                self.timestamps = []
+                self.config = LLMConfig("fake", "k", "m", retry_policy="normal")
+
+            async def stream(self, system, messages, tools):
+                self._calls += 1
+                self.timestamps.append(time.monotonic())
+                if self._calls == 1:
+                    raise TimeoutError("stalled")
+                yield TextDelta(text="recovered", kind="content")
+                yield Usage()
+                yield StreamDone(usage=Usage(), stop_reason="stop")
+
+            def for_model(self, m):
+                return self
+
+        from microagent.core.types import TurnComplete
+
+        llm = _FailOnceLLM()
+        runner = SessionRunner(llm=llm, registry=ToolRegistry([]), budget=Budget())
+        events = []
+        async for e in runner.run_turn([Message.user("hi")]):
+            events.append(e)
+        assert any(isinstance(e, TurnComplete) for e in events)
+        assert llm._calls == 2
+        # Default delay is 1000ms (no Retry-After on a TimeoutError).
+        gap = llm.timestamps[1] - llm.timestamps[0]
+        assert gap >= 0.9, f"retry fired after only {gap:.2f}s — delay not slept"

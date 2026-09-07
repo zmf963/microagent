@@ -960,16 +960,23 @@ class SessionRunner:
                     # the store so backoff continuation survives restarts
                     # and consumers can audit retry spend. Provider
                     # Retry-After hint wins; otherwise the default delay.
+                    delay_ms = failure.retry_after_ms or 1_000
                     if self.store is not None and hasattr(
                         self.store, "record_llm_retry"
                     ):
-                        delay_ms = failure.retry_after_ms or 1_000
                         try:
                             await self.store.record_llm_retry(
                                 sid, failure.code, delay_ms
                             )
                         except Exception:
                             pass
+                    # Actually pace the retry by the computed delay — the
+                    # ledger alone doesn't slow anything down, and without
+                    # this sleep a rate-limited gateway gets hammered with
+                    # zero-delay retries. Capped so a hostile Retry-After
+                    # can't stall the turn indefinitely. Cancellation-safe:
+                    # interrupt during the sleep propagates CancelledError.
+                    await asyncio.sleep(min(delay_ms, 30_000) / 1_000)
                     continue  # retry the turn (re-enters the outer loop)
                 code = "llm_timeout" if failure.code == "timeout" else "llm_error"
                 yield TurnFailed(f"LLM error: {e!r}", code=code)
