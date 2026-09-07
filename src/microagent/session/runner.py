@@ -265,6 +265,16 @@ class SessionRunner:
         self._proc_registry.procs.clear()
         self._proc_registry.outputs.clear()
 
+        # Process-family seam cleanup: Docker/SSH terminal backends own
+        # remote processes (containers, channels) that the local registry
+        # above knows nothing about — close their process backends too.
+        pb = getattr(self.terminal_backend, "processes", None)
+        if pb is not None and hasattr(pb, "close"):
+            try:
+                await pb.close()
+            except Exception:
+                logger.debug("process backend close failed", exc_info=True)
+
         # Disconnect MCP servers so their child subprocesses (npx, uvx, ...)
         # don't outlive the session.
         for mgr in list(self._mcp_managers.values()):
@@ -1502,6 +1512,7 @@ class SessionRunner:
                 from ..tools.builtins import skills_list as _sl_mod
                 from ..tools.builtins import task as _task_module
                 from ..tools.builtins import todo_plan_exit as _tpe_module
+                from ..terminal.processes import UnsupportedProcessBackend
 
                 # Re-bind ALL per-session ContextVars per task. anyio
                 # start_soon copies the current context, but if two
@@ -1522,6 +1533,24 @@ class SessionRunner:
                 from ..tools.builtins import bash as _bash_module
 
                 _bash_module.set_backend(self.terminal_backend)
+                # Process-family seam (v1.2.0): the process tool follows
+                # the SAME terminal backend so the capability family moves
+                # together — a Docker/SSH-bound parent must never spawn
+                # background processes on the host (the round-21 subagent
+                # escape class). Custom backends without a `processes`
+                # family get an explicit refusal, not a host fallback.
+                if self.terminal_backend is None:
+                    _proc_module.set_backend(None)
+                else:
+                    _proc_module.set_backend(
+                        getattr(
+                            self.terminal_backend,
+                            "processes",
+                            UnsupportedProcessBackend(
+                                type(self.terminal_backend).__name__
+                            ),
+                        )
+                    )
                 from ..tools.builtins import session_search as _ss
                 _ss._current_store.set(self.store)
                 _sl_mod._set_loader(self.skill_loader)

@@ -53,16 +53,13 @@ class TestMcpConnectHash:
 class TestProcessStartStdin:
     def test_start_uses_stdin_pipe(self):
         """The `write` action requires p.stdin to be non-None, which means
-        start must spawn with stdin=PIPE. Structural check."""
+        start must spawn with stdin=PIPE. Structural check. Since the
+        v1.2.0 process seam the spawn lives in LocalProcessBackend."""
         import inspect
-        from microagent.tools.builtins.process import process
-        src = inspect.getsource(process.fn)
-        # Find the start case body
-        idx = src.find('case "start"')
-        assert idx != -1
-        end = src.find("case", idx + 10)
-        start_body = src[idx:end]
-        assert "stdin=asyncio.subprocess.PIPE" in start_body, (
+        from microagent.terminal.processes import LocalProcessBackend
+
+        src = inspect.getsource(LocalProcessBackend.spawn)
+        assert "stdin=asyncio.subprocess.PIPE" in src, (
             "start must set stdin=PIPE so the write action can send input"
         )
 

@@ -38,6 +38,24 @@ class SSHTerminal:
         self._key_file = key_file
         self._port = port
         self._known_hosts = known_hosts
+        self._process_backend = None
+
+    @property
+    def processes(self):
+        """Process-family seam (v1.2.0): paramiko PTY channels as remote
+        background processes (send supported via the PTY). Cached so
+        close() can tear down channels + the shared client."""
+        if self._process_backend is None:
+            from .processes import SSHProcessBackend
+
+            self._process_backend = SSHProcessBackend(
+                self._host,
+                username=self._username,
+                password=self._password,
+                key_file=self._key_file,
+                port=self._port,
+            )
+        return self._process_backend
 
     async def run(
         self,

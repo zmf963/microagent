@@ -71,6 +71,17 @@ class TerminalBackend(Protocol):
 class LocalTerminal:
     """Execute commands via local subprocess."""
 
+    @property
+    def processes(self):
+        """Process-family seam (v1.2.0): the process tool bound to this
+        terminal runs locally over the session's ContextVar registry —
+        identical to the tool's default behavior. Lazy import avoids a
+        terminal→tools import cycle."""
+        from .processes import LocalProcessBackend
+        from ..tools.builtins.process import _get_registry
+
+        return LocalProcessBackend(_get_registry())
+
     @staticmethod
     async def _wait_killed(proc: asyncio.subprocess.Process) -> None:
         """Wait for a killed subprocess, bounded.
@@ -169,6 +180,17 @@ class DockerTerminal:
     def __init__(self, image: str = "alpine:latest", container_name: str = ""):
         self._image = image
         self._name = container_name or f"microagent-{id(self):x}"
+        self._process_backend = None
+
+    @property
+    def processes(self):
+        """Process-family seam (v1.2.0): docker run -d + logs -f per
+        process. Cached per terminal so close() can reap containers."""
+        if self._process_backend is None:
+            from .processes import DockerProcessBackend
+
+            self._process_backend = DockerProcessBackend(self._image)
+        return self._process_backend
 
     async def run(
         self,

@@ -1,16 +1,21 @@
 """process builtin tool — background process management.
 
 Supports: start, poll, log, kill, wait, list, write.
-Processes are tracked in a per-session registry via ContextVar,
-providing isolation between concurrent Agent sessions.
+Processes are tracked per-session via ContextVar, providing isolation
+between concurrent Agent sessions.
+
+Since v1.2.0 the tool dispatches through a ProcessBackend (terminal/
+processes.py) bound by the runner from the session's TerminalBackend —
+swapping the terminal backend migrates the whole capability family
+(the bash seam from v1.1.1, applied to processes). Without a bound
+backend it uses the LocalProcessBackend over this module's per-session
+registry, which is behavior-identical to the pre-seam implementation.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import signal
-import time
+import contextvars
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -18,6 +23,7 @@ from pydantic import Field
 
 from ...core.tool import tool
 from ...core.types import ToolResult
+from ...terminal.processes import LocalProcessBackend, ProcessBackend
 from .._session_state import session_state
 
 # ---------------------------------------------------------------------------
@@ -41,6 +47,10 @@ class ProcRegistry:
     procs: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     outputs: dict[str, list[str]] = field(default_factory=dict)
     dropped: dict[str, int] = field(default_factory=dict)  # ring-dropped line counts
+    # v1.2.0 seam: the canonical ManagedProcess handles (the ring and
+    # drain cursors live on the handle — get() must return the SAME
+    # instance spawn() created, not a fresh one over the raw Process).
+    handles: dict[str, object] = field(default_factory=dict)
 
 
 def _append_output(reg: ProcRegistry, sid: str, lines: list[str]) -> None:
@@ -61,20 +71,26 @@ _current_registry, _get_registry = session_state(
     "process_current_registry", ProcRegistry,
 )
 
+# Backend seam: the runner binds the session's terminal-backend process
+# family here (same pattern as bash's set_backend). None → local default.
+_current_backend: contextvars.ContextVar = contextvars.ContextVar(
+    "process_current_backend", default=None
+)
 
-def _generate_id() -> str:
-    reg = _get_registry()
-    return f"proc-{int(time.time() * 1000)}-{len(reg.procs)}"
+
+def set_backend(backend: ProcessBackend | None) -> None:
+    """Bind the process backend for the current session context. The
+    runner rebinds on every tool execution — direct calls are
+    overwritten by the runner's own terminal_backend on the next
+    process call in a turn."""
+    _current_backend.set(backend)
 
 
-def _cleanup_dead() -> None:
-    """Remove exited processes from registry (called on each action)."""
-    reg = _get_registry()
-    dead = [sid for sid, p in reg.procs.items() if p.returncode is not None]
-    for sid in dead:
-        reg.procs.pop(sid, None)
-        reg.outputs.pop(sid, None)
-        reg.dropped.pop(sid, None)
+def _resolve_backend() -> ProcessBackend:
+    backend = _current_backend.get()
+    if backend is not None:
+        return backend
+    return LocalProcessBackend(_get_registry())
 
 
 @tool("process", description="Manage background processes: start, poll, kill, list, wait, write, log.")
@@ -89,166 +105,87 @@ async def process(
     ] = None,
     timeout: Annotated[float, Field(description="Max seconds for wait action")] = 30,
 ) -> ToolResult:
-    reg = _get_registry()
+    backend = _resolve_backend()
     match action:
         case "start":
-            _cleanup_dead()  # prevent unbounded growth
+            backend.cleanup_dead()  # prevent unbounded growth
             if not command:
                 return ToolResult.error("command is required for action=start")
             try:
-                # start_new_session=True creates a new process group so
-                # kill() can signal the whole group (not just /bin/sh),
-                # preventing orphaned grandchildren.
-                # stdin=PIPE is required so the `write` action can send
-                # input to the process (without it, p.stdin is None and
-                # write always errors "process has no stdin").
-                p = await asyncio.create_subprocess_shell(
-                    command,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    start_new_session=True,
-                )
-                sid = _generate_id()
-                reg.procs[sid] = p
-                reg.outputs[sid] = []
-                reg.dropped[sid] = 0
-                return ToolResult.ok(sid)
-
+                handle = await backend.spawn(command)
+                return ToolResult.ok(handle.id)
             except Exception as e:
                 return ToolResult.error(f"start failed: {e!r}")
 
         case "poll":
-            if not session_id or session_id not in reg.procs:
+            handle = backend.get(session_id) if session_id else None
+            if handle is None:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = reg.procs[session_id]
-            if p.returncode is not None:
-                # Already done — collect remaining output. Wrap in a timeout
-                # because a grandchild holding the stdout pipe open (daemon
-                # that inherited the fd) keeps read() blocked forever even
-                # after the shell exits.
-                if p.stdout:
-                    try:
-                        remaining = await asyncio.wait_for(p.stdout.read(), timeout=2.0)
-                        if remaining:
-                            tail = remaining[-_MAX_LINE_CHARS * 50:]
-                            _append_output(
-                                reg, session_id,
-                                [tail.decode("utf-8", errors="replace").rstrip()],
-                            )
-                    except TimeoutError:
-                        _append_output(reg, session_id, ["(stdout pipe still open, partial output shown)"])
-                return ToolResult.ok(f"(exited {p.returncode})\n" + "\n".join(reg.outputs.get(session_id, [])))
-            # Still running — drain available output, but bounded: a
-            # continuously-outputting process (yes, tail -f) always has a
-            # line ready within the idle timeout, so an unbounded loop
-            # never returns and hangs the whole agent turn.
-            drained = 0
-            if p.stdout:
-                for _ in range(_MAX_POLL_LINES):
-                    try:
-                        line = await asyncio.wait_for(p.stdout.readline(), timeout=0.1)
-                    except TimeoutError:
-                        break  # idle — no more output right now
-                    if not line:
-                        break  # EOF
-                    _append_output(reg, session_id, [line.decode("utf-8", errors="replace").rstrip()])
-                    drained += 1
-            tail = "\n".join(reg.outputs.get(session_id, [])[-20:])
-            if drained >= _MAX_POLL_LINES:
+            code = await handle.status()
+            if code is not None:
+                # Local parity: after exit, collect what's left in the
+                # pipe (bounded) before reporting.
+                final_drain = getattr(handle, "final_drain", None)
+                if final_drain is not None:
+                    await final_drain()
+                else:
+                    await handle.drain()
+                return ToolResult.ok(f"(exited {code})\n" + handle.ring.snapshot())
+            drained = await handle.drain()
+            tail = handle.ring.tail(20)
+            if len(drained) >= _MAX_POLL_LINES:
                 tail += "\n(more output pending — poll again)"
             return ToolResult.ok("(running)\n" + tail)
 
         case "log":
-            if not session_id or session_id not in reg.outputs:
+            handle = backend.get(session_id) if session_id else None
+            if handle is None:
                 return ToolResult.error(f"no output for: {session_id}")
-            dropped = reg.dropped.get(session_id, 0)
-            body = "\n".join(reg.outputs[session_id])
-            if dropped:
-                body = f"[{dropped} earlier line(s) dropped — ring buffer cap {_MAX_BUFFERED_LINES}]\n" + body
-            return ToolResult.ok(body)
+            return ToolResult.ok(handle.ring.snapshot())
 
         case "kill":
-            if not session_id or session_id not in reg.procs:
+            handle = backend.get(session_id) if session_id else None
+            if handle is None:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = reg.procs[session_id]
-            try:
-                # Kill the whole process group so grandchildren (the actual
-                # workload, not just /bin/sh) are terminated too. Requires
-                # start_new_session=True at spawn (which start uses).
-                try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
-                    p.kill()  # fallback: kill just the shell
-                # p.wait() can hang when the pipe holds lots of unread
-                # output (asyncio waits for the pipe transport to drain
-                # even after the process dies) — bound it.
-                try:
-                    await asyncio.wait_for(p.wait(), timeout=5.0)
-                except TimeoutError:
-                    return ToolResult.ok("killed (process-group SIGKILL sent; wait timed out)")
-                return ToolResult.ok(f"killed (exit {p.returncode})")
-            except Exception as e:
-                return ToolResult.error(f"kill failed: {e!r}")
+            message = await handle.kill()
+            if message.startswith("kill failed"):
+                return ToolResult.error(message)
+            return ToolResult.ok(message)
 
         case "wait":
-            if not session_id or session_id not in reg.procs:
+            handle = backend.get(session_id) if session_id else None
+            if handle is None:
                 return ToolResult.error(f"process not found: {session_id}")
-            p = reg.procs[session_id]
             try:
-                await asyncio.wait_for(p.wait(), timeout=timeout)
-                # communicate() drains the stdout/stderr pipes. A grandchild
-                # that inherited the write end keeps the pipe open, so the
-                # read blocks forever even though the direct child has
-                # exited — same hazard the 'kill' action bounds at 5s. Cap
-                # it here too; on timeout report the exit without the
-                # undrained tail rather than hanging the agent.
-                try:
-                    stdout, stderr = await asyncio.wait_for(p.communicate(), timeout=5.0)
-                except TimeoutError:
-                    return ToolResult.ok(
-                        f"(exit {p.returncode})\n[output drain timed out — "
-                        f"a child process may still hold the pipe open]"
-                    )
-                out = stdout.decode("utf-8", errors="replace")
-                if stderr:
-                    out += "\n[stderr]\n" + stderr.decode("utf-8", errors="replace")
-                return ToolResult.ok(f"(exit {p.returncode})\n{out}")
+                code, output = await handle.wait(timeout)
             except TimeoutError:
                 return ToolResult.error(f"timed out after {timeout}s (still running)")
+            if code is None:
+                return ToolResult.error(f"timed out after {timeout}s (still running)")
+            if output is None:
+                output = handle.ring.snapshot()
+            return ToolResult.ok(f"(exit {code})\n{output}")
 
         case "list":
             lines = []
-            for sid, p in list(reg.procs.items()):
-                status = f"exit={p.returncode}" if p.returncode is not None else "running"
-                lines.append(f"{sid}: {status}")
+            for h in backend.list():
+                status = "running"
+                code = await h.status()
+                if code is not None:
+                    status = f"exit={code}"
+                lines.append(f"{h.id}: {status}")
             return ToolResult.ok("\n".join(lines) if lines else "(no processes)")
 
         case "write":
-            if not session_id or session_id not in reg.procs:
+            handle = backend.get(session_id) if session_id else None
+            if handle is None:
                 return ToolResult.error(f"process not found: {session_id}")
             if not data:
                 return ToolResult.error("data is required for action=write")
-            p = reg.procs[session_id]
-            if p.stdin is None:
-                return ToolResult.error("process has no stdin")
-            try:
-                p.stdin.write((data + "\n").encode())
-                # drain() has no internal timeout — a target that never
-                # reads stdin (sleep 100, servers that ignore input) leaves
-                # the pipe full and drain() blocked forever, hanging the
-                # whole agent turn. Bound it; on timeout report what was
-                # actually delivered so the LLM can react.
-                try:
-                    await asyncio.wait_for(p.stdin.drain(), timeout=5.0)
-                except TimeoutError:
-                    return ToolResult.error(
-                        "write timed out: process is not reading stdin "
-                        "(data may be partially delivered)"
-                    )
-                return ToolResult.ok("written")
-            except Exception as e:
-                return ToolResult.error(f"write failed: {e!r}")
+            error = await handle.send(data)
+            if error is not None:
+                return ToolResult.error(error)
+            return ToolResult.ok("written")
 
         case _:
             return ToolResult.error(
