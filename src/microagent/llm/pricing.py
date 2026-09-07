@@ -199,6 +199,83 @@ def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     )
 
 
+class _CatalogShapeError(Exception):
+    """The downloaded catalog does not match any known schema generation."""
+
+
+def _iter_model_rows(raw: Any):
+    """Yield ``(slug, key, row)`` triples from either catalog schema.
+
+    Legacy shapes (seed cache era): a bare list of rows, or
+    ``{"data": [rows]}`` — slug/key are None and the row ``id`` is used
+    as-is. Rows carry per-token ``pricing`` → ``{"prompt", "completion"}``
+    and ``context_length``.
+
+    Current shape (verified live 2026-09): a provider-keyed dict —
+    ``{slug: {"name": ..., "models": {model_key: row}}}`` — rows carry
+    per-1M-token ``cost`` → ``{"input", "output"}`` (``null`` for free
+    models) and ``limit`` → ``{"context": ...}``. Id conventions are
+    mixed: official providers list bare ids (``deepseek-v4-flash``),
+    routers list full ids (``deepseek/deepseek-v4-flash``).
+
+    Raises ``_CatalogShapeError`` when the payload matches neither shape.
+    """
+    if isinstance(raw, list):
+        yield from ((None, None, m) for m in raw if isinstance(m, dict))
+        return
+    if isinstance(raw, dict):
+        data = raw.get("data")
+        if isinstance(data, list):
+            yield from ((None, None, m) for m in data if isinstance(m, dict))
+            return
+        provider_shaped = False
+        for slug, prov in raw.items():
+            if isinstance(prov, dict) and isinstance(prov.get("models"), dict):
+                provider_shaped = True
+                for key, m in prov["models"].items():
+                    if isinstance(m, dict):
+                        yield slug, key, m
+        if provider_shaped:
+            return
+    raise _CatalogShapeError(f"unrecognized catalog payload type {type(raw).__name__}")
+
+
+def _row_prices(m: dict[str, Any]) -> tuple[float, float] | None:
+    """Extract (input_per_1m, output_per_1m) from a model row.
+
+    Unit semantics depend on the key: ``cost`` values are already USD per
+    1M tokens; legacy ``pricing`` values are per-token and get ×1M.
+    Returns (0.0, 0.0) for free models (``cost``/``pricing`` null or
+    absent) and None when the values are present but unparseable.
+    """
+    cost = m.get("cost")
+    if isinstance(cost, dict):
+        try:
+            return float(cost.get("input", 0)), float(cost.get("output", 0))
+        except (TypeError, ValueError):
+            return None
+    p = m.get("pricing")
+    if p is None:
+        return (0.0, 0.0)
+    if isinstance(p, dict):
+        try:
+            return (
+                float(p.get("prompt", 0)) * 1_000_000,
+                float(p.get("completion", 0)) * 1_000_000,
+            )
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _row_context(m: dict[str, Any]) -> int | None:
+    lim = m.get("limit")
+    ctx = lim.get("context") if isinstance(lim, dict) else None
+    if ctx is None:
+        ctx = m.get("context_length")
+    return ctx if isinstance(ctx, int) and ctx > 0 else None
+
+
 def refresh(timeout: float = 20.0) -> int:
     """Re-download the models.dev catalog and refresh the cache.
 
@@ -210,6 +287,7 @@ def refresh(timeout: float = 20.0) -> int:
     """
     global _cache_loaded, _cache
     raw = None
+    url = _REMOTE_URL
     for url in (_REMOTE_URL, _REMOTE_MIRROR):
         try:
             req = urllib.request.Request(
@@ -229,32 +307,62 @@ def refresh(timeout: float = 20.0) -> int:
         )
         return len(_cache)
 
-    models = raw.get("data", raw) if isinstance(raw, dict) else raw
-    new_cache: dict[str, dict[str, Any]] = {}
-    for m in models:
-        mid = m.get("id")
-        if not mid:
-            continue
-        p = m.get("pricing", {})
-        if p is None:
-            # models.dev represents FREE models with pricing: null — the
-            # old code skipped them, so a refresh flipped free tiers to
-            # the conservative $0.50/1M fallback and could falsely trip
-            # BudgetExceeded. Preserve free models at (0.0, 0.0).
-            inp, out = 0.0, 0.0
-        else:
-            try:
-                inp = float(p.get("prompt", 0)) * 1_000_000
-                out = float(p.get("completion", 0)) * 1_000_000
-            except (TypeError, ValueError):
+    try:
+        new_cache: dict[str, dict[str, Any]] = {}
+        canonical_seen: set[str] = set()
+        for slug, key, m in _iter_model_rows(raw):
+            mid = m.get("id") or key
+            if not mid:
                 continue
-        ctx = m.get("context_length")
-        new_cache[mid] = {
-            "name": m.get("name", mid),
-            "input_per_1m": round(inp, 6),
-            "output_per_1m": round(out, 6),
-            "context_length": ctx if isinstance(ctx, int) and ctx > 0 else None,
-        }
+            if slug is not None and "/" not in str(mid):
+                # Official providers list bare ids — compose the full
+                # provider/model form the cache is keyed on.
+                mid = f"{slug}/{mid}"
+            prices = _row_prices(m)
+            if prices is None:
+                continue
+            inp, out = prices
+            # Cross-provider id collisions (routers re-list official
+            # models under the same full id — live API: 18 providers ship
+            # "deepseek/deepseek-v4-flash" ranging $0.088–$0.44/1M): the
+            # row from the provider whose slug matches the id prefix wins
+            # regardless of iteration order; router rows only fill slots
+            # the official catalog doesn't cover.
+            is_canonical = (
+                slug is not None and str(mid).split("/", 1)[0] == slug
+            )
+            if mid in new_cache:
+                if mid in canonical_seen or not is_canonical:
+                    continue
+            elif is_canonical:
+                canonical_seen.add(mid)
+            # models.dev represents FREE models with cost/pricing null —
+            # preserve them at (0.0, 0.0) so a refresh doesn't flip free
+            # tiers to the conservative $0.50/1M fallback and falsely
+            # trip BudgetExceeded.
+            new_cache[mid] = {
+                "name": m.get("name", mid),
+                "input_per_1m": round(inp, 6),
+                "output_per_1m": round(out, 6),
+                "context_length": _row_context(m),
+            }
+    except _CatalogShapeError as e:
+        # An API redesign must never brick pricing: keep the existing
+        # cache and degrade to a warning (same as a network failure).
+        logger.warning(
+            "models.dev catalog shape unrecognized (%r); keeping existing "
+            "cache (%d models)",
+            e,
+            len(_cache),
+        )
+        return len(_cache)
+    if not new_cache:
+        logger.warning(
+            "models.dev catalog parsed to 0 models; keeping existing cache "
+            "(%d models)",
+            len(_cache),
+        )
+        return len(_cache)
 
     # Persist atomically (temp + os.replace) so a crash mid-write can't
     # corrupt the shipped seed file (which would brick pricing for every

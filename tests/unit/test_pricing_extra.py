@@ -447,3 +447,146 @@ class _Resp:
 
     def __exit__(self, *a):
         pass
+
+
+class TestRefreshProviderKeyedSchema:
+    """Round-22 🔴: the live models.dev API is provider-keyed
+    ({slug: {"models": {key: row}}}). Official providers list BARE ids
+    (deepseek-v4-flash), routers list FULL ids (deepseek/deepseek-v4-flash)
+    — 18 providers re-list the same model at wildly different prices.
+    The old parser iterated provider-name strings and crashed with
+    AttributeError, so `/models refresh` never worked."""
+
+    LIVE_SHAPE = {
+        "openai": {
+            "id": "openai",
+            "name": "OpenAI",
+            "models": {
+                # official provider: BARE id, per-1M cost, limit.context
+                "gpt-5-nano": {
+                    "id": "gpt-5-nano",
+                    "name": "GPT-5 nano",
+                    "cost": {"input": 0.05, "output": 0.4, "cache_read": 0.005},
+                    "limit": {"context": 400000, "output": 128000},
+                },
+            },
+        },
+        "deepseek": {
+            "models": {
+                "deepseek-v4-flash": {
+                    "id": "deepseek-v4-flash",
+                    "cost": {"input": 0.14, "output": 0.28},
+                    "limit": {"context": 1000000},
+                },
+            },
+        },
+        # routers re-list official models under FULL ids at different prices
+        "tokengo": {
+            "models": {
+                "deepseek/deepseek-v4-flash": {
+                    "id": "deepseek/deepseek-v4-flash",
+                    "cost": {"input": 0.098, "output": 0.196},
+                },
+            },
+        },
+        "ofox": {
+            "models": {
+                "deepseek/deepseek-v4-flash": {
+                    "id": "deepseek/deepseek-v4-flash",
+                    "cost": {"input": 0.44, "output": 1.32},
+                },
+            },
+        },
+        "free-provider": {
+            "models": {
+                "gratis": {"id": "gratis", "cost": None},
+            },
+        },
+        "junk": "not-a-provider-dict",
+    }
+
+    def _run_refresh(self, payload, monkeypatch, tmp_path):
+        """Refresh with a stubbed fetch. Does NOT clear the cache — callers
+        assert on its contents and clean up in their own finally."""
+        monkeypatch.setattr(pricing, "_CACHE_FILE", tmp_path / "cache.json")
+        monkeypatch.setattr(
+            pricing.urllib.request,
+            "urlopen",
+            lambda req, timeout=None: _Resp(payload),
+        )
+        return pricing.refresh()
+
+    def test_provider_keyed_payload_parsed(self, monkeypatch, tmp_path):
+        try:
+            n = self._run_refresh(self.LIVE_SHAPE, monkeypatch, tmp_path)
+            # 3 unique: the two router rows collapse into the official one
+            assert n == 3
+            entry = pricing._cache["openai/gpt-5-nano"]
+            # cost values are already per-1M: no ×1M scaling
+            assert entry["input_per_1m"] == 0.05
+            assert entry["output_per_1m"] == 0.4
+            assert entry["context_length"] == 400000
+            # cost: null → free, preserved at (0.0, 0.0) — not $0.50 fallback
+            assert pricing._cache["free-provider/gratis"]["input_per_1m"] == 0.0
+            assert pricing._cache["free-provider/gratis"]["output_per_1m"] == 0.0
+            saved = json.loads((tmp_path / "cache.json").read_text())
+            assert "openai/gpt-5-nano" in saved["models"]
+        finally:
+            pricing._cache.clear()
+            pricing._cache_loaded = False
+
+    def test_official_provider_wins_id_collision(self, monkeypatch, tmp_path):
+        """The official deepseek row (bare id composed to full form) must
+        win over router rows re-listing the same full id — regardless of
+        dict iteration order."""
+        try:
+            self._run_refresh(self.LIVE_SHAPE, monkeypatch, tmp_path)
+            entry = pricing._cache["deepseek/deepseek-v4-flash"]
+            assert entry["input_per_1m"] == 0.14
+            assert entry["output_per_1m"] == 0.28
+            assert entry["context_length"] == 1000000
+        finally:
+            pricing._cache.clear()
+            pricing._cache_loaded = False
+
+    def test_router_fills_slot_without_official(self, monkeypatch, tmp_path):
+        payload = {
+            "somerouter": {
+                "models": {
+                    "unknown/only-here": {
+                        "id": "unknown/only-here",
+                        "cost": {"input": 1.5, "output": 3.0},
+                    },
+                },
+            },
+        }
+        try:
+            n = self._run_refresh(payload, monkeypatch, tmp_path)
+            assert n == 1
+            assert pricing._cache["unknown/only-here"]["input_per_1m"] == 1.5
+        finally:
+            pricing._cache.clear()
+            pricing._cache_loaded = False
+
+    def test_unknown_shape_keeps_existing_cache(self, monkeypatch, tmp_path):
+        pricing._cache.clear()
+        pricing._cache["existing/model"] = {"input_per_1m": 1.0, "output_per_1m": 1.0}
+        try:
+            n = self._run_refresh({"totally": "different"}, monkeypatch, tmp_path)
+            assert n == 1
+            assert "existing/model" in pricing._cache
+            assert not (tmp_path / "cache.json").exists()
+        finally:
+            pricing._cache.clear()
+            pricing._cache_loaded = False
+
+    def test_zero_models_keeps_existing_cache(self, monkeypatch, tmp_path):
+        pricing._cache.clear()
+        pricing._cache["existing/model"] = {"input_per_1m": 1.0, "output_per_1m": 1.0}
+        try:
+            n = self._run_refresh({"data": []}, monkeypatch, tmp_path)
+            assert n == 1
+            assert "existing/model" in pricing._cache
+        finally:
+            pricing._cache.clear()
+            pricing._cache_loaded = False
