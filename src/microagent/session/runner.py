@@ -427,7 +427,20 @@ class SessionRunner:
         """Return set of tool names available in current mode."""
         all_names = set(self.registry.names)
         if self.mode == "plan":
-            return all_names - self._PLAN_BLOCKED_TOOLS
+            # Allowlist semantics: only builtin FunctionTools that aren't
+            # statically blocked. Tools registered DURING the session
+            # (mcp_connect while in build mode) must not remain callable
+            # after the mode flips to plan — a dynamically registered MCP
+            # write tool would otherwise execute under the read-only
+            # guarantee just because its name is absent from the static
+            # blocklist.
+            from ..core.tool import FunctionTool
+
+            return {
+                n
+                for n in all_names - self._PLAN_BLOCKED_TOOLS
+                if isinstance(self.registry.get(n), FunctionTool)
+            }
         return all_names
 
     def interrupt(self) -> None:
@@ -1302,9 +1315,14 @@ class SessionRunner:
                 # can still emit a write tool call (fine-tuned habits,
                 # prompt injection) — enforce the read-only guarantee here.
                 if self.mode == "plan":
-                    if call.name in self._PLAN_BLOCKED_TOOLS:
+                    if call.name not in self._get_available_tools():
+                        # Covers the static blocklist AND tools registered
+                        # mid-session (mcp_connect during build mode):
+                        # an MCP write tool must not stay callable under
+                        # the read-only guarantee just because its name
+                        # isn't in a static set.
                         results[idx] = ToolResult.denied(
-                            f"plan mode: '{call.name}' is a write tool and is blocked"
+                            f"plan mode: '{call.name}' is not available in plan mode"
                         )
                         return
                     if call.name == "bash":
