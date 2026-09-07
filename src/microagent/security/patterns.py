@@ -19,11 +19,17 @@ from dataclasses import dataclass
 # from a malicious skill/memory re-tags everything after it as trusted
 # runner-generated context.
 _INJECTION_PATTERNS = [
-    re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL | re.IGNORECASE),
-    re.compile(r"</?system-reminder>", re.IGNORECASE),
-    re.compile(r"</system>", re.IGNORECASE),
+    # \s* tolerance on the paired/single closer: '</system-reminder >'
+    # (whitespace before '>') otherwise escaped the exact form while
+    # '</context >' and '</memory-context >' were already covered —
+    # inconsistent hardening left the reminder family open.
+    re.compile(
+        r"<system-reminder>.*?</system-reminder\s*>", re.DOTALL | re.IGNORECASE
+    ),
+    re.compile(r"</?system-reminder\s*>", re.IGNORECASE),
+    re.compile(r"</system\s*>", re.IGNORECASE),
     re.compile(r"<system\b[^>]*>", re.IGNORECASE),
-    re.compile(r"<context>.*?</context>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"<context>.*?</context\s*>", re.DOTALL | re.IGNORECASE),
     # Attribute-capable single-tag patterns: an injected <context attr=1>
     # or self-closing <context/> previously sailed through the exact-form
     # pattern — and the runner wraps injected context in a real <context>
@@ -33,7 +39,9 @@ _INJECTION_PATTERNS = [
     # space-before-'>', attrs on closer) all block now.
     re.compile(r"<context\b[^>]*/?>", re.IGNORECASE),
     re.compile(r"</context\s*>", re.IGNORECASE),
-    re.compile(r"<memory-context>.*?</memory-context>", re.DOTALL | re.IGNORECASE),
+    re.compile(
+        r"<memory-context>.*?</memory-context\s*>", re.DOTALL | re.IGNORECASE
+    ),
     re.compile(r"<memory-context\b[^>]*/?>", re.IGNORECASE),
     re.compile(r"</memory-context\s*>", re.IGNORECASE),
 ]
