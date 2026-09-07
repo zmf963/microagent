@@ -235,9 +235,20 @@ def _parse_skill_md(path: Path, namespace: str = "claude") -> Skill | None:
 
     triggers_raw = front.get("triggers", [])
     if isinstance(triggers_raw, list):
-        triggers = tuple(triggers_raw)
+        # Keep only non-empty strings: a "deploy,"-style comma list leaves
+        # an '' behind, and `'' in text` is True for EVERY query — the
+        # skill would inject itself at score 1.0 on every turn and starve
+        # real matches (CompositeSkillLoader caps at 5). Non-string items
+        # (a YAML list of ints) would crash match() with AttributeError.
+        triggers = tuple(
+            t.strip()
+            for t in triggers_raw
+            if isinstance(t, str) and t.strip()
+        )
     elif isinstance(triggers_raw, str):
-        triggers = tuple(t.strip() for t in triggers_raw.split(","))
+        triggers = tuple(
+            t.strip() for t in triggers_raw.split(",") if t.strip()
+        )
     else:
         triggers = ()
 

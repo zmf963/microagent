@@ -348,3 +348,50 @@ def test_lcs_subseq_len_helper():
 
     assert _lcs_subseq_len(["a", "b", "c"], ["a", "x", "b", "y", "c"]) == 3
     assert _lcs_subseq_len(["a", "b"], ["b", "a"]) == 1  # order matters
+
+
+class TestTriggerSanitization:
+    """Round-22 🟡: "deploy,"-style comma lists left '' triggers, and
+    `'' in text` is always True — the skill self-injected at score 1.0 on
+    EVERY query, starving real matches. Non-string YAML list items
+    crashed match() with AttributeError."""
+
+    def _write_skill(self, tmp_path, frontmatter):
+        d = tmp_path / "tricky"
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"---\n{frontmatter}\n---\n\nbody\n")
+        return d.parent
+
+    async def test_comma_list_empty_entries_dropped(self, tmp_path):
+        from microagent.skill.loader import ClaudeSkillLoader
+
+        root = self._write_skill(
+            tmp_path, 'name: tricky\ndescription: deploy things\ntriggers: "deploy, ,release,"'
+        )
+        loader = ClaudeSkillLoader(search_paths=(root,))
+        skills = await loader.load()
+        assert skills[0].triggers == ("deploy", "release")
+
+    async def test_list_with_junk_entries_dropped(self, tmp_path):
+        from microagent.skill.loader import ClaudeSkillLoader
+
+        root = self._write_skill(
+            tmp_path,
+            "name: tricky\ndescription: deploy things\ntriggers:\n  - ''\n  - '  '\n  - deploy",
+        )
+        loader = ClaudeSkillLoader(search_paths=(root,))
+        skills = await loader.load()
+        assert skills[0].triggers == ("deploy",)
+
+    async def test_non_string_trigger_no_crash_no_match_all(self, tmp_path):
+        from microagent.skill.loader import ClaudeSkillLoader
+
+        root = self._write_skill(
+            tmp_path,
+            "name: tricky\ndescription: deploy things\ntriggers:\n  - 42\n  - deploy",
+        )
+        loader = ClaudeSkillLoader(search_paths=(root,))
+        matched = await loader.match("completely unrelated query about pasta")
+        assert matched == ()
+        matched2 = await loader.match("please deploy the service")
+        assert matched2 and matched2[0].skill.name == "tricky"

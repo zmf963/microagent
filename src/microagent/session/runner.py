@@ -673,7 +673,10 @@ class SessionRunner:
                                 )
                             self._cached_skill_catalog = "\n".join(catalog_lines)
                     except Exception:
-                        pass
+                        # Catalog is an optimization — a broken skills dir
+                        # must not crash the turn, but it should not be
+                        # silent either (the LLM just "doesn't know" why).
+                        logger.warning("skill catalog build failed", exc_info=True)
                 skill_catalog = self._cached_skill_catalog
 
             # Append skill catalog to system prompt (frozen layer — cached)
@@ -721,7 +724,12 @@ class SessionRunner:
                                     "## Loaded Skills\n\n" + "\n---\n".join(loaded_bodies)
                                 )
                     except Exception:
-                        pass
+                        # Same fault-tolerance contract as memory recall:
+                        # never crash the turn, but never silently swallow
+                        # the WHOLE skill/context injection either (a
+                        # non-string trigger used to vanish every skill
+                        # for the turn with zero trace).
+                        logger.warning("skill matching/injection failed", exc_info=True)
 
             # Memory recall injection (Hermes-style: persistent memory is
             # injected every turn). Sits in the same context block as
