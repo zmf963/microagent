@@ -615,6 +615,7 @@ class SessionRunner:
                             context_window=_threshold + 8000,
                             state=self._compaction_state,
                             budget=self.budget,
+                            idle_timeout=self.llm_stream_idle_timeout,
                         )
                         messages[:] = list(messages_list)
                         # Track compression effectiveness (anti-jitter)
@@ -887,6 +888,7 @@ class SessionRunner:
                                             state=self._compaction_state,
                                             force=True,
                                             budget=self.budget,
+                                            idle_timeout=self.llm_stream_idle_timeout,
                                         )
                                         messages[:] = list(messages_list)
                                     except BudgetExceeded as e:

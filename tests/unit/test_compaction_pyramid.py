@@ -400,3 +400,59 @@ class TestSnipTokenAccounting:
         # Post-snip actual total must be within 5% of the target — with
         # content-only accounting it overshot the trim significantly.
         assert count_tokens(result) <= max_tokens + int(max_tokens * 0.05)
+
+
+class TestCompressorIdleWatchdog:
+    """Round-22 🟡: the L3 compressor stream had no idle watchdog — a
+    silently stalled gateway froze run_turn forever (the main loop wraps
+    its own stream in watch_idle for exactly this)."""
+
+    async def test_stalled_compressor_stream_raises_idle_timeout(self):
+        import asyncio
+        import pytest
+        from microagent.session.compress import CompactionState, compact_conversation
+        from microagent.core.types import Message
+
+        class _StalledLLM:
+            config = None
+
+            async def stream(self, *, system, messages, tools=None):
+                yield  # first event: a silence-only iterator
+                await asyncio.sleep(30)
+
+        state = CompactionState()
+        msgs = (Message.user("x" * 100),)
+        with pytest.raises(Exception) as ei:
+            await asyncio.wait_for(
+                compact_conversation(
+                    msgs, _StalledLLM(), context_window=100, state=state,
+                    idle_timeout=0.5,
+                ),
+                timeout=5.0,
+            )
+        assert "idle" in str(ei.value).lower()
+
+    async def test_healthy_compressor_unaffected(self):
+        from microagent.session.compress import CompactionState, compact_conversation
+        from microagent.core.types import Message, TextDelta, Usage
+        from microagent.llm.client import StreamDone
+
+        class _OKLLM:
+            config = None
+
+            async def stream(self, *, system, messages, tools=None):
+                yield TextDelta(
+                    text="<summary>ok summary</summary>", kind="content"
+                )
+                yield Usage(input_tokens=1, output_tokens=1)
+                yield StreamDone(usage=Usage(input_tokens=1, output_tokens=1), stop_reason="stop")
+
+        state = CompactionState()
+        out = await compact_conversation(
+            (Message.user("hello world"),),
+            _OKLLM(),
+            context_window=50,
+            state=state,
+            idle_timeout=5.0,
+        )
+        assert any("ok summary" in m.content for m in out)

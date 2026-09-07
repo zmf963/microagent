@@ -558,6 +558,7 @@ async def compact_conversation(
     state: CompactionState | None = None,
     force: bool = False,
     budget: Budget | None = None,
+    idle_timeout: float = 300.0,
 ) -> tuple[Message, ...]:
     """Run the 4-layer compression pipeline.
 
@@ -581,6 +582,7 @@ async def compact_conversation(
             state._cooldown_until = 0.0
             return await _summarize_and_attach(
                 messages, messages, llm, state, budget, messages,
+                idle_timeout=idle_timeout,
             )
 
         # Auto: circuit breaker
@@ -604,6 +606,7 @@ async def compact_conversation(
         if count_tokens(current) > layer3_threshold:
             current = await _summarize_and_attach(
                 current, messages, llm, state, budget, current,
+                idle_timeout=idle_timeout,
             )
 
         return current
@@ -618,6 +621,7 @@ async def _summarize_and_attach(
     state: CompactionState,
     budget: Budget | None,
     fallback_input: tuple[Message, ...],
+    idle_timeout: float = 300.0,
 ) -> tuple[Message, ...]:
     """Shared L3 body: summarize → consume budget → capture previous_summary →
     recover file attachments → record success.
@@ -632,7 +636,9 @@ async def _summarize_and_attach(
     """
     try:
         prev = state.previous_summary
-        current, usage = await _llm_summarize(summarize_input, llm, previous_summary=prev)
+        current, usage = await _llm_summarize(
+            summarize_input, llm, previous_summary=prev, idle_timeout=idle_timeout
+        )
         if budget is not None and usage:
             await budget.consume_usage(usage)
         # Capture the LLM summary text BEFORE recover_file_attachments
@@ -668,13 +674,22 @@ async def _llm_summarize(
     messages: tuple[Message, ...],
     llm: object,
     previous_summary: str | None = None,
+    idle_timeout: float = 300.0,
 ) -> tuple[tuple[Message, ...], Usage | None]:
-    """Generate structured LLM summary + return compressed messages and usage.
+    """Generate structured L3 summary + return compressed messages and usage.
 
     If previous_summary is provided, uses incremental update mode.
     Returns (compressed_messages, usage) where usage may be None if the
     LLM stream did not include token counts.
+
+    The compressor stream runs under the same idle watchdog as the main
+    loop: a silently stalled gateway connection produces no events and no
+    exception, and without a bound it would freeze run_turn forever —
+    the auto-compaction path can't even be interrupted by the user's
+    steer/interrupt because it runs before the turn body starts.
     """
+    from ..llm.watchdog import watch_idle
+
     if previous_summary:
         prompt = build_incremental_summary_prompt(messages, previous_summary)
     else:
@@ -682,10 +697,13 @@ async def _llm_summarize(
 
     summary_text = ""
     usage: Usage | None = None
-    async for event in llm.stream(
-        system="You are a context compressor. Be thorough and specific.",
-        messages=(Message.user(prompt),),
-        tools=None,
+    async for event in watch_idle(
+        llm.stream(
+            system="You are a context compressor. Be thorough and specific.",
+            messages=(Message.user(prompt),),
+            tools=None,
+        ),
+        timeout_seconds=idle_timeout,
     ):
         if isinstance(event, TextDelta) and event.kind == "content":
             summary_text += event.text
