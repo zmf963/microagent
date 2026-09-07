@@ -618,12 +618,16 @@ class SessionRunner:
                             idle_timeout=self.llm_stream_idle_timeout,
                         )
                         messages[:] = list(messages_list)
-                        # Track compression effectiveness (anti-jitter)
+                        # Track compression effectiveness (anti-jitter).
+                        # Effectiveness accounting ONLY — the runner must
+                        # not heal the compression circuit breaker: a
+                        # lossy fallback that happens to cut >10% tokens
+                        # is not a successful L3 (round-22 fix).
                         after_tokens = count_tokens(tuple(messages))
-                        if before_tokens > 0 and (before_tokens - after_tokens) / before_tokens < 0.1:
-                            self._compaction_state.record_ineffective()
-                        else:
-                            self._compaction_state.record_success()
+                        if before_tokens > 0:
+                            self._compaction_state.record_effectiveness(
+                                (before_tokens - after_tokens) / before_tokens
+                            )
                     except BudgetExceeded as e:
                         yield TurnFailed(f"budget exhausted during compaction: {e}", code="budget")
                         return

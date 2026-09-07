@@ -528,6 +528,21 @@ class CompactionState:
         """Record a compression that saved <10% tokens."""
         self._ineffective_count += 1
 
+    def record_effectiveness(self, reduction_ratio: float) -> None:
+        """Anti-jitter bookkeeping only: track the token effectiveness of
+        the latest compaction RESULT.
+
+        Deliberately does NOT touch the circuit breaker: the runner used
+        to call record_success() here, which silently healed a tripped
+        breaker whenever a lossy fallback happened to cut >10% tokens —
+        breaker success/failure accounting belongs exclusively to the
+        compression pipeline itself.
+        """
+        if reduction_ratio < 0.1:
+            self._ineffective_count += 1
+        else:
+            self._ineffective_count = 0
+
     def should_skip_compression(self) -> bool:
         """After 2 ineffective compressions, skip until next user input."""
         return self._ineffective_count >= 2
@@ -543,7 +558,28 @@ class CompactionState:
         return time.monotonic() < self._cooldown_until
 
     def is_circuit_broken(self) -> bool:
-        return self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+        """True while the breaker is tripped AND the cooldown hasn't
+        expired.
+
+        Half-open recovery: once the armed cooldown expires, failures
+        reset and the next auto compaction may attempt L3 again.
+        Previously the breaker stuck FOREVER — record_success() was
+        reachable only from a successful L3, which the tripped breaker
+        made impossible, so the auto path was permanently degraded to
+        the lossy 5-message fallback (and COOLDOWN_SECONDS was dead
+        logic).
+        """
+        if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+            if self._cooldown_until <= 0.0:
+                # Tripped this very call; cooldown not armed yet.
+                return True
+            if time.monotonic() >= self._cooldown_until:
+                # Cooldown elapsed — half-open: allow a probe attempt.
+                self.consecutive_failures = 0
+                self._cooldown_until = 0.0
+                return False
+            return True
+        return False
 
 
 # ---------------------------------------------------------------------------

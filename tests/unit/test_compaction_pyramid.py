@@ -464,3 +464,53 @@ class TestCompressorIdleWatchdog:
             idle_timeout=5.0,
         )
         assert any("ok summary" in m.content for m in out)
+
+
+class TestCircuitBreakerHalfOpenRecovery:
+    """Round-22 🟡: the breaker stuck FOREVER after 3 failures —
+    record_success() was only reachable from a successful L3, which the
+    tripped breaker made impossible, permanently degrading the auto path
+    to the lossy fallback (300s cooldown was dead logic). The runner
+    also used to heal the breaker via record_success() whenever a
+    fallback cut >10% tokens — muddying both mechanisms."""
+
+    def _tripped_with_cooldown(self):
+        from microagent.session.compress import CompactionState
+
+        state = CompactionState()
+        for _ in range(3):
+            state.record_failure()
+        assert state.is_circuit_broken()  # trips, cooldown not yet armed
+        state.activate_cooldown()
+        return state
+
+    def test_breaker_sticks_during_cooldown(self):
+        state = self._tripped_with_cooldown()
+        assert state.is_circuit_broken()
+        assert state.is_cooling_down()
+
+    def test_breaker_half_opens_after_cooldown(self):
+        state = self._tripped_with_cooldown()
+        # Simulate cooldown expiry.
+        state._cooldown_until = 0.0 if False else __import__("time").monotonic() - 1
+        assert not state.is_circuit_broken()
+        assert state.consecutive_failures == 0  # probe allowed, counters reset
+
+    def test_effectiveness_accounting_does_not_heal_breaker(self):
+        from microagent.session.compress import CompactionState
+
+        state = self._tripped_with_cooldown()
+        # A fallback that happened to cut >50% tokens:
+        state.record_effectiveness(0.5)
+        assert state.is_circuit_broken()  # breaker unaffected
+        assert state._ineffective_count == 0  # but jitter counter cleared
+
+    def test_ineffective_effectiveness_counts(self):
+        from microagent.session.compress import CompactionState
+
+        state = CompactionState()
+        state.record_effectiveness(0.05)
+        state.record_effectiveness(0.02)
+        assert state.should_skip_compression()
+        state.record_effectiveness(0.9)
+        assert not state.should_skip_compression()
