@@ -1154,17 +1154,44 @@ class SessionRunner:
                 return
 
             # --- 4. Execute tool calls with streaming ---
+            # Progress deltas stream THROUGH the queue while tools run
+            # (dsh surface streaming parity): the turn loop races
+            # "all tools settled" against "progress event arrived" and
+            # yields each delta the moment it lands — a 60s bash stream
+            # shows output in real time instead of one batch at the end.
+            progress_q: asyncio.Queue[ToolProgressDelta] = asyncio.Queue()
+            run_task = asyncio.ensure_future(
+                self._run_tool_calls(tool_calls, progress_q)
+            )
             try:
-                results, progress_events = await self._run_tool_calls(tool_calls)
+                while not run_task.done():
+                    get_task = asyncio.ensure_future(progress_q.get())
+                    done, _pending = await asyncio.wait(
+                        {run_task, get_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if get_task in done:
+                        yield get_task.result()
+                    else:
+                        get_task.cancel()
+                # Tools settled — drain any events that landed after the
+                # last poll, preserving order relative to the yielded ones.
+                while not progress_q.empty():
+                    yield progress_q.get_nowait()
+                results, _batch = await run_task
             except BaseException:
-                # Hard cancel (task.cancel / Ctrl-C) mid-execution: the
-                # assistant message with these tool_calls is already
-                # persisted, so persist an error result for every tool
-                # call that never settled. Without this the store holds
-                # orphaned tool_calls and the OpenAI API rejects the
-                # resumed session ("messages must contain tool results
-                # for all tool calls"). Tool results are only persisted
-                # after _run_tool_calls returns, so none are missing.
+                # Hard cancel (task.cancel / Ctrl-C / generator close)
+                # mid-execution: the assistant message with these
+                # tool_calls is already persisted, so persist an error
+                # result for every tool call that never settled. Without
+                # this the store holds orphaned tool_calls and the OpenAI
+                # API rejects the resumed session ("messages must contain
+                # tool results for all tool calls"). Tool results are only
+                # persisted after _run_tool_calls returns, so none are
+                # missing.
+                if not run_task.done():
+                    run_task.cancel()
+                    await asyncio.gather(run_task, return_exceptions=True)
                 for tc in tool_calls:
                     msg = Message.tool_result(
                         ToolResult.error("interrupted: tool execution cancelled"),
@@ -1174,10 +1201,6 @@ class SessionRunner:
                     if self.store is not None:
                         await self._append(sid, msg)
                 raise
-
-            # Yield progress events before results (real-time UX)
-            for pe in progress_events:
-                yield pe
 
             for tc, result in zip(tool_calls, results):
                 # Apply output size management if result is large. Vision
@@ -1279,7 +1302,7 @@ class SessionRunner:
         yield TurnFailed(f"budget exhausted after {self.budget.max_iterations} iterations", code="budget")
 
     async def _run_tool_calls(
-        self, calls: list[ToolCall]
+        self, calls: list[ToolCall], progress_q: "asyncio.Queue[ToolProgressDelta] | None" = None
     ) -> tuple[list[ToolResult], list[ToolProgressDelta]]:
         """Execute tool calls concurrently, collecting progress events.
 
@@ -1422,11 +1445,20 @@ class SessionRunner:
                 results[idx] = ToolResult.error(f"{call.name} failed: {e!r}")
 
         async def _execute_stream(call: ToolCall) -> ToolResult:
-            """Run one tool call's stream, folding progress deltas."""
+            """Run one tool call's stream, folding progress deltas.
+
+            With a progress_q the delta is pushed the instant it lands
+            (the turn loop drains it concurrently — true streaming);
+            without one it falls back to batch collection for direct
+            callers/tests of _run_tool_calls.
+            """
             result: ToolResult | None = None
             async for event in self.registry.execute_stream(call):
                 if isinstance(event, ToolProgressDelta):
-                    progress_events.append(event)
+                    if progress_q is not None:
+                        progress_q.put_nowait(event)
+                    else:
+                        progress_events.append(event)
                 elif isinstance(event, ToolResult):
                     result = event
                     break

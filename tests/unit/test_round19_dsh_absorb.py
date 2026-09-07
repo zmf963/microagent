@@ -53,8 +53,8 @@ class TestAbortCodes:
         original = runner._run_tool_calls
         observed = []
 
-        async def _spy(calls):
-            task = asyncio.create_task(original(calls))
+        async def _spy(calls, progress_q=None):
+            task = asyncio.create_task(original(calls, progress_q))
             await asyncio.sleep(0.3)  # tool inside its body sleep
             runner._interrupt_requested = True  # simulate watcher flip
             results, progress = await task
@@ -107,8 +107,8 @@ class TestAbortCodes:
         original = runner._run_tool_calls
         observed = []
 
-        async def _spy(calls):
-            task = asyncio.create_task(original(calls))
+        async def _spy(calls, progress_q=None):
+            task = asyncio.create_task(original(calls, progress_q))
             await asyncio.sleep(0.05)  # first ~10 enter, rest wait on slots
             runner._interrupt_requested = True
             results, progress = await task

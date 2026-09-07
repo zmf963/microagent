@@ -61,8 +61,8 @@ class TestBodyInvokedOnError:
         observed = []
         orig = runner._run_tool_calls
 
-        async def spy(calls):
-            task = asyncio.create_task(orig(calls))
+        async def spy(calls, progress_q=None):
+            task = asyncio.create_task(orig(calls, progress_q))
             await asyncio.sleep(0.05)
             runner._interrupt_requested = True
             results, prog = await task
