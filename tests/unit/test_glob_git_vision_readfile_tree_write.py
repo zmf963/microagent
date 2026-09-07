@@ -312,3 +312,41 @@ class TestWriteFile:
         r = await write_file.fn(path=str(tmp_path / "big.txt"), content=big)
         assert r.is_error
         assert "too large" in r.content
+
+
+class TestGitForbiddenFlagNormalization:
+    """Round-22 🟡: --amend=msg and clustered shorts (-df) had the same
+    effect as the forbidden bare flags but slipped the exact-token
+    intersection."""
+
+    async def test_amend_with_value_blocked(self, tmp_path):
+        from microagent.tools.builtins.git import git as git_tool
+
+        for args in ("--amend=x -m y", "--amend -m y", "--amend=no-edit"):
+            r = await git_tool.fn(
+                subcommand="commit", repo_path=str(tmp_path), args=args
+            )
+            assert r.is_error and "--amend" in r.content, (args, r.content)
+
+    async def test_clustered_shorts_blocked(self, tmp_path):
+        from microagent.tools.builtins.git import git as git_tool
+
+        for args in ("-df topic", "-fd topic", "-D topic", "-d topic"):
+            r = await git_tool.fn(
+                subcommand="branch", repo_path=str(tmp_path), args=args
+            )
+            assert r.is_error, (args, r.content)
+
+    async def test_legit_flags_still_pass_filter(self, tmp_path):
+        """-m on commit and --show-current on branch are not flagged —
+        the filter rejects, git itself may still fail (not a repo)."""
+        from microagent.tools.builtins.git import git as git_tool
+
+        r = await git_tool.fn(
+            subcommand="commit", repo_path=str(tmp_path), args="-m message"
+        )
+        assert not (r.is_error and "not allowed" in r.content)
+        r2 = await git_tool.fn(
+            subcommand="branch", repo_path=str(tmp_path), args="--show-current"
+        )
+        assert not (r2.is_error and "not allowed" in r2.content)

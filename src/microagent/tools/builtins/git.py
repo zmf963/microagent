@@ -34,6 +34,28 @@ _GIT_FORBIDDEN_FLAGS: dict[str, frozenset[str]] = {
 }
 
 
+def _forbidden_flag_hits(tokens: list[str], forbidden: frozenset[str]) -> set[str]:
+    """Match forbidden flags against arg tokens, normalizing syntax forms
+    git treats as equivalent: ``--amend=msg`` has the same effect as
+    ``--amend``, and a clustered short ``-df`` expands to ``-d -f``
+    (force-delete). A bare exact-token intersection missed both.
+    """
+    hits: set[str] = set()
+    for tok in tokens:
+        if not tok.startswith("-") or tok == "-":
+            continue
+        if tok.startswith("--"):
+            if tok.split("=", 1)[0] in forbidden:
+                hits.add(tok.split("=", 1)[0])
+        elif len(tok) > 2:
+            for ch in tok[1:]:
+                if f"-{ch}" in forbidden:
+                    hits.add(f"-{ch}")
+        elif tok in forbidden:
+            hits.add(tok)
+    return hits
+
+
 @tool(
     "git",
     description="Run safe git subcommands (status, diff, log, show, branch, commit, add). "
@@ -61,7 +83,7 @@ async def git(
 
     forbidden = _GIT_FORBIDDEN_FLAGS.get(subcommand)
     if forbidden:
-        bad = forbidden.intersection(cmd_parts[4:])
+        bad = _forbidden_flag_hits(cmd_parts[4:], forbidden)
         if bad:
             return ToolResult.error(
                 f"git {subcommand} flag(s) not allowed: {', '.join(sorted(bad))}"
