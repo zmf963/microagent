@@ -18,6 +18,12 @@ cov:
 ci:
 	$(PYTEST) tests/unit/ tests/integration/ -q
 
+# Real-API integration matrix (v1.2.0): env MICROAGENT_TEST_* wins,
+# otherwise falls back to ~/.microagent/config.yaml — zero plumbing on
+# a machine with a configured endpoint. Skips cleanly when neither.
+integration:
+	$(PYTEST) tests/integration/ -v --timeout=300
+
 # ─── Lint & Format ─────────────────────────────────────────
 lint:
 	$(RUFF) check src/ tests/

@@ -1,11 +1,11 @@
 """Integration tests against a real OpenAI-compatible API.
 
-Set env vars to enable:
+Endpoint resolution (v1.2.0): MICROAGENT_TEST_* env vars first, then the
+user's ~/.microagent/config.yaml fallback, then skip. `make integration`
+runs the matrix against the configured gateway with zero env plumbing:
     MICROAGENT_TEST_BASE_URL=http://10.144.0.2:20128/v1
     MICROAGENT_TEST_API_KEY=sk-...
     MICROAGENT_TEST_MODEL=oc-d4f
-
-If any of these are missing, tests are skipped automatically.
 """
 
 import os
@@ -15,26 +15,21 @@ import pytest
 from microagent import Agent, LLMConfig, Message, SQLiteStore
 from microagent.core.types import Usage
 
-SKIP = not all(
-    os.environ.get(k)
-    for k in (
-        "MICROAGENT_TEST_BASE_URL",
-        "MICROAGENT_TEST_API_KEY",
-        "MICROAGENT_TEST_MODEL",
-    )
-)
+from .conftest import integration_ready, resolve
+
+SKIP = not integration_ready()
 
 pytestmark = pytest.mark.skipif(
     SKIP,
-    reason="Set MICROAGENT_TEST_* env vars to run integration tests",
+    reason="Set MICROAGENT_TEST_* env vars (or configure ~/.microagent/config.yaml) to run integration tests",
 )
 
 
 def _get_config() -> LLMConfig:
     return LLMConfig(
-        base_url=os.environ["MICROAGENT_TEST_BASE_URL"],
-        api_key=os.environ["MICROAGENT_TEST_API_KEY"],
-        model=os.environ["MICROAGENT_TEST_MODEL"],
+        base_url=resolve("MICROAGENT_TEST_BASE_URL"),
+        api_key=resolve("MICROAGENT_TEST_API_KEY"),
+        model=resolve("MICROAGENT_TEST_MODEL"),
     )
 
 
