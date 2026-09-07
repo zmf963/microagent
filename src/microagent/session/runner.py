@@ -1055,14 +1055,48 @@ class SessionRunner:
                 # Apply output size management if result is large. Vision
                 # tools are exempt: their base64 data URLs must reach the
                 # model intact (see _OUTPUT_STORE_EXEMPT).
-                if tc.name in _OUTPUT_STORE_EXEMPT:
-                    processed = result
-                else:
-                    processed = await self._process_tool_output_async(tc.id, result, sid)
-                msg = Message.tool_result(processed, tool_call_id=tc.id)
-                messages.append(msg)
-                if self.store is not None:
-                    await self._append(sid, msg)
+                try:
+                    if tc.name in _OUTPUT_STORE_EXEMPT:
+                        processed = result
+                    else:
+                        processed = await self._process_tool_output_async(
+                            tc.id, result, sid
+                        )
+                    msg = Message.tool_result(processed, tool_call_id=tc.id)
+                    messages.append(msg)
+                    if self.store is not None:
+                        await self._append(sid, msg)
+                except Exception as e:
+                    # The assistant message with these tool_calls is
+                    # already persisted; if a mid-loop I/O error (disk
+                    # full, permissions, encode error in the output
+                    # store) escaped here, the store would be left with
+                    # orphaned tool_calls and the OpenAI API would reject
+                    # the resumed session. Persist an error result for
+                    # the failing call and every remaining one — same
+                    # contract as the budget-exhaustion and hard-cancel
+                    # paths above.
+                    remaining_start = next(
+                        (i for i, x in enumerate(tool_calls) if x is tc), 0
+                    )
+                    for tc2 in tool_calls[remaining_start:]:
+                        msg = Message.tool_result(
+                            ToolResult.error(
+                                f"result persistence failed: {e!r}"
+                            ),
+                            tool_call_id=tc2.id,
+                        )
+                        messages.append(msg)
+                        if self.store is not None:
+                            try:
+                                await self._append(sid, msg)
+                            except Exception:
+                                pass  # store itself is failing; nothing more to do
+                    yield TurnFailed(
+                        f"tool result persistence failed: {e!r}",
+                        code="store_error",
+                    )
+                    return
                 yield ToolResultDelta(
                     id=tc.id,
                     name=tc.name,
