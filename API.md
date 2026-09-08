@@ -117,6 +117,10 @@ Message.tool_result(
 
 ```python
 from microagent import SessionRunner, ToolRegistry, LLMConfig, OpenAIChatClient, Budget
+from microagent.core.types import (
+    Message, TextDelta, ToolCallDelta, ToolProgressDelta,
+    TurnComplete, TurnFailed,
+)
 
 runner = SessionRunner(
     llm=OpenAIChatClient(LLMConfig(...)),
@@ -132,11 +136,13 @@ async for event in runner.run_turn(messages):
         print(event.text, end="", flush=True)
     elif isinstance(event, ToolCallDelta):
         print(f"\n🔧 {event.name}({event.arguments})")
+    elif isinstance(event, ToolProgressDelta):
+        print(f"  ┊ {event.text}")   # 实时流：工具执行期间逐块到达（v1.2.0）
     elif isinstance(event, TurnComplete):
         print(f"\n✅ Done")
     elif isinstance(event, TurnFailed):
         print(f"\n❌ {event.reason} (code={event.code})")
-        # code ∈ interrupted|budget|overflow|llm_timeout|llm_error|compaction|error
+        # code ∈ interrupted|budget|overflow|llm_timeout|llm_error|compaction|store_error|error
         # 按 code 程序化分支，不要匹配 reason 文本
 ```
 
@@ -154,10 +160,19 @@ agent.run("修复它")
 # 列出所有会话
 sessions = await store.list_sessions()
 
-# 恢复历史会话
-history = await store.load_history("project-debug")
+# 恢复历史会话 —— 用派生 surface（v1.2.0）：raw log 完整保留，
+# 压缩折叠已应用，恢复不再重压缩（省一次 LLM 调用），增量摘要链存活。
+history = await store.load_surface("project-debug")
 agent2 = Agent.from_config(config, store=store, session_id="project-debug")
 response = await agent2.arun(list(history) + [Message.user("继续之前的工作")])
+
+# runner.resume() 额外重水化 CompactionState.previous_summary：
+msgs = await runner.resume("project-debug", store)
+
+# 底层 API：
+seq = await store.append(sid, msg)          # 返回分配的 per-session seq
+raw = await store.load_history(sid)          # 原始完整日志（含被折叠消息）
+await store.record_fold(sid, kind, s, e, rs, re)   # 结构化压缩自动调用
 ```
 
 ## 记忆
@@ -209,6 +224,13 @@ async def calculate(
         return ToolResult.ok(str(result))
     except Exception as e:
         return ToolResult.error(f"计算失败: {e}")
+
+# Field 约束在执行时强制校验（v1.1.3）：未知参数键被拒、越界值返回
+# 描述性错误 ToolResult、合法值按类型收窄 —— 模型幻觉参数进不了函数体
+@tool("wait_seconds", description="等待指定秒数")
+async def wait_seconds(
+    seconds: Annotated[int, Field(description="1-300", ge=1, le=300)] = 30,
+) -> ToolResult: ...
 
 # 共享 per-session 状态的工具声明 exclusive=True：
 # runner 会经组级锁串行它们（浏览器 page / LSP server 等）

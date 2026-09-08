@@ -25,8 +25,10 @@ microagent/
 │   ├── core/
 │   │   ├── types.py         # Message, ToolCall, ToolResult, Usage, Event types
 │   │   ├── tool.py          # @tool decorator, ToolRegistry, FunctionTool
+│   │   │                      (+ runtime argument validation vs the schema)
 │   │   ├── permission.py    # PermissionEngine, Rule, ScriptRule, DEFAULT_RULES
-│   │   ├── store.py         # Store Protocol, SQLiteStore (WAL), InMemoryStore
+│   │   ├── store.py         # Store Protocol, SQLiteStore (WAL + surface_ops
+│   │   │                      fold event sourcing), InMemoryStore
 │   │   └── event.py         # EventBus
 │   ├── llm/
 │   │   ├── client.py        # LLMConfig, OpenAIChatClient (delegates pricing)
@@ -36,7 +38,8 @@ microagent/
 │   │   └── pool.py          # CredentialPool — API key rotation
 │   ├── session/
 │   │   ├── runner.py        # SessionRunner — the core loop (~1696 LOC)
-│   │   ├── compress.py      # 4-layer compression pyramid
+│   │   │                      ToolProgressDelta streams during execution
+│   │   ├── compress.py      # 4-layer compression pyramid + fold ops
 │   │   ├── attachments.py   # File recovery after compaction
 │   │   ├── budget.py        # Tree-shaped Budget with spawn/cancel_event
 │   │   └── search.py        # FTS5 session search
@@ -51,12 +54,17 @@ microagent/
 │   │   ├── question.py, lsp.py, mcp_connect.py
 │   │   ├── git.py, file_tree.py
 │   ├── memory/              # MemoryProvider Protocol + SQLite + LLM extractor
-│   ├── skill/               # SkillLoader + Curator lifecycle
+│   │                          (extracted memories are credential-scrubbed)
+│   ├── skill/               # SkillLoader (CJK fuzzy + subword-vector) + Curator
 │   ├── subagent/            # SubagentManager — task delegation
 │   ├── plugin/types.py      # PreLLMHook, ToolHook, ContextSource Protocols
-│   ├── terminal/            # LocalTerminal, DockerTerminal (+ SSH)
+│   ├── terminal/            # LocalTerminal, DockerTerminal (+ SSH) —
+│   │                          backend.py (bash seam) + processes.py
+│   │                          (process tool seam: Local/Docker/SSH families)
 │   ├── mcp/                 # MCP stdio client
 │   ├── cron/                # APScheduler cron integration
+│   ├── security/            # injection patterns, streaming scrubber,
+│   │                          secret scrubber (memory persistence)
 │   ├── currency.py          # USD→CNY display conversion (MICROAGENT_CURRENCY_RATE)
 │   └── surface/cli.py       # Rich CLI with /slash commands (/models, /cost, …)
 └── tests/
@@ -174,11 +182,10 @@ source .venv/bin/activate
 python -m pytest tests/unit/ -q            # 1669 unit tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q   # 1689 tests total
 
-# Integration tests (real LLM API)
-MICROAGENT_TEST_BASE_URL=... \
-MICROAGENT_TEST_API_KEY=... \
-MICROAGENT_TEST_MODEL=oc-d4f \
-python -m pytest tests/integration/ -v -m integration  # 7 tests
+# Integration matrix (real LLM API). Endpoint resolution:
+# MICROAGENT_TEST_* env vars > ~/.microagent/config.yaml > skip.
+make integration                                        # 10 tests, zero plumbing
+MICROAGENT_TEST_MODEL=glm-5.3-flash make integration    # env overrides just the model
 
 # Single test
 python -m pytest tests/unit/test_runner.py::TestBudget::test_consume -v
@@ -188,7 +195,8 @@ python -m pytest tests/unit/test_runner.py::TestBudget::test_consume -v
 - Use `FakeLLMClient` with `text_response()` / `tool_response()` to script LLM behavior
 - Use `InMemoryStore` for session persistence tests (no disk I/O)
 - Use `tmp_path` fixture for file-based tests
-- Integration tests auto-skip when `MICROAGENT_TEST_*` env vars are missing
+- Integration tests run when MICROAGENT_TEST_* env vars OR ~/.microagent/config.yaml provide an endpoint; otherwise they auto-skip
+- Compaction assertions: structural folds persist in surface_ops; use `load_surface()` (not `load_history()`) to assert the LLM-visible view
 - Never hardcode `~/.hermes/` or `~/.microagent/` paths — use fixtures
 
 ## Commit Style

@@ -157,10 +157,15 @@ async for event in runner.run_turn(messages):
         print(f"\n--- failed [{event.code}]: {event.reason}")
 ```
 
+`ToolProgressDelta` events stream in REAL TIME while tools run (v1.2.0):
+a streaming tool's output (bash, execute_code) surfaces chunk-by-chunk
+during execution, not batched after the whole tool group settles.
+
 Turn hardening (deepseek-harness parity): transient LLM stream failures
-retry once when no output was produced; a 300s idle watchdog turns a hung
-gateway into `llm_timeout`; tool execution is capped at 10 concurrent
-calls; `@tool(exclusive=True)` tools serialize against each other.
+retry once when no output was produced (paced by the provider's
+Retry-After); a 300s idle watchdog turns a hung gateway into
+`llm_timeout`; tool execution is capped at 10 concurrent calls;
+`@tool(exclusive=True)` tools serialize against each other.
 
 ### Permissions
 
@@ -189,13 +194,10 @@ async def ask_user(call, rule):
 
 engine = PermissionEngine(rules=(...), ask_callback=ask_user)
 
-# Wire into SessionRunner via a ToolHook:
-class PermissionHook:
-    def __init__(self, engine): self.engine = engine
-    async def before(self, call, ctx):
-        decision = await self.engine.evaluate(call, ctx)
-        return call if decision.decision is Decision.ALLOW else None  # None denies
-    async def after(self, call, result, ctx): return result
+# Wire into SessionRunner via the dedicated parameter (the SINGLE
+# integration point — do NOT additionally wire a ToolHook, evaluate
+# would then run twice per call):
+runner = SessionRunner(llm=client, registry=registry, permission_engine=engine)
 
 runner = SessionRunner(llm=..., registry=..., tool_hooks=(PermissionHook(engine),))
 ```
@@ -446,20 +448,20 @@ await scheduler.stop()  # graceful: waits for in-flight jobs (bounded) before re
 
 | Module | Files | LOC | Description |
 |--------|-------|-----|-------------|
-| `core/` | 6 | 1155 | types, tool registry, permission, store, event bus |
-| `tools/` | 28 | 3551 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
-| `session/` | 6 | 2648 | runner loop, 4-layer compression, budget, attachments, search |
-| `memory/` | 3 | 661 | FTS5 memory provider, LLM extractor, write-approval gate |
-| `skill/` | 4 | 698 | Claude skill loader, curator lifecycle, /learn distiller |
-| `surface/` | 2 | 1077 | Rich CLI REPL with /slash commands (/models, /cost, /memory, /learn, …) |
-| `llm/` | 7 | 967 | OpenAI client, credential pool, pricing cache, templates, failure taxonomy, idle watchdog |
-| `terminal/` | 2 | 389 | local + docker + SSH backends (library extension point) |
-| `mcp/` | 3 | 323 | MCP stdio client + catalog |
-| `cron/` | 2 | 351 | APScheduler-based cron jobs |
-| `security/` | 3 | 181 | streaming context scrubber, injection patterns (library extension point) |
-| `subagent/` | 2 | 193 | subagent manager with isolated budgets |
+| `core/` | 6 | 1642 | types, tool registry (+runtime arg validation), permission, store (+surface folds), event bus |
+| `tools/` | 28 | 3744 | 34 built-in tools (read, write, bash, grep, browser, lsp, mcp, etc.) + session-state helper |
+| `session/` | 6 | 3201 | runner loop (streaming tool progress), fold-event-sourced compression, budget, attachments, search |
+| `memory/` | 3 | 697 | FTS5 memory provider, LLM extractor (credential-scrubbed), write-approval gate |
+| `skill/` | 4 | 817 | Claude skill loader (+CJK subword-vector matching), curator lifecycle, /learn distiller |
+| `surface/` | 2 | 1193 | Rich CLI REPL with /slash commands (/models, /cost, /memory, /learn, …) |
+| `llm/` | 8 | 1242 | OpenAI client, credential pool, pricing cache, templates, failure taxonomy, idle watchdog |
+| `terminal/` | 3 | 1061 | local + docker + SSH backends + process families (capability seam) |
+| `mcp/` | 3 | 336 | MCP stdio client + catalog |
+| `cron/` | 2 | 395 | APScheduler-based cron jobs |
+| `security/` | 4 | 297 | streaming context scrubber, injection patterns, secret scrubber |
+| `subagent/` | 2 | 206 | subagent manager with isolated budgets |
 | `plugin/` | 2 | 46 | 3 extension Protocols (PreLLMHook, ToolHook, ContextSource) |
-| top-level | 4 | 569 | Agent facade, Config resolver, currency helper, public API surface |
+| top-level | 4 | 673 | Agent facade, Config resolver, currency helper, public API surface |
 
 ## Built-in Tools
 
@@ -471,7 +473,7 @@ await scheduler.stop()  # graceful: waits for in-flight jobs (bounded) before re
 | `bash` | Execute shell commands via local/docker/SSH backends |
 | `grep` | Regex search in files with line numbers |
 | `glob` | Find files by glob pattern, sorted output |
-| `process` | Manage background processes (start/poll/kill/wait/log/write/list) |
+| `process` | Manage background processes (start/poll/kill/wait/log/write/list) via local/docker/SSH process families |
 | `web_search` | Search the web via DuckDuckGo lite |
 | `web_fetch` | Fetch URL content via httpx (SSRF-protected) |
 | `context7` | Fetch up-to-date documentation via Context7 API |
@@ -526,15 +528,18 @@ python -m pytest tests/e2e/ -q            # 9 e2e tests
 python -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
 # 1689 passed, 1 skipped
 
-# Integration tests (requires real LLM API)
+# Integration matrix (real LLM API). Endpoint resolution:
+# MICROAGENT_TEST_* env vars > ~/.microagent/config.yaml > skip.
+make integration          # zero plumbing on a configured machine
+# or explicit:
 MICROAGENT_TEST_BASE_URL="http://your-endpoint/v1" \
 MICROAGENT_TEST_API_KEY="sk-..." \
 MICROAGENT_TEST_MODEL="your-model" \
-python -m pytest tests/integration/ -v -m integration   # 10 tests
+python -m pytest tests/integration/ -v   # 10 tests
 
 # Test coverage (requires: pip install coverage)
 python -m coverage run --source=src/microagent -m pytest tests/unit/ tests/smoke/ tests/e2e/ -q
-python -m coverage report                                # ~82% line coverage
+python -m coverage report                                # ~90% line coverage
 ```
 
 ## Key Features
@@ -543,14 +548,15 @@ python -m coverage report                                # ~82% line coverage
 - **Accurate cost tracking** — models.dev pricing cache (364 models, auto-refreshable), CNY (¥) display via `MICROAGENT_CURRENCY_RATE`, `/models` + `/cost` CLI commands
 - **34 built-in tools** — read/write/edit, bash, grep/glob, browser automation (10 Playwright tools), LSP (Python/TS/Rust/Go/C++), web search/fetch, MCP connect, vision, session search, todo/plan, and more
 - **Tree-shaped budget** — `spawn()` with shared cancel_event, descendants tracking, `consume_usage()` helper
-- **4-layer compression** — micro-compact → snip → LLM summary → circuit breaker; incremental summaries with file-attachment recovery
+- **4-layer compression, event-sourced** — micro-compact → snip → LLM summary → circuit breaker (half-open recovery); compactions persist as surface folds: the raw log stays complete, resume derives the compacted surface with NO re-compression LLM call, and the incremental-summary chain survives restarts
 - **Self-improving loop** — `skill_manage` tool + `Curator` lifecycle (Hermes-style)
 - **Subagent system** — isolated contexts, filtered toolsets, independent budgets, recursion-guarded
-- **Session persistence** — SQLite WAL store with checkpoint + resume + FTS5 search
-- **Skills dual ecosystem** — Claude Code SKILL.md format + composite loader with CJK-aware fuzzy matching
-- **Permission engine** — fnmatch rules + ScriptRule + ASK callback (library extension point, requires manual wiring)
+- **Session persistence** — SQLite WAL store with checkpoint + resume + FTS5 search; resume loads the derived surface (fold-aware)
+- **Skills dual ecosystem** — Claude Code SKILL.md format + composite loader with CJK-aware fuzzy + subword-vector matching (paraphrased queries hit; zero-dependency)
+- **Permission engine** — fnmatch rules + ScriptRule + ASK callback, wired via `SessionRunner(permission_engine=...)`
 - **Extension points** — 3 Protocols (PreLLMHook, ToolHook, ContextSource) + EventBus (zero overhead when unused)
-- **Dual-track testing** — `FakeLLMClient` (1122 unit tests) + real API (integration)
+- **Dual-track testing** — `FakeLLMClient` (1669 unit tests) + real-API integration matrix (`make integration`, config fallback)
+- **Terminal backends / capability families** — bind `LocalTerminal`/`DockerTerminal`/`SSHTerminal` once; bash AND process tools migrate together (subagents inherit; family-less custom terminals refuse loudly, never fall back to the host)
 
 ## License
 

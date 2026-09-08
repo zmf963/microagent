@@ -66,7 +66,7 @@ MicroAgent 是一个**可嵌入的通用 AI Agent 核心库**。它不是产品�
 
 ---
 
-## 二、核心类型 (`core/types.py` — 197 行)
+## 二、核心类型 (`core/types.py` — 203 行)
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -108,7 +108,7 @@ class Usage:
 
 ---
 
-## 三、工具系统 (`core/tool.py` — 360 行)
+## 三、工具系统 (`core/tool.py` — 460 行)
 
 ```python
 @tool("read_file", description="Read a file...")
@@ -136,7 +136,7 @@ registry.to_openai_tools()                     # → OpenAI function schema
 | 文件树 | `file_tree` | 目录结构可视化 |
 | MCP | `mcp_connect` | 运行时连接 MCP server |
 
-### 权限引擎 (`core/permission.py` — 270 行)
+### 权限引擎 (`core/permission.py` — 276 行)
 
 ```python
 DEFAULT_RULES = (
@@ -151,7 +151,7 @@ DEFAULT_RULES = (
 
 ---
 
-## 四、LLM 层 (`llm/client.py` — 363 行)
+## 四、LLM 层 (`llm/client.py` — 376 行)
 
 ### LLMConfig
 
@@ -208,6 +208,8 @@ while not budget.exhausted:
     ├─ LLM.stream(system, messages, tools) ← prompt caching + 空闲看门狗(300s)
     ├─ 构建 assistant Message → 自动持久化
     ├─ 工具执行 → 并发 TaskGroup（上限 10）+ exclusive 屏障 → hook.before/after
+    │    └─ ToolProgressDelta 实时流（v1.2.0）：progress 队列与"全部 settle"
+    │         asyncio.wait(FIRST_COMPLETED) 竞争 drain，执行中即时 yield
     └─ TurnComplete → memory extraction (fire-and-forget)
 ```
 
@@ -220,8 +222,11 @@ while not budget.exhausted:
 - **模型可见 ⟺ 已记录**：`MICROAGENT_AUDIT_INVARIANTS=1` 时每轮校验持久化
   历史无孤儿 tool_calls、无连续 user 消息——违反即 RuntimeError 而非静默
   发送模型从未经历过的序列
+- **工具进度真流式**（v1.2.0）：流式工具（bash/execute_code）的输出块在
+  执行期间逐块上屏，不再整批结束后统一放行；外层取消/生成器关闭正确
+  回收 detached 执行任务，孤儿 tool_calls 守卫保留
 
-### 4 层压缩金字塔 (`compress.py` — 734 行)
+### 4 层压缩金字塔 (`compress.py` — 805 行)
 
 | 层 | 名称 | API | 触发 | 操作 |
 |----|------|-----|------|------|
@@ -232,12 +237,33 @@ while not budget.exhausted:
 
 **7 章节摘要模板**：请求和意图 | 技术决策 | 文件和代码 | 错误修复 | 所有用户消息 | 待办 | 当前进度
 
-### SQLiteStore (`core/store.py` — 271 行)
+### surfaceOp replace-fold 事件溯源（v1.2.0，dsh parity）
+
+结构化压缩（L3/overflow-force/手动 /compact/熔断 fallback）不再只改内存：
+- 替换块（占位符/附件 + 摘要）作为真实消息追加到日志尾部
+- `surface_ops` 表记录折叠：遮蔽区间 `[start_seq..end_seq]` → 替换块
+  `[repl_start..repl_end]`，kind = summary | fallback
+- `load_surface()` 按序应用折叠派生 LLM 可见面；每折双重校验
+  （引用 seq 必须存在、替换块严格在遮蔽区间之后），坏折跳过并告警
+- **raw log 永远完整**：模型可见 ⟺ 可从日志重建
+
+收益：resume（runner.resume / CLI /resume / cron resume:last）不再重载
+全量历史再重压缩（每次恢复省一次 LLM 调用）；增量摘要链跨进程存活
+（previous_summary 从最后 summary 折叠重水化，前言/标签统一剥离）。
+L1/L2 为每轮确定性重算，维持内存态不落盘；runner 维护与消息列表
+按位对齐的 seq 侧车，失配时按（内容+角色）与派生 surface 重同步，
+仍失配则优雅降级为内存态压缩（旧行为）。
+
+### SQLiteStore (`core/store.py` — 627 行)
 
 ```python
 store = SQLiteStore("~/.microagent/sessions.db")  # WAL 模式
-await store.append(session_id, message)            # JSON 序列化
-await store.load_history(session_id)               # → list[Message]（逐行容错：损坏行跳过，全坏返回 []）
+seq = await store.append(session_id, message)      # JSON 序列化；返回分配的 per-session seq
+                                                   #（自定义 store 可返回 None → 折叠记录优雅跳过）
+await store.load_history(session_id)               # → list[Message] 原始日志（逐行容错）
+await store.load_surface(session_id)               # → list[Message] 派生表面（折叠已应用）
+await store.record_fold(sid, kind, s, e, rs, re)   # 记录一次压缩折叠
+await store.last_fold_summary(sid)                 # → 最后 summary 折叠的摘要消息（重水化用）
 await store.list_sessions()                        # → list[str]
 ```
 
@@ -261,7 +287,15 @@ root.consume(iterations=1, tokens=1000, cost_usd=0.01)
 
 ## 七、技能系统 (`skill/`)
 
-- **ClaudeSkillLoader** + **CompositeLoader** — keyword + fuzzy 匹配
+- **ClaudeSkillLoader** + **CompositeLoader** — keyword + fuzzy 匹配；
+  触发词净化（空串/非字符串丢弃）；目录代数化失效（运行时创建/修改/
+  删除的技能即时出现在系统 prompt 目录）；正文注入按 namespace:name
+  键控（跨命名空间同名不错配）
+- **子词向量模糊匹配**（v1.2.0）：CJK 单字 + 双字 + 词 token 的精确
+  Counter 余弦（纯 Python 零依赖），改写查询（"帮我复查一下代码" vs
+  "执行代码审查流程"）在字面覆盖 miss 时按置信度提升命中，封顶 0.45
+  永远排在关键词/强字面命中之下。已知限制：近零字符重叠的改写仍需
+  真 embedding（零依赖信条下不做）
 - **SkillManager** — create/patch/list/delete，双生态（内置 + 用户）
 - **Curator** — 生命周期管理：active → stale → archived，pinned 保护
 
@@ -280,6 +314,21 @@ class ToolHook(Protocol):
 class ContextSource(Protocol):
     async def contribute(self, ctx) -> str: ...
 ```
+
+### 终端后端能力族（v1.1.1 bash 接缝 + v1.2.0 process 接缝）
+
+绑定一个 `TerminalBackend`（Local/Docker/SSH）即迁移**整个能力族**：
+
+- `bash` → `backend.run(command, cwd, env, timeout)`
+- `process` → `backend.processes`（ProcessBackend：spawn/send/kill/wait/
+  read_output；Local=原 asyncio 实现，Docker=run -d + logs -f，SSH=
+  paramiko PTY channel，write 全支持）
+
+规则：子代理随 `terminal_backend` 自动继承（v1.1.2）；**无 `processes`
+族的自定义后端在 process 工具上明确拒绝**——绝不静默回退到主机 spawn
+（round-21 子代理沙箱逃逸同类）。Docker 族 `write` 为文档化的能力边界
+（docker CLI 无法对 detached 容器写 stdin）。`runner.close()` 清理远端
+进程族（容器/channel/连接）。
 
 ---
 
